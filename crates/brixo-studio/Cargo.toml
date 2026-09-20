@@ -1,0 +1,16 @@
+[package]
+name = "brixo-studio"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brixo-core = { version = "0.1.0", path = "../brixo-core" }
+brixo-render = { version = "0.1.0", path = "../brixo-render" }
+bytemuck = { version = "1.25.2", features = ["derive"] }
+egui = "0.31"
+egui-wgpu = "0.31"
+egui-winit = "0.31"
+glam = "0.33.8"
+pollster = "0.4"
+wgpu = "24"
+winit = "0.30"
