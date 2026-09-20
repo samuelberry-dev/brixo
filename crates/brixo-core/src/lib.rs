@@ -1,29 +1,108 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Unique, never-reused identifier for an instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InstanceId(u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl Vec3 {
+    pub const ZERO: Vec3 = Vec3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    pub const ONE: Vec3 = Vec3 {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+    };
+
+    pub fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+/// 8-bit RGB colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Color {
+    pub fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+}
+
+/// Properties that only a Part has.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PartProps {
+    pub position: Vec3,
+    pub size: Vec3,
+    /// Euler angles in degrees.
+    pub rotation: Vec3,
+    pub color: Color,
+}
+
+impl Default for PartProps {
+    fn default() -> Self {
+        Self {
+            position: Vec3::ZERO,
+            size: Vec3::ONE,
+            rotation: Vec3::ZERO,
+            color: Color::new(160, 160, 160),
+        }
+    }
+}
+
 /// What kind of thing an instance is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Class {
     Workspace,
     Folder,
     Part,
 }
 
-#[derive(Debug)]
+/// Per-class data. Kept in sync with `Instance::class` by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Props {
+    Workspace,
+    Folder,
+    Part(PartProps),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub id: InstanceId,
     pub class: Class,
     pub name: String,
     pub parent: Option<InstanceId>,
     pub children: Vec<InstanceId>,
+    pub props: Props,
 }
 
 /// Owns every instance in the tree. The Workspace is the root.
+#[derive(Debug, Clone)]
 pub struct DataModel {
     instances: HashMap<InstanceId, Instance>,
+    next_id: u64,
+    root: InstanceId,
+}
+
+/// Flat, serialisable form of the tree. Maps with non-string keys don't
+/// round-trip through JSON, so instances are stored as a list.
+#[derive(Serialize, Deserialize)]
+struct SavedModel {
+    instances: Vec<Instance>,
     next_id: u64,
     root: InstanceId,
 }
@@ -40,6 +119,7 @@ impl DataModel {
                 name: "Workspace".to_string(),
                 parent: None,
                 children: Vec::new(),
+                props: Props::Workspace,
             },
         );
         Self {
@@ -57,6 +137,34 @@ impl DataModel {
         self.instances.get(&id)
     }
 
+    pub fn get_mut(&mut self, id: InstanceId) -> Option<&mut Instance> {
+        self.instances.get_mut(&id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.instances.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.instances.is_empty()
+    }
+
+    /// Read a Part's properties. None if the id is missing or isn't a Part.
+    pub fn part(&self, id: InstanceId) -> Option<&PartProps> {
+        match self.instances.get(&id).map(|i| &i.props) {
+            Some(Props::Part(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Mutate a Part's properties. None if the id is missing or isn't a Part.
+    pub fn part_mut(&mut self, id: InstanceId) -> Option<&mut PartProps> {
+        match self.instances.get_mut(&id).map(|i| &mut i.props) {
+            Some(Props::Part(p)) => Some(p),
+            _ => None,
+        }
+    }
+
     /// Creates an instance under `parent`. Returns None if the parent doesn't exist.
     pub fn create(&mut self, class: Class, name: &str, parent: InstanceId) -> Option<InstanceId> {
         if !self.instances.contains_key(&parent) {
@@ -64,6 +172,11 @@ impl DataModel {
         }
         let id = InstanceId(self.next_id);
         self.next_id += 1;
+        let props = match class {
+            Class::Workspace => Props::Workspace,
+            Class::Folder => Props::Folder,
+            Class::Part => Props::Part(PartProps::default()),
+        };
         self.instances.insert(
             id,
             Instance {
@@ -72,6 +185,7 @@ impl DataModel {
                 name: name.to_string(),
                 parent: Some(parent),
                 children: Vec::new(),
+                props,
             },
         );
         if let Some(p) = self.instances.get_mut(&parent) {
@@ -143,6 +257,45 @@ impl DataModel {
             .push(id);
         self.instances.get_mut(&id).unwrap().parent = Some(new_parent);
         true
+    }
+
+    // --- saving and loading ---
+
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        let mut instances: Vec<Instance> = self.instances.values().cloned().collect();
+        // Sort so saved files are stable rather than in random map order.
+        instances.sort_by_key(|i| i.id.0);
+        let saved = SavedModel {
+            instances,
+            next_id: self.next_id,
+            root: self.root,
+        };
+        serde_json::to_string_pretty(&saved)
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        let saved: SavedModel = serde_json::from_str(json)?;
+        let mut instances = HashMap::new();
+        for inst in saved.instances {
+            instances.insert(inst.id, inst);
+        }
+        Ok(Self {
+            instances,
+            next_id: saved.next_id,
+            root: saved.root,
+        })
+    }
+
+    pub fn save_file(&self, path: &str) -> std::io::Result<()> {
+        let json = self
+            .to_json()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(path, json)
+    }
+
+    pub fn load_file(path: &str) -> std::io::Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        Self::from_json(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
 
@@ -220,5 +373,64 @@ mod tests {
 
         assert!(!dm.reparent(a, b)); // can't move a folder into its own child
         assert!(!dm.reparent(a, a)); // can't move something into itself
+    }
+
+    #[test]
+    fn parts_get_default_props_and_can_be_edited() {
+        let mut dm = DataModel::new();
+        let workspace = dm.root();
+        let part = dm.create(Class::Part, "Box", workspace).unwrap();
+
+        assert_eq!(dm.part(part).unwrap().size, Vec3::ONE);
+
+        let p = dm.part_mut(part).unwrap();
+        p.position = Vec3::new(1.0, 5.0, -3.0);
+        p.color = Color::new(255, 0, 0);
+
+        assert_eq!(dm.part(part).unwrap().position, Vec3::new(1.0, 5.0, -3.0));
+        assert_eq!(dm.part(part).unwrap().color, Color::new(255, 0, 0));
+    }
+
+    #[test]
+    fn non_parts_have_no_part_props() {
+        let mut dm = DataModel::new();
+        let workspace = dm.root();
+        let folder = dm.create(Class::Folder, "Stuff", workspace).unwrap();
+
+        assert!(dm.part(folder).is_none());
+        assert!(dm.part(workspace).is_none());
+    }
+
+    #[test]
+    fn json_round_trip_preserves_the_tree() {
+        let mut dm = DataModel::new();
+        let workspace = dm.root();
+        let folder = dm.create(Class::Folder, "Enemies", workspace).unwrap();
+        let part = dm.create(Class::Part, "Goblin", folder).unwrap();
+        dm.part_mut(part).unwrap().position = Vec3::new(2.0, 0.5, 7.0);
+
+        let json = dm.to_json().unwrap();
+        let loaded = DataModel::from_json(&json).unwrap();
+
+        assert_eq!(loaded.len(), dm.len());
+        assert_eq!(loaded.root(), workspace);
+        assert_eq!(loaded.get(part).unwrap().name, "Goblin");
+        assert_eq!(loaded.get(part).unwrap().parent, Some(folder));
+        assert_eq!(loaded.get(folder).unwrap().children, vec![part]);
+        assert_eq!(loaded.part(part).unwrap().position, Vec3::new(2.0, 0.5, 7.0));
+    }
+
+    #[test]
+    fn loaded_model_keeps_handing_out_fresh_ids() {
+        let mut dm = DataModel::new();
+        let workspace = dm.root();
+        let a = dm.create(Class::Part, "A", workspace).unwrap();
+
+        let mut loaded = DataModel::from_json(&dm.to_json().unwrap()).unwrap();
+        let b = loaded.create(Class::Part, "B", workspace).unwrap();
+
+        assert_ne!(a, b);
+        assert!(loaded.get(a).is_some());
+        assert!(loaded.get(b).is_some());
     }
 }
