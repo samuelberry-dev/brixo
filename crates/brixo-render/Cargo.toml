@@ -1,0 +1,10 @@
+[package]
+name = "brixo-render"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brixo-core = { version = "0.1.0", path = "../brixo-core" }
+pollster = "0.4"
+wgpu = "24"
+winit = "0.30"
