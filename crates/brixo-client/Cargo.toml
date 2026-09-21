@@ -1,0 +1,10 @@
+[package]
+name = "brixo-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brixo-core = { path = "../brixo-core" }
+brixo-render = { path = "../brixo-render" }
+brixo-runtime = { path = "../brixo-runtime" }
+glam = "0.33"

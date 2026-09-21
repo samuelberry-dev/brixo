@@ -5,11 +5,8 @@ use std::time::Instant;
 
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
-use brixo_core::CameraMode;
+use brixo_client::{movement_input, FollowCamera, Held};
 use brixo_runtime::{Game, LogLine, PlayerInput};
-
-/// Closest the third-person camera gets before switching to first person.
-const MIN_FOLLOW_DISTANCE: f32 = 6.0;
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -197,8 +194,10 @@ struct Editor {
     /// True while a Properties edit is in progress (dragging a value,
     /// typing a name), so the whole edit becomes a single undo step.
     prop_session: bool,
-    /// How far the camera sits behind the player during Play.
-    follow_distance: f32,
+    /// The camera that follows the player during Play.
+    follow: FollowCamera,
+    /// What the game is called when published to the player.
+    publish_name: String,
 }
 
 impl Default for Editor {
@@ -209,7 +208,8 @@ impl Default for Editor {
             drag: None,
             history: History::default(),
             prop_session: false,
-            follow_distance: 16.0,
+            follow: FollowCamera::default(),
+            publish_name: "My Game".to_string(),
         }
     }
 }
@@ -249,29 +249,18 @@ impl Studio {
         }
     }
 
-    /// WASD relative to where the camera faces, flattened onto the ground.
     fn player_input(&self) -> PlayerInput {
-        let forward = Vec3::new(self.camera.yaw.cos(), 0.0, self.camera.yaw.sin());
-        let right = Vec3::new(-forward.z, 0.0, forward.x);
-        let mut dir = Vec3::ZERO;
-        if self.keys.contains(&KeyCode::KeyW) {
-            dir += forward;
-        }
-        if self.keys.contains(&KeyCode::KeyS) {
-            dir -= forward;
-        }
-        if self.keys.contains(&KeyCode::KeyD) {
-            dir += right;
-        }
-        if self.keys.contains(&KeyCode::KeyA) {
-            dir -= right;
-        }
-        let dir = dir.normalize_or_zero();
-        PlayerInput {
-            move_x: dir.x,
-            move_z: dir.z,
-            jump: self.keys.contains(&KeyCode::Space),
-        }
+        let held = |k| self.keys.contains(&k);
+        movement_input(
+            &self.camera,
+            Held {
+                forward: held(KeyCode::KeyW),
+                back: held(KeyCode::KeyS),
+                left: held(KeyCode::KeyA),
+                right: held(KeyCode::KeyD),
+                jump: held(KeyCode::Space),
+            },
+        )
     }
 
     fn move_camera(&mut self, dt: f32) {
@@ -321,28 +310,7 @@ impl Studio {
             game.step(dt as f64);
             self.output.extend(game.take_log());
             trim_output(&mut self.output);
-            // The game picks the camera mode; by default the wheel zooms
-            // between third person and (all the way in) first person.
-            if let Some(center) = game.player_position() {
-                let mode = game
-                    .player_id()
-                    .and_then(|id| game.world().player(id).map(|p| p.camera_mode))
-                    .unwrap_or_default();
-                let first_person = match mode {
-                    CameraMode::FirstPerson => true,
-                    CameraMode::ThirdPerson => false,
-                    CameraMode::Default => self.editor.follow_distance == 0.0,
-                };
-                first_person_player = if first_person { game.player_id() } else { None };
-                if first_person {
-                    // At eye level. Your own character is hidden, like in
-                    // Roblox, so it doesn't block the view.
-                    self.camera.position = center + Vec3::Y * 1.9;
-                } else {
-                    let distance = self.editor.follow_distance.max(MIN_FOLLOW_DISTANCE);
-                    self.camera.position = center + Vec3::Y * 1.5 - self.camera.forward() * distance;
-                }
-            }
+            first_person_player = self.editor.follow.update(&mut self.camera, game);
         }
 
         let Studio {
@@ -507,6 +475,7 @@ fn trim_output(output: &mut Vec<LogLine>) {
 // --- ui --------------------------------------------------------------------
 
 enum Action {
+    Publish,
     AddPart,
     AddSpawn,
     AddScript,
@@ -631,6 +600,12 @@ fn build_ui(
                 }
             });
             ui.separator();
+            ui.add(egui::TextEdit::singleline(&mut editor.publish_name).desired_width(110.0))
+                .on_hover_text("The name players see in Brixo Player");
+            if ui.button("Publish").on_hover_text("Put this game in Brixo Player's games list").clicked() {
+                action = Some(Action::Publish);
+            }
+            ui.separator();
             match play_time {
                 Some(t) => ui.label(format!("Playing  {t:.1}s")),
                 None => ui.label(status.as_str()),
@@ -737,6 +712,10 @@ fn build_ui(
                 }
             }
         }
+        Some(Action::Publish) => match brixo_client::publish(model, &editor.publish_name) {
+            Ok(path) => *status = format!("Published to {}", path.display()),
+            Err(e) => *status = format!("Publish failed: {e}"),
+        },
         Some(Action::Save) => match model.save_file(SCENE_PATH) {
             Ok(()) => *status = format!("Saved to {SCENE_PATH}"),
             Err(e) => *status = format!("Save failed: {e}"),
@@ -973,16 +952,7 @@ fn viewport(
     // Scroll wheel: zoom the follow camera during Play. Zooming in past
     // the closest distance switches to first person; zooming out leaves it.
     if playing && response.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll != 0.0 {
-            let d = editor.follow_distance;
-            editor.follow_distance = if d == 0.0 {
-                if scroll < 0.0 { MIN_FOLLOW_DISTANCE } else { 0.0 }
-            } else {
-                let next = d - scroll * 0.05;
-                if next < MIN_FOLLOW_DISTANCE - 1.0 { 0.0 } else { next.clamp(MIN_FOLLOW_DISTANCE, 60.0) }
-            };
-        }
+        editor.follow.zoom(ui.input(|i| i.smooth_scroll_delta.y));
     }
 
     // Right-drag: look around (during Play, orbit the player).

@@ -1,12 +1,13 @@
 [package]
-name = "brixo-studio"
+name = "brixo-player"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+brixo-client = { path = "../brixo-client" }
 brixo-core = { path = "../brixo-core" }
 brixo-render = { path = "../brixo-render" }
-bytemuck = { version = "1", features = ["derive"] }
+brixo-runtime = { path = "../brixo-runtime" }
 egui = "0.31"
 egui-wgpu = "0.31"
 egui-winit = "0.31"
@@ -14,6 +15,3 @@ glam = "0.33"
 pollster = "0.4"
 wgpu = "24"
 winit = "0.30"
-brixo-runtime = { path = "../brixo-runtime" }
-rovik = { path = "../rovik" }
-brixo-client = { path = "../brixo-client" }

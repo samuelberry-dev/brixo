@@ -191,11 +191,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "brixo-client"
+version = "0.1.0"
+dependencies = [
+ "brixo-core",
+ "brixo-render",
+ "brixo-runtime",
+ "glam 0.33.8",
+]
+
+[[package]]
 name = "brixo-core"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "brixo-player"
+version = "0.1.0"
+dependencies = [
+ "brixo-client",
+ "brixo-core",
+ "brixo-render",
+ "brixo-runtime",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "glam 0.33.8",
+ "pollster",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
@@ -224,6 +251,7 @@ dependencies = [
 name = "brixo-studio"
 version = "0.1.0"
 dependencies = [
+ "brixo-client",
  "brixo-core",
  "brixo-render",
  "brixo-runtime",
