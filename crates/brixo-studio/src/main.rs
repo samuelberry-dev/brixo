@@ -141,10 +141,55 @@ struct Drag {
     accum: f32,
 }
 
+const HISTORY_LIMIT: usize = 200;
+
+/// Whole-scene snapshots. Simple, and it covers every kind of edit at once.
+#[derive(Default)]
+struct History {
+    undo: Vec<DataModel>,
+    redo: Vec<DataModel>,
+}
+
+impl History {
+    /// Call *before* changing the model.
+    fn checkpoint(&mut self, model: &DataModel) {
+        self.undo.push(model.clone());
+        if self.undo.len() > HISTORY_LIMIT {
+            self.undo.remove(0);
+        }
+        // A new edit invalidates anything that was undone.
+        self.redo.clear();
+    }
+
+    fn undo(&mut self, model: &mut DataModel) -> bool {
+        match self.undo.pop() {
+            Some(previous) => {
+                self.redo.push(std::mem::replace(model, previous));
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn redo(&mut self, model: &mut DataModel) -> bool {
+        match self.redo.pop() {
+            Some(next) => {
+                self.undo.push(std::mem::replace(model, next));
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 struct Editor {
     tool: Tool,
     snap: bool,
     drag: Option<Drag>,
+    history: History,
+    /// True while a Properties edit is in progress (dragging a value,
+    /// typing a name), so the whole edit becomes a single undo step.
+    prop_session: bool,
 }
 
 impl Default for Editor {
@@ -153,6 +198,8 @@ impl Default for Editor {
             tool: Tool::Move,
             snap: true,
             drag: None,
+            history: History::default(),
+            prop_session: false,
         }
     }
 }
@@ -326,6 +373,8 @@ enum Action {
     Delete,
     Save,
     Load,
+    Undo,
+    Redo,
 }
 
 fn build_ui(
@@ -360,6 +409,19 @@ fn build_ui(
         if del {
             action = Some(Action::Delete);
         }
+
+        // Check redo first so Ctrl+Shift+Z isn't also read as Ctrl+Z.
+        let (redo, undo) = ctx.input_mut(|i| {
+            let redo = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)
+                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
+            let undo = i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
+            (redo, undo)
+        });
+        if redo {
+            action = Some(Action::Redo);
+        } else if undo {
+            action = Some(Action::Undo);
+        }
     }
 
     egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -368,6 +430,19 @@ fn build_ui(
             ui.selectable_value(&mut editor.tool, Tool::Rotate, "Rotate (2)");
             ui.selectable_value(&mut editor.tool, Tool::Scale, "Scale (3)");
             ui.checkbox(&mut editor.snap, "Snap");
+            ui.separator();
+            if ui
+                .add_enabled(!editor.history.undo.is_empty(), egui::Button::new("Undo"))
+                .clicked()
+            {
+                action = Some(Action::Undo);
+            }
+            if ui
+                .add_enabled(!editor.history.redo.is_empty(), egui::Button::new("Redo"))
+                .clicked()
+            {
+                action = Some(Action::Redo);
+            }
             ui.separator();
             if ui.button("Add Part").clicked() {
                 action = Some(Action::AddPart);
@@ -402,7 +477,7 @@ fn build_ui(
 
     egui::SidePanel::right("properties")
         .default_width(260.0)
-        .show(ctx, |ui| properties_panel(ui, model, *selection));
+        .show(ctx, |ui| properties_panel(ui, model, *selection, editor));
 
     // The central panel is the 3D viewport. It's transparent, so the scene
     // drawn underneath shows through; egui just handles its input.
@@ -415,6 +490,7 @@ fn build_ui(
     // Apply actions after the UI is built, so nothing is borrowed twice.
     match action {
         Some(Action::AddPart) => {
+            editor.history.checkpoint(model);
             let parent = container_for(model, *selection);
             if let Some(id) = model.create(Class::Part, "Part", parent) {
                 // Drop it in front of the camera instead of at the origin.
@@ -428,6 +504,7 @@ fn build_ui(
             }
         }
         Some(Action::AddFolder) => {
+            editor.history.checkpoint(model);
             let parent = container_for(model, *selection);
             if let Some(id) = model.create(Class::Folder, "Folder", parent) {
                 *selection = Some(id);
@@ -436,6 +513,9 @@ fn build_ui(
         }
         Some(Action::Delete) => {
             if let Some(id) = *selection {
+                if id != model.root() && model.get(id).is_some() {
+                    editor.history.checkpoint(model);
+                }
                 if model.remove(id) {
                     *selection = None;
                     editor.drag = None;
@@ -451,6 +531,7 @@ fn build_ui(
         },
         Some(Action::Load) => match DataModel::load_file(SCENE_PATH) {
             Ok(loaded) => {
+                editor.history.checkpoint(model);
                 *model = loaded;
                 *selection = None;
                 editor.drag = None;
@@ -458,56 +539,108 @@ fn build_ui(
             }
             Err(e) => *status = format!("Load failed: {e}"),
         },
+        Some(Action::Undo) => {
+            if editor.history.undo(model) {
+                after_history_jump(model, selection, editor);
+                *status = "Undo".to_string();
+            }
+        }
+        Some(Action::Redo) => {
+            if editor.history.redo(model) {
+                after_history_jump(model, selection, editor);
+                *status = "Redo".to_string();
+            }
+        }
         None => {}
     }
 }
 
-fn properties_panel(ui: &mut egui::Ui, model: &mut DataModel, selection: Option<InstanceId>) {
+/// Clears state that may point at things the undo/redo just removed.
+fn after_history_jump(model: &DataModel, selection: &mut Option<InstanceId>, editor: &mut Editor) {
+    editor.drag = None;
+    editor.prop_session = false;
+    if selection.and_then(|id| model.get(id)).is_none() {
+        *selection = None;
+    }
+}
+
+fn properties_panel(
+    ui: &mut egui::Ui,
+    model: &mut DataModel,
+    selection: Option<InstanceId>,
+    editor: &mut Editor,
+) {
     ui.heading("Properties");
     ui.separator();
 
     let Some(id) = selection else {
         ui.label("Nothing selected.");
+        editor.prop_session = false;
         return;
     };
     let Some(inst) = model.get(id) else {
         ui.label("Nothing selected.");
+        editor.prop_session = false;
         return;
     };
 
+    // Edit copies, so the model is still untouched when we detect a change.
+    // That lets us checkpoint the true "before" state.
     let class = inst.class;
     let mut name = inst.name.clone();
+    let mut props = model.part(id).copied();
+    let mut changed = false;
+
     ui.horizontal(|ui| {
         ui.label("Name");
-        if ui.text_edit_singleline(&mut name).changed() {
-            if let Some(i) = model.get_mut(id) {
-                i.name = name.clone();
-            }
-        }
+        changed |= ui.text_edit_singleline(&mut name).changed();
     });
     ui.label(format!("Class: {class:?}"));
     ui.separator();
 
-    let Some(p) = model.part_mut(id) else {
-        ui.label("No editable properties.");
-        return;
-    };
+    match props.as_mut() {
+        Some(p) => {
+            changed |= vec3_row(ui, "Position", &mut p.position, 0.1);
+            changed |= vec3_row(ui, "Size", &mut p.size, 0.1);
+            changed |= vec3_row(ui, "Rotation", &mut p.rotation, 1.0);
 
-    vec3_row(ui, "Position", &mut p.position, 0.1);
-    vec3_row(ui, "Size", &mut p.size, 0.1);
-    vec3_row(ui, "Rotation", &mut p.rotation, 1.0);
+            ui.horizontal(|ui| {
+                ui.label("Color");
+                let mut rgb = [p.color.r, p.color.g, p.color.b];
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    p.color = Color::new(rgb[0], rgb[1], rgb[2]);
+                    changed = true;
+                }
+            });
 
-    ui.horizontal(|ui| {
-        ui.label("Color");
-        let mut rgb = [p.color.r, p.color.g, p.color.b];
-        if ui.color_edit_button_srgb(&mut rgb).changed() {
-            p.color = Color::new(rgb[0], rgb[1], rgb[2]);
+            p.size.x = p.size.x.max(0.01);
+            p.size.y = p.size.y.max(0.01);
+            p.size.z = p.size.z.max(0.01);
         }
-    });
+        None => {
+            ui.label("No editable properties.");
+        }
+    }
 
-    p.size.x = p.size.x.max(0.01);
-    p.size.y = p.size.y.max(0.01);
-    p.size.z = p.size.z.max(0.01);
+    if changed {
+        // First change of a new edit: snapshot before applying it.
+        if !editor.prop_session {
+            editor.history.checkpoint(model);
+            editor.prop_session = true;
+        }
+        if let Some(i) = model.get_mut(id) {
+            i.name = name;
+        }
+        if let (Some(new), Some(p)) = (props, model.part_mut(id)) {
+            *p = new;
+        }
+    } else {
+        // The edit is over once nothing is held and no text field has focus.
+        let busy = ui.input(|i| i.pointer.any_down()) || ui.ctx().wants_keyboard_input();
+        if !busy {
+            editor.prop_session = false;
+        }
+    }
 }
 
 fn viewport(
@@ -543,8 +676,13 @@ fn viewport(
         let origin = ui.input(|i| i.pointer.press_origin());
         if let (Some(g), Some(o), Some(id)) = (gizmo.as_ref(), origin, *selection) {
             if let Some(axis) = g.hit_test(&vp, screen, o) {
-                if let Some(p) = model.part(id) {
-                    editor.drag = Drag::begin(g, &vp, screen, axis, o, *p, camera);
+                let start = model.part(id).copied();
+                if let Some(start) = start {
+                    if let Some(drag) = Drag::begin(g, &vp, screen, axis, o, start, camera) {
+                        // One undo step per drag, taken before anything moves.
+                        editor.history.checkpoint(model);
+                        editor.drag = Some(drag);
+                    }
                 }
             }
         }
@@ -906,13 +1044,16 @@ fn tree_node(
     }
 }
 
-fn vec3_row(ui: &mut egui::Ui, label: &str, v: &mut V, speed: f32) {
+/// Returns true if any of the three values changed.
+fn vec3_row(ui: &mut egui::Ui, label: &str, v: &mut V, speed: f32) -> bool {
     ui.horizontal(|ui| {
         ui.label(label);
-        ui.add(egui::DragValue::new(&mut v.x).speed(speed).prefix("x "));
-        ui.add(egui::DragValue::new(&mut v.y).speed(speed).prefix("y "));
-        ui.add(egui::DragValue::new(&mut v.z).speed(speed).prefix("z "));
-    });
+        let x = ui.add(egui::DragValue::new(&mut v.x).speed(speed).prefix("x "));
+        let y = ui.add(egui::DragValue::new(&mut v.y).speed(speed).prefix("y "));
+        let z = ui.add(egui::DragValue::new(&mut v.z).speed(speed).prefix("z "));
+        x.changed() || y.changed() || z.changed()
+    })
+    .inner
 }
 
 // --- winit plumbing --------------------------------------------------------
