@@ -1,14 +1,15 @@
-//! The Brixo avatar: a low-poly figure with a gem-cut head, built in code.
+//! The Brixo avatar: a blocky body with one smooth, round head, and a
+//! pixel-art face printed on it like a decal.
 //!
 //! Every mesh is in the character's own space: the origin is the centre of
 //! its 5-stud-tall body (feet at y = -2.5), and it faces +Z. Pieces that
 //! share a colour are merged into one mesh, so a player is drawn with a
 //! handful of instances, all with the same transform.
 
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 use brixo_core::Face;
-use glam::{Mat3, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 
 use crate::Vertex;
 
@@ -19,272 +20,194 @@ pub(crate) enum Slot {
     Shirt,
     Pants,
     Shoes,
-    /// Eyes, brows and mouths.
-    Ink,
-    /// The little highlights in the eyes.
-    Shine,
+    /// The face decal: white, textured with the face's picture.
+    Decal,
 }
 
 pub(crate) struct AvatarMesh {
     pub slot: Slot,
-    /// Face meshes only draw for players wearing that face.
-    pub face: Option<Face>,
     pub vertices: Vec<Vertex>,
 }
 
-/// Where the face panel is: the flat front of the eight-sided head.
-const PANEL_Z: f32 = 0.85; // 1.0 * cos(22.5°) * 0.92
-const INK_Z: f32 = PANEL_Z + 0.012;
-const SHINE_Z: f32 = PANEL_Z + 0.02;
-const EYE_Y: f32 = 1.92;
-const MOUTH_Y: f32 = 1.63;
+pub(crate) const HEAD_CENTER: Vec3 = Vec3::new(0.0, 1.8, 0.0);
+pub(crate) const HEAD_RADIUS: f32 = 0.86;
+/// How big the face picture is, wrapped onto the front of the head.
+const DECAL_SIZE: f32 = 1.25;
 
 pub(crate) fn meshes() -> Vec<AvatarMesh> {
-    let mut out = Vec::new();
-    let body = |slot, build: &dyn Fn(&mut Mesh)| {
-        let mut m = Mesh::default();
-        build(&mut m);
-        AvatarMesh { slot, face: None, vertices: m.vertices }
-    };
-
-    let r8 = 22.5f32.to_radians(); // puts a flat side of an octagon at the front
-    out.push(body(Slot::Skin, &|m| {
-        // Neck, then the head: chamfered bottom, straight band, chamfered top.
-        m.prism(6, 0.3, 0.3, 0.97, 1.19, 0.0, 1.0, Vec3::ZERO, 0.0);
-        m.prism(8, 0.72, 1.0, 1.19, 1.41, r8, 0.92, Vec3::ZERO, 0.0);
-        m.prism(8, 1.0, 1.0, 1.41, 2.21, r8, 0.92, Vec3::ZERO, 0.0);
-        m.prism(8, 1.0, 0.7, 2.21, 2.49, r8, 0.92, Vec3::ZERO, 0.0);
-        // Gem hands.
-        for side in [-1.0, 1.0] {
-            m.gem(Vec3::new(side * 1.41, -0.58, 0.0), 0.3);
-        }
-    }));
-    out.push(body(Slot::Shirt, &|m| {
-        // A shield-shaped torso, narrow at the waist.
-        m.prism(8, 0.58, 1.1, -0.64, 0.98, r8, 0.6, Vec3::ZERO, 0.0);
-        // Arms, splayed slightly outward at the bottom.
-        for side in [-1.0f32, 1.0] {
-            m.prism(6, 0.21, 0.3, -0.395, 0.955, 0.0, 1.0, Vec3::new(side * 1.3, 0.0, 0.0), side * 9f32.to_radians());
-        }
-    }));
-    out.push(body(Slot::Pants, &|m| {
-        m.prism(8, 0.64, 0.52, -0.82, -0.62, r8, 0.62, Vec3::ZERO, 0.0);
-        for side in [-1.0, 1.0] {
-            m.prism(6, 0.33, 0.42, -2.12, -0.8, 30f32.to_radians(), 1.0, Vec3::new(side * 0.46, 0.0, 0.0), 0.0);
-        }
-    }));
-    out.push(body(Slot::Shoes, &|m| {
-        for side in [-1.0, 1.0] {
-            m.wedge_foot(side * 0.46);
-        }
-    }));
-
-    for face in Face::ALL {
-        let mut ink = Mesh::default();
-        let mut shine = Mesh::default();
-        draw_face(face, &mut ink, &mut shine);
-        out.push(AvatarMesh { slot: Slot::Ink, face: Some(face), vertices: ink.vertices });
-        if !shine.vertices.is_empty() {
-            out.push(AvatarMesh { slot: Slot::Shine, face: Some(face), vertices: shine.vertices });
-        }
+    let mut skin = Mesh::default();
+    let mut shirt = Mesh::default();
+    let mut pants = Mesh::default();
+    let mut shoes = Mesh::default();
+    for side in [-1.0f32, 1.0] {
+        shoes.cuboid(Vec3::new(side * 0.49, -2.325, 0.04), Vec3::new(0.9, 0.35, 1.0));
+        pants.cuboid(Vec3::new(side * 0.49, -1.475, 0.0), Vec3::new(0.88, 1.35, 0.94));
+        shirt.cuboid(Vec3::new(side * 1.43, 0.295, 0.0), Vec3::new(0.8, 1.35, 0.9));
+        skin.cuboid(Vec3::new(side * 1.43, -0.63, 0.0), Vec3::new(0.72, 0.5, 0.82));
     }
-    out
+    shirt.cuboid(Vec3::new(0.0, 0.125, 0.0), Vec3::new(2.0, 1.85, 1.02));
+    skin.sphere(HEAD_CENTER, HEAD_RADIUS);
+
+    let mut decal = Mesh::default();
+    decal.face_patch();
+
+    vec![
+        AvatarMesh { slot: Slot::Skin, vertices: skin.vertices },
+        AvatarMesh { slot: Slot::Shirt, vertices: shirt.vertices },
+        AvatarMesh { slot: Slot::Pants, vertices: pants.vertices },
+        AvatarMesh { slot: Slot::Shoes, vertices: shoes.vertices },
+        AvatarMesh { slot: Slot::Decal, vertices: decal.vertices },
+    ]
 }
 
-fn draw_face(face: Face, ink: &mut Mesh, shine: &mut Mesh) {
-    let eye = |ink: &mut Mesh, shine: &mut Mesh, x: f32, y: f32, rx: f32, ry: f32| {
-        ink.ellipse(Vec2::new(x, y), rx, ry, INK_Z);
-        shine.ellipse(Vec2::new(x + 0.03, y + 0.055), 0.035, 0.035, SHINE_Z);
-    };
-    match face {
-        Face::Smile => {
-            eye(ink, shine, -0.24, EYE_Y, 0.1, 0.16);
-            eye(ink, shine, 0.24, EYE_Y, 0.1, 0.16);
-            ink.arc(
-                Vec2::new(-0.13, MOUTH_Y + 0.05),
-                Vec2::new(0.0, MOUTH_Y - 0.02),
-                Vec2::new(0.13, MOUTH_Y + 0.05),
-                0.03,
-            );
-        }
-        Face::Happy => {
-            // ^ ^ eyes and an open grin.
-            for cx in [-0.24, 0.24] {
-                ink.bar(Vec2::new(cx - 0.07, EYE_Y), 0.2, 0.06, 50f32.to_radians());
-                ink.bar(Vec2::new(cx + 0.07, EYE_Y), 0.2, 0.06, -50f32.to_radians());
-            }
-            ink.ellipse(Vec2::new(0.0, MOUTH_Y), 0.15, 0.09, INK_Z);
-        }
-        Face::Surprised => {
-            for cx in [-0.24, 0.24] {
-                ink.ring(Vec2::new(cx, EYE_Y), 0.11, 0.064);
-            }
-            ink.ellipse(Vec2::new(0.0, MOUTH_Y - 0.02), 0.06, 0.085, INK_Z);
-        }
-        Face::Determined => {
-            eye(ink, shine, -0.24, EYE_Y - 0.03, 0.09, 0.12);
-            eye(ink, shine, 0.24, EYE_Y - 0.03, 0.09, 0.12);
-            // Brows lower on the inside.
-            ink.bar(Vec2::new(-0.26, EYE_Y + 0.17), 0.24, 0.06, 18f32.to_radians());
-            ink.bar(Vec2::new(0.26, EYE_Y + 0.17), 0.24, 0.06, -18f32.to_radians());
-            ink.bar(Vec2::new(0.0, MOUTH_Y), 0.24, 0.05, 0.0);
-        }
-    }
-}
-
-/// Flat-shaded triangles: every triangle gets its own three vertices and
-/// its face normal, which is what gives the low-poly look.
 #[derive(Default)]
 struct Mesh {
     vertices: Vec<Vertex>,
 }
 
 impl Mesh {
-    /// Adds a triangle facing away from `inside` (for closed solids).
-    fn solid_tri(&mut self, a: Vec3, b: Vec3, c: Vec3, inside: Vec3) {
-        let n = (b - a).cross(c - a);
-        let centroid = (a + b + c) / 3.0;
-        if n.dot(centroid - inside) < 0.0 {
-            self.push(a, c, b, -n);
-        } else {
-            self.push(a, b, c, n);
+    fn vertex(&mut self, p: Vec3, n: Vec3, uv: Vec2) {
+        self.vertices.push(Vertex { position: p.to_array(), normal: n.to_array(), uv: uv.to_array() });
+    }
+
+    /// A box with flat faces, counter-clockwise seen from outside.
+    fn cuboid(&mut self, center: Vec3, size: Vec3) {
+        let (cube, indices) = crate::cube();
+        for i in indices {
+            let v = cube[i as usize];
+            let p = center + Vec3::from(v.position) * size;
+            self.vertex(p, Vec3::from(v.normal), Vec2::from(v.uv));
         }
     }
 
-    /// Adds a triangle on the face panel, facing +Z (out of the face).
-    fn flat_tri(&mut self, a: Vec3, b: Vec3, c: Vec3) {
-        let n = (b - a).cross(c - a);
-        if n.z < 0.0 {
-            self.push(a, c, b, Vec3::Z);
-        } else {
-            self.push(a, b, c, Vec3::Z);
-        }
-    }
-
-    fn push(&mut self, a: Vec3, b: Vec3, c: Vec3, normal: Vec3) {
-        let normal = normal.normalize_or_zero().to_array();
-        for p in [a, b, c] {
-            self.vertices.push(Vertex { position: p.to_array(), normal });
-        }
-    }
-
-    /// A tapered prism with `sides` sides, from height y0 (radius r0) to y1
-    /// (radius r1), squashed front-to-back by `depth`, centred on `at`
-    /// (x/z) and tilted about its own centre around the Z axis.
-    #[allow(clippy::too_many_arguments)]
-    fn prism(&mut self, sides: usize, r0: f32, r1: f32, y0: f32, y1: f32, turn: f32, depth: f32, at: Vec3, tilt: f32) {
-        let mid = (y0 + y1) / 2.0;
-        let tilt = Mat3::from_rotation_z(tilt);
-        let place = |p: Vec3| Vec3::new(at.x, mid, at.z) + tilt * (p - Vec3::new(0.0, mid, 0.0));
-        let ring = |r: f32, y: f32| -> Vec<Vec3> {
-            (0..sides)
-                .map(|i| {
-                    let a = turn + i as f32 * TAU / sides as f32;
-                    place(Vec3::new(a.cos() * r, y, a.sin() * r * depth))
-                })
-                .collect()
+    /// A smooth sphere: each vertex's normal points straight out, so the
+    /// lighting rounds it off instead of showing facets.
+    fn sphere(&mut self, center: Vec3, r: f32) {
+        let (rings, segments) = (16, 32);
+        let at = |ring: usize, seg: usize| {
+            let theta = ring as f32 / rings as f32 * PI; // 0 at the top
+            let phi = seg as f32 / segments as f32 * TAU;
+            Vec3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin())
         };
-        let bottom = ring(r0, y0);
-        let top = ring(r1, y1);
-        let inside = place(Vec3::new(0.0, mid, 0.0));
-        let (bc, tc) = (place(Vec3::new(0.0, y0, 0.0)), place(Vec3::new(0.0, y1, 0.0)));
-        for i in 0..sides {
-            let j = (i + 1) % sides;
-            self.solid_tri(bottom[i], bottom[j], top[j], inside);
-            self.solid_tri(bottom[i], top[j], top[i], inside);
-            self.solid_tri(bc, bottom[j], bottom[i], inside);
-            self.solid_tri(tc, top[i], top[j], inside);
+        for ring in 0..rings {
+            for seg in 0..segments {
+                let (a, b) = (at(ring, seg), at(ring + 1, seg));
+                let (c, d) = (at(ring + 1, seg + 1), at(ring, seg + 1));
+                for n in [a, c, b, a, d, c] {
+                    self.vertex(center + n * r, n, Vec2::ZERO);
+                }
+            }
         }
     }
 
-    /// An icosahedron: the faceted "gem" hands.
-    fn gem(&mut self, at: Vec3, r: f32) {
-        let t = (1.0 + 5f32.sqrt()) / 2.0;
-        let v: Vec<Vec3> = [
-            (-1.0, t, 0.0), (1.0, t, 0.0), (-1.0, -t, 0.0), (1.0, -t, 0.0),
-            (0.0, -1.0, t), (0.0, 1.0, t), (0.0, -1.0, -t), (0.0, 1.0, -t),
-            (t, 0.0, -1.0), (t, 0.0, 1.0), (-t, 0.0, -1.0), (-t, 0.0, 1.0),
-        ]
-        .iter()
-        .map(|&(x, y, z)| at + Vec3::new(x, y, z).normalize() * r)
-        .collect();
-        const FACES: [[usize; 3]; 20] = [
-            [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-            [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-            [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-            [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
-        ];
-        for [a, b, c] in FACES {
-            self.solid_tri(v[a], v[b], v[c], at);
-        }
-    }
-
-    /// A shoe: flat sole, sloped toe pointing forward (+Z).
-    fn wedge_foot(&mut self, x: f32) {
-        let y0 = -2.5;
-        let y1 = -2.12;
-        let p = |px: f32, py: f32, pz: f32| Vec3::new(x + px, py, pz);
-        let v = [
-            p(-0.42, y0, 0.8), p(0.42, y0, 0.8), p(0.42, y0, -0.45), p(-0.42, y0, -0.45),
-            p(-0.38, y1, 0.3), p(0.38, y1, 0.3), p(0.38, y1, -0.42), p(-0.38, y1, -0.42),
-        ];
-        let inside = v.iter().copied().sum::<Vec3>() / 8.0;
-        for [a, b, c, d] in [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]] {
-            self.solid_tri(v[a], v[b], v[c], inside);
-            self.solid_tri(v[a], v[c], v[d], inside);
-        }
-    }
-
-    // --- flat shapes drawn on the face panel ---
-
-    fn ellipse(&mut self, c: Vec2, rx: f32, ry: f32, z: f32) {
-        let n = 20;
-        let centre = Vec3::new(c.x, c.y, z);
-        for i in 0..n {
-            let a0 = i as f32 * TAU / n as f32;
-            let a1 = (i + 1) as f32 * TAU / n as f32;
-            let p = |a: f32| Vec3::new(c.x + a.cos() * rx, c.y + a.sin() * ry, z);
-            self.flat_tri(centre, p(a0), p(a1));
-        }
-    }
-
-    fn ring(&mut self, c: Vec2, r: f32, width: f32) {
-        let n = 24;
-        let (ri, ro) = (r - width / 2.0, r + width / 2.0);
-        for i in 0..n {
-            let a0 = i as f32 * TAU / n as f32;
-            let a1 = (i + 1) as f32 * TAU / n as f32;
-            let p = |a: f32, rr: f32| Vec3::new(c.x + a.cos() * rr, c.y + a.sin() * rr, INK_Z);
-            self.flat_tri(p(a0, ri), p(a0, ro), p(a1, ro));
-            self.flat_tri(p(a0, ri), p(a1, ro), p(a1, ri));
-        }
-    }
-
-    /// A rounded-off rectangle stroke, rotated by `angle`.
-    fn bar(&mut self, c: Vec2, length: f32, thick: f32, angle: f32) {
-        let dir = Vec2::new(angle.cos(), angle.sin());
-        self.stroke(c - dir * length / 2.0, c + dir * length / 2.0, thick);
-    }
-
-    /// A smooth curve starting at a, passing through b, ending at c.
-    fn arc(&mut self, a: Vec2, b: Vec2, c: Vec2, thick: f32) {
-        let control = b * 2.0 - (a + c) / 2.0;
-        let at = |t: f32| a * (1.0 - t) * (1.0 - t) + control * 2.0 * t * (1.0 - t) + c * t * t;
-        let steps = 12;
+    /// A square picture projected straight back onto the front of the
+    /// head and lifted a hair off it, like a sticker.
+    fn face_patch(&mut self) {
+        let steps = 16;
+        let r = HEAD_RADIUS * 1.006;
+        let point = |i: usize, j: usize| -> Option<(Vec3, Vec3, Vec2)> {
+            let uv = Vec2::new(i as f32 / steps as f32, j as f32 / steps as f32);
+            // Seen from the front, +X is on the viewer's right... of the
+            // character, so u runs from +X to -X for the picture to read
+            // the right way round.
+            let x = (0.5 - uv.x) * DECAL_SIZE;
+            let y = (0.5 - uv.y) * DECAL_SIZE - 0.05;
+            let z2 = r * r - x * x - y * y;
+            if z2 < (r * 0.25).powi(2) {
+                return None; // off the edge of the head
+            }
+            let n = Vec3::new(x, y, z2.sqrt()) / r;
+            Some((HEAD_CENTER + n * r, n, uv))
+        };
         for i in 0..steps {
-            self.stroke(at(i as f32 / steps as f32), at((i + 1) as f32 / steps as f32), thick * 2.0);
+            for j in 0..steps {
+                let quad = [point(i, j), point(i + 1, j), point(i + 1, j + 1), point(i, j + 1)];
+                let [Some(a), Some(b), Some(c), Some(d)] = quad else { continue };
+                // Counter-clockwise seen from the front (+Z). (u runs toward
+                // -X and v runs down, so a -> b -> c already turns that way.)
+                for v in [a, b, c, a, c, d] {
+                    self.vertex(v.0, v.1, v.2);
+                }
+            }
         }
     }
+}
 
-    /// A line segment with round caps.
-    fn stroke(&mut self, a: Vec2, b: Vec2, width: f32) {
-        let side = (b - a).perp().normalize_or_zero() * width / 2.0;
-        let q = |p: Vec2| Vec3::new(p.x, p.y, INK_Z);
-        self.flat_tri(q(a - side), q(b - side), q(b + side));
-        self.flat_tri(q(a - side), q(b + side), q(a + side));
-        self.ellipse(a, width / 2.0, width / 2.0, INK_Z);
-        self.ellipse(b, width / 2.0, width / 2.0, INK_Z);
+// --- face pictures ---------------------------------------------------------
+
+/// Each face is a 64x64 pixel-art picture; slot 0 of the atlas is plain
+/// white, for everything that isn't textured.
+pub(crate) const CELL: u32 = 64;
+pub(crate) const ATLAS_SLOTS: u32 = 1 + Face::ALL.len() as u32;
+
+/// Which atlas slot a face lives in.
+pub(crate) fn face_slot(face: Face) -> u32 {
+    1 + Face::ALL.iter().position(|f| *f == face).unwrap() as u32
+}
+
+/// The atlas as RGBA8 pixels, ATLAS_SLOTS cells wide and one cell tall.
+pub(crate) fn face_atlas() -> Vec<u8> {
+    let width = CELL * ATLAS_SLOTS;
+    let mut px = vec![0u8; (width * CELL * 4) as usize];
+    for y in 0..CELL {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            let slot = x / CELL;
+            let ink = slot > 0 && face_ink(Face::ALL[slot as usize - 1], (x % CELL) as f32 + 0.5, y as f32 + 0.5);
+            let rgba = if slot == 0 {
+                [255, 255, 255, 255]
+            } else if ink {
+                [20, 20, 20, 255]
+            } else {
+                [0, 0, 0, 0]
+            };
+            px[i..i + 4].copy_from_slice(&rgba);
+        }
     }
+    px
+}
+
+/// Is the pixel at (x, y) (0..64, y down) part of this face's drawing?
+fn face_ink(face: Face, x: f32, y: f32) -> bool {
+    let p = Vec2::new(x, y);
+    let ellipse = |cx: f32, cy: f32, rx: f32, ry: f32| ((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2) <= 1.0;
+    let ring = |cx: f32, cy: f32, r: f32, w: f32| (p.distance(Vec2::new(cx, cy)) - r).abs() <= w / 2.0;
+    let line = |a: (f32, f32), b: (f32, f32), w: f32| segment_distance(p, a.into(), b.into()) <= w / 2.0;
+    let curve = |a: (f32, f32), c: (f32, f32), b: (f32, f32), w: f32| {
+        let (a, c, b) = (Vec2::from(a), Vec2::from(c), Vec2::from(b));
+        let at = |t: f32| a * (1.0 - t) * (1.0 - t) + c * 2.0 * t * (1.0 - t) + b * t * t;
+        (0..16).any(|i| segment_distance(p, at(i as f32 / 16.0), at((i + 1) as f32 / 16.0)) <= w / 2.0)
+    };
+    match face {
+        Face::Smile => {
+            ellipse(21.0, 25.0, 4.0, 7.0)
+                || ellipse(43.0, 25.0, 4.0, 7.0)
+                || curve((18.0, 41.0), (32.0, 52.0), (46.0, 41.0), 3.2)
+        }
+        Face::Happy => {
+            line((15.0, 28.0), (21.0, 21.0), 3.2)
+                || line((21.0, 21.0), (27.0, 28.0), 3.2)
+                || line((37.0, 28.0), (43.0, 21.0), 3.2)
+                || line((43.0, 21.0), (49.0, 28.0), 3.2)
+                || (ellipse(32.0, 40.0, 11.0, 9.0) && y >= 40.0)
+        }
+        Face::Surprised => {
+            ring(21.0, 25.0, 5.0, 2.6) || ring(43.0, 25.0, 5.0, 2.6) || ellipse(32.0, 45.0, 3.5, 5.0)
+        }
+        Face::Determined => {
+            ellipse(21.0, 27.0, 3.5, 5.0)
+                || ellipse(43.0, 27.0, 3.5, 5.0)
+                || line((14.0, 16.0), (27.0, 20.0), 3.2)
+                || line((50.0, 16.0), (37.0, 20.0), 3.2)
+                || line((24.0, 43.0), (40.0, 43.0), 3.2)
+        }
+    }
+}
+
+fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
 }
 
 #[cfg(test)]
@@ -292,50 +215,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_avatar_fits_in_a_five_stud_box() {
+    fn the_avatar_is_about_five_studs_tall() {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
         for m in meshes() {
             for v in &m.vertices {
-                let [x, y, z] = v.position;
-                assert!((-2.5..=2.5).contains(&y), "y {y} in {:?}", m.slot);
-                assert!(x.abs() <= 1.8 && z.abs() <= 1.0, "({x}, {z}) in {:?}", m.slot);
+                lo = lo.min(v.position[1]);
+                hi = hi.max(v.position[1]);
+                assert!(v.position[0].abs() <= 1.85 && v.position[2].abs() <= 0.9);
             }
         }
+        assert!((lo + 2.5).abs() < 0.01, "feet at {lo}");
+        assert!((hi - 2.66).abs() < 0.05, "top of head at {hi}");
     }
 
     #[test]
-    fn the_face_panel_is_flat_and_points_forward() {
-        let skin = meshes().into_iter().find(|m| m.slot == Slot::Skin).unwrap();
-        let panel: Vec<_> = skin
-            .vertices
-            .chunks(3)
-            .filter(|t| t.iter().all(|v| (v.position[2] - PANEL_Z).abs() < 0.01))
-            .collect();
-        assert!(panel.len() >= 2, "the flat face panel exists");
-        for tri in panel {
-            assert!(tri[0].normal[2] > 0.99, "face panel points forward");
-        }
-    }
-
-    #[test]
-    fn body_triangles_point_outward() {
-        // The chest's front faces point forward, its back faces backward.
-        let shirt = meshes().into_iter().find(|m| m.slot == Slot::Shirt).unwrap();
-        for tri in shirt.vertices.chunks(3) {
-            let centroid_z = tri.iter().map(|v| v.position[2]).sum::<f32>() / 3.0;
-            let side_facet = tri[0].normal[1].abs() < 0.9; // not a top or bottom cap
-            if side_facet && centroid_z.abs() > 0.3 && tri.iter().all(|v| v.position[0].abs() < 0.8) {
-                assert!(tri[0].normal[2] * centroid_z > 0.0, "chest facet points inward");
-            }
-        }
-    }
-
-    #[test]
-    fn every_face_has_ink_in_front_of_the_panel() {
+    fn the_head_is_smooth_and_the_decal_sits_just_outside_it() {
         let ms = meshes();
-        for face in Face::ALL {
-            let ink = ms.iter().find(|m| m.face == Some(face) && m.slot == Slot::Ink).unwrap();
-            assert!(!ink.vertices.is_empty());
-            assert!(ink.vertices.iter().all(|v| v.position[2] > PANEL_Z && v.normal == [0.0, 0.0, 1.0]));
+        let decal = ms.iter().find(|m| m.slot == Slot::Decal).unwrap();
+        assert!(!decal.vertices.is_empty());
+        for v in &decal.vertices {
+            let d = Vec3::from(v.position).distance(HEAD_CENTER);
+            assert!(d > HEAD_RADIUS && d < HEAD_RADIUS * 1.01, "decal at {d}");
+            assert!(v.position[2] > 0.0, "decal on the front");
+            assert!((0.0..=1.0).contains(&v.uv[0]) && (0.0..=1.0).contains(&v.uv[1]));
+        }
+    }
+
+    #[test]
+    fn decal_triangles_face_outward_so_they_are_not_culled() {
+        let ms = meshes();
+        let decal = ms.iter().find(|m| m.slot == Slot::Decal).unwrap();
+        for tri in decal.vertices.chunks(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
+            let facing = (b - a).cross(c - a).dot((a + b + c) / 3.0 - HEAD_CENTER);
+            assert!(facing > 0.0, "decal triangle wound clockwise");
+        }
+    }
+
+    #[test]
+    fn head_triangles_face_outward() {
+        let ms = meshes();
+        let skin = ms.iter().find(|m| m.slot == Slot::Skin).unwrap();
+        for tri in skin.vertices.chunks(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
+            let mid = (a + b + c) / 3.0;
+            let area = (b - a).cross(c - a);
+            if mid.distance(HEAD_CENTER) < HEAD_RADIUS * 1.01 && area.length() > 1e-6 {
+                assert!(area.dot(mid - HEAD_CENTER) > 0.0, "head triangle wound inward");
+            }
+        }
+    }
+
+    #[test]
+    fn every_face_draws_something_and_the_white_slot_is_solid() {
+        let px = face_atlas();
+        let width = CELL * ATLAS_SLOTS;
+        for slot in 0..ATLAS_SLOTS {
+            let inked = (0..CELL * CELL)
+                .filter(|k| {
+                    let (x, y) = (slot * CELL + k % CELL, k / CELL);
+                    px[((y * width + x) * 4 + 3) as usize] == 255
+                })
+                .count();
+            if slot == 0 {
+                assert_eq!(inked, (CELL * CELL) as usize);
+            } else {
+                assert!(inked > 60 && inked < 800, "slot {slot} has {inked} ink pixels");
+            }
         }
     }
 }

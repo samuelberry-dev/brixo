@@ -68,6 +68,8 @@ impl Default for Camera {
 struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
+    /// Where on a texture this vertex sits (only decals use it).
+    uv: [f32; 2],
 }
 
 impl Vertex {
@@ -86,6 +88,11 @@ impl Vertex {
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x3,
                 },
+                wgpu::VertexAttribute {
+                    offset: 24,
+                    shader_location: 8,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
             ],
         }
     }
@@ -98,6 +105,17 @@ struct InstanceRaw {
     color: [f32; 3],
     /// 1.0 when the part is selected, 0.0 otherwise.
     highlight: f32,
+    /// Which part of the texture atlas to use: offset (xy) and size (zw).
+    /// Untextured things point at the atlas's white cell.
+    uv_rect: [f32; 4],
+}
+
+/// The atlas's plain white cell, for everything without a picture.
+const WHITE: [f32; 4] = [0.5 / avatar::ATLAS_SLOTS as f32, 0.5, 0.0, 0.0];
+
+fn atlas_rect(slot: u32) -> [f32; 4] {
+    let w = 1.0 / avatar::ATLAS_SLOTS as f32;
+    [slot as f32 * w, 0.0, w, 1.0]
 }
 
 impl InstanceRaw {
@@ -136,6 +154,11 @@ impl InstanceRaw {
                     shader_location: 7,
                     format: wgpu::VertexFormat::Float32,
                 },
+                wgpu::VertexAttribute {
+                    offset: 80,
+                    shader_location: 9,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
             ],
         }
     }
@@ -145,7 +168,17 @@ impl InstanceRaw {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    /// The sun's view, for shadows.
+    light_view_proj: [[f32; 4]; 4],
+    /// Direction toward the sun (w unused).
+    sun_dir: [f32; 4],
 }
+
+/// Toward the sun: high, and a little off to one side.
+const SUN_DIR: Vec3 = Vec3::new(0.45, 1.0, 0.3);
+/// Shadows cover this far around the camera, in studs.
+const SHADOW_RANGE: f32 = 70.0;
+const SHADOW_MAP_SIZE: u32 = 2048;
 
 /// Unit cube, four vertices per face, counter-clockwise seen from outside.
 fn cube() -> (Vec<Vertex>, Vec<u16>) {
@@ -210,10 +243,11 @@ fn cube() -> (Vec<Vertex>, Vec<u16>) {
     let mut indices = Vec::with_capacity(36);
     for (normal, corners) in faces {
         let base = vertices.len() as u16;
-        for c in corners {
+        for (c, uv) in corners.into_iter().zip([[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]) {
             vertices.push(Vertex {
                 position: c,
                 normal,
+                uv,
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -257,19 +291,22 @@ fn build_instances(
 
         out.push(InstanceRaw {
             model: m.to_cols_array_2d(),
-            color: [
-                p.color.r as f32 / 255.0,
-                p.color.g as f32 / 255.0,
-                p.color.b as f32 / 255.0,
-            ],
+            color: rgb(p.color.r, p.color.g, p.color.b),
             highlight,
+            uv_rect: WHITE,
         });
     }
     (out, players)
 }
 
+/// A colour as picked (sRGB, 0-255) in the linear form the GPU blends in.
+/// The screen converts back, so colours show up exactly as picked.
 fn rgb(r: u8, g: u8, b: u8) -> [f32; 3] {
-    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
+    let lin = |c: u8| {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    [lin(r), lin(g), lin(b)]
 }
 
 /// One avatar mesh for one player: they all share the player's transform
@@ -281,20 +318,23 @@ fn avatar_instance(p: &brixo_core::PlayerProps, slot: avatar::Slot, highlight: f
         avatar::Slot::Shirt => c(p.shirt_color),
         avatar::Slot::Pants => c(p.pants_color),
         avatar::Slot::Shoes => c(p.shoes_color),
-        avatar::Slot::Ink => rgb(35, 35, 43),
-        avatar::Slot::Shine => rgb(255, 255, 255),
+        avatar::Slot::Decal => rgb(255, 255, 255),
+    };
+    let uv_rect = match slot {
+        avatar::Slot::Decal => atlas_rect(avatar::face_slot(p.face)),
+        _ => WHITE,
     };
     let m = Mat4::from_translation(to_glam(p.body.position)) * Mat4::from_rotation_y(p.body.rotation.y.to_radians());
     InstanceRaw {
         model: m.to_cols_array_2d(),
         color,
         highlight,
+        uv_rect,
     }
 }
 
 struct AvatarDraw {
     slot: avatar::Slot,
-    face: Option<brixo_core::Face>,
     vertices: std::ops::Range<u32>,
 }
 
@@ -312,6 +352,13 @@ pub struct SceneRenderer {
     pub hidden_player: Option<brixo_core::InstanceId>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    /// Draws the scene from the sun into the shadow map.
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_bind_group: wgpu::BindGroup,
+    shadow_view: wgpu::TextureView,
+    atlas: wgpu::Texture,
+    /// The atlas is filled on the first render (that's when we have a queue).
+    atlas_uploaded: std::cell::Cell<bool>,
     depth_view: wgpu::TextureView,
 }
 
@@ -341,7 +388,6 @@ impl SceneRenderer {
             avatar_vertices.extend(mesh.vertices);
             avatar_draws.push(AvatarDraw {
                 slot: mesh.slot,
-                face: mesh.face,
                 vertices: start..avatar_vertices.len() as u32,
             });
         }
@@ -357,40 +403,153 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+        let uniform_entry = |visibility| wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
+        // Face pictures: one small atlas, sampled without smoothing so the
+        // pixels stay crisp.
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("face atlas"),
+            size: wgpu::Extent3d {
+                width: avatar::CELL * avatar::ATLAS_SLOTS,
+                height: avatar::CELL,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let atlas_view = atlas.create_view(&Default::default());
+        let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("atlas sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // The shadow map: depth as seen from the sun.
+        let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow map"),
+            size: wgpu::Extent3d {
+                width: SHADOW_MAP_SIZE,
+                height: SHADOW_MAP_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow_texture.create_view(&Default::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow sampler"),
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let main_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene layout"),
+            entries: &[
+                uniform_entry(wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("camera bind group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
+            label: Some("scene bind group"),
+            layout: &main_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&shadow_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&shadow_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&atlas_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&atlas_sampler) },
+            ],
+        });
+        // The shadow pass only needs the matrices (it can't read the map
+        // it's drawing into).
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow layout"),
+            entries: &[uniform_entry(wgpu::ShaderStages::VERTEX)],
+        });
+        let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow bind group"),
+            layout: &shadow_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() }],
         });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("part shader"),
+            label: Some("scene shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("part pipeline layout"),
-            bind_group_layouts: &[&camera_layout],
-            push_constant_ranges: &[],
-        });
+        let depth_state = |bias| wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias,
+        };
+        let primitive = |cull_mode| wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("part pipeline"),
-            layout: Some(&pipeline_layout),
+            label: Some("scene pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("scene pipeline layout"),
+                bind_group_layouts: &[&main_layout],
+                push_constant_ranges: &[],
+            })),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
@@ -407,22 +566,34 @@ impl SceneRenderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
+            primitive: primitive(Some(wgpu::Face::Back)),
+            depth_stencil: Some(depth_state(wgpu::DepthBiasState::default())),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("shadow pipeline layout"),
+                bind_group_layouts: &[&shadow_layout],
+                push_constant_ranges: &[],
+            })),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_shadow"),
+                buffers: &[Vertex::layout(), InstanceRaw::layout()],
+                compilation_options: Default::default(),
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
+            fragment: None,
+            primitive: primitive(Some(wgpu::Face::Back)),
+            // Pushes stored depths back a touch so lit surfaces don't
+            // shadow themselves ("shadow acne").
+            depth_stencil: Some(depth_state(wgpu::DepthBiasState {
+                constant: 2,
+                slope_scale: 2.0,
+                clamp: 0.0,
+            })),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -440,6 +611,11 @@ impl SceneRenderer {
             hidden_player: None,
             camera_buffer,
             camera_bind_group,
+            shadow_pipeline,
+            shadow_bind_group,
+            shadow_view,
+            atlas,
+            atlas_uploaded: std::cell::Cell::new(false),
             depth_view,
         }
     }
@@ -463,9 +639,38 @@ impl SceneRenderer {
         height: u32,
     ) {
         let aspect = width as f32 / height.max(1) as f32;
+        // The sun's camera: looking down along the sun direction at the
+        // area around where the camera is looking.
+        let sun = SUN_DIR.normalize();
+        let focus = camera.position + camera.forward() * (SHADOW_RANGE * 0.4);
+        let light_view = glam::camera::rh::view::look_at_mat4(focus + sun * 200.0, focus, Vec3::Y);
+        let light_proj = glam::camera::rh::proj::directx::orthographic(
+            -SHADOW_RANGE, SHADOW_RANGE, -SHADOW_RANGE, SHADOW_RANGE, 1.0, 400.0,
+        );
         let uniform = CameraUniform {
             view_proj: camera.view_proj(aspect).to_cols_array_2d(),
+            light_view_proj: (light_proj * light_view).to_cols_array_2d(),
+            sun_dir: [sun.x, sun.y, sun.z, 0.0],
         };
+        if !self.atlas_uploaded.get() {
+            let size = self.atlas.size();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.atlas,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &avatar::face_atlas(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size.width * 4),
+                    rows_per_image: Some(size.height),
+                },
+                size,
+            );
+            self.atlas_uploaded.set(true);
+        }
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
 
         let (mut instances, players) = build_instances(model, selected);
@@ -475,7 +680,7 @@ impl SceneRenderer {
         for (i, draw) in self.avatar_draws.iter().enumerate() {
             let start = instances.len() as u32;
             for (id, p, highlight) in &players {
-                if draw.face.is_some_and(|f| f != p.face) || self.hidden_player == Some(*id) {
+                if self.hidden_player == Some(*id) {
                     continue;
                 }
                 instances.push(avatar_instance(p, draw.slot, *highlight));
@@ -491,16 +696,51 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        {
+            let mut shadow = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            if !instances.is_empty() {
+                shadow.set_pipeline(&self.shadow_pipeline);
+                shadow.set_bind_group(0, &self.shadow_bind_group, &[]);
+                shadow.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                shadow.set_vertex_buffer(1, instance_buffer.slice(..));
+                shadow.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                if part_count > 0 {
+                    shadow.draw_indexed(0..self.index_count, 0, 0..part_count);
+                }
+                shadow.set_vertex_buffer(0, self.avatar_buffer.slice(..));
+                for (i, batch) in &avatar_batches {
+                    // A printed face casts no shadow of its own.
+                    if self.avatar_draws[*i].slot != avatar::Slot::Decal {
+                        shadow.draw(self.avatar_draws[*i].vertices.clone(), batch.clone());
+                    }
+                }
+            }
+        }
+
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: color_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
+                    // Sky blue (#3f86c9, in linear form).
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.05,
-                        g: 0.07,
-                        b: 0.10,
+                        r: 0.052,
+                        g: 0.238,
+                        b: 0.584,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -556,12 +796,19 @@ fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Te
 const SHADER: &str = r#"
 struct Camera {
     view_proj: mat4x4<f32>,
+    light_view_proj: mat4x4<f32>,
+    sun_dir: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
+@group(0) @binding(1) var shadow_map: texture_depth_2d;
+@group(0) @binding(2) var shadow_sampler: sampler_comparison;
+@group(0) @binding(3) var atlas: texture_2d<f32>;
+@group(0) @binding(4) var atlas_sampler: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(8) uv: vec2<f32>,
 };
 
 struct InstanceInput {
@@ -571,6 +818,7 @@ struct InstanceInput {
     @location(5) m3: vec4<f32>,
     @location(6) color: vec3<f32>,
     @location(7) highlight: f32,
+    @location(9) uv_rect: vec4<f32>,
 };
 
 struct VsOut {
@@ -578,26 +826,52 @@ struct VsOut {
     @location(0) color: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) highlight: f32,
+    @location(3) uv: vec2<f32>,
+    @location(4) world: vec3<f32>,
 };
 
 @vertex
 fn vs_main(v: VertexInput, i: InstanceInput) -> VsOut {
     let model = mat4x4<f32>(i.m0, i.m1, i.m2, i.m3);
+    let world = model * vec4<f32>(v.position, 1.0);
     var out: VsOut;
-    out.clip_position = camera.view_proj * model * vec4<f32>(v.position, 1.0);
+    out.clip_position = camera.view_proj * world;
+    out.world = world.xyz;
     out.color = i.color;
     out.normal = (model * vec4<f32>(v.normal, 0.0)).xyz;
     out.highlight = i.highlight;
+    out.uv = i.uv_rect.xy + v.uv * i.uv_rect.zw;
     return out;
+}
+
+@vertex
+fn vs_shadow(v: VertexInput, i: InstanceInput) -> @builtin(position) vec4<f32> {
+    let model = mat4x4<f32>(i.m0, i.m1, i.m2, i.m3);
+    return camera.light_view_proj * model * vec4<f32>(v.position, 1.0);
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let light_dir = normalize(vec3<f32>(0.4, 1.0, 0.3));
+    let tex = textureSample(atlas, atlas_sampler, in.uv);
+
+    // Is this point in the sun, or in something's shadow?
+    let lp = camera.light_view_proj * vec4<f32>(in.world, 1.0);
+    let ndc = lp.xyz / lp.w;
+    let suv = vec2<f32>(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    let inside = all(suv >= vec2<f32>(0.0)) && all(suv <= vec2<f32>(1.0)) && ndc.z <= 1.0;
+    let sampled = textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(suv, vec2<f32>(0.0), vec2<f32>(1.0)), ndc.z - 0.0015);
+    let lit = select(1.0, sampled, inside);
+
+    // Transparent parts of a decal aren't there at all.
+    if tex.a < 0.5 {
+        discard;
+    }
+
+    // Old-school lighting: flat ambient plus one hard sun.
     let n = normalize(in.normal);
-    let diffuse = max(dot(n, light_dir), 0.0);
-    let shade = 0.35 + 0.65 * diffuse;
-    var rgb = in.color * shade;
+    let lambert = max(dot(n, normalize(camera.sun_dir.xyz)), 0.0);
+    let shade = 0.45 + 0.7 * lambert * lit;
+    var rgb = tex.rgb * in.color * shade;
     // Selected parts get tinted toward orange.
     rgb = mix(rgb, vec3<f32>(1.0, 0.55, 0.1), in.highlight * 0.45);
     return vec4<f32>(rgb, 1.0);

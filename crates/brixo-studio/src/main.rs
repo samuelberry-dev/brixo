@@ -1481,7 +1481,7 @@ fn demo_scene() -> DataModel {
         let p = dm.part_mut(baseplate).unwrap();
         p.size = V::new(60.0, 1.0, 60.0);
         p.position = V::new(0.0, -0.5, 0.0);
-        p.color = Color::new(90, 110, 90);
+        p.color = Color::new(99, 95, 98);
     }
 
     let red = dm.create(Class::Part, "RedBlock", root).unwrap();
