@@ -26,7 +26,7 @@ fn texts(lines: &[LogLine]) -> Vec<String> {
 fn script_runs_on_start_and_knows_self() {
     let (dm, _) = scene_with_script("Coin", "print(\"hi from \" + self.name)");
     let game = Game::start(dm);
-    let log = game.take_log();
+    let log = script_log(&game);
     assert_eq!(texts(&log), ["hi from Coin"]);
     assert_eq!(log[0].source, "Coin/Script");
     assert!(!log[0].is_error);
@@ -39,7 +39,7 @@ fn scripts_move_parts_through_live_properties() {
         "self.position.y += 5\nself.size.x = 4\nself.color.r = 255\nself.rotation = {y = 90}",
     );
     let game = Game::start(dm);
-    assert!(game.take_log().is_empty(), "no errors expected");
+    assert!(script_log(&game).is_empty(), "no errors expected");
     let world = game.world();
     let p = world.part(part).unwrap();
     assert_eq!(p.position, Vec3::new(0.0, 5.0, 0.0));
@@ -55,7 +55,7 @@ fn whole_vectors_and_colors_can_be_assigned() {
         "self.position = {x = 1, y = 2, z = 3}\nself.color = {r = 10, g = 20, b = 300}\nprint(self.position, self.color)",
     );
     let game = Game::start(dm);
-    assert_eq!(texts(&game.take_log()), ["(1, 2, 3) color(10, 20, 255)"]);
+    assert_eq!(texts(&script_log(&game)), ["(1, 2, 3) color(10, 20, 255)"]);
     assert_eq!(game.world().part(part).unwrap().color, Color::new(10, 20, 255));
 }
 
@@ -69,13 +69,13 @@ fn wait_pauses_only_its_own_script() {
     add_script(&mut dm, b, "Fast", "print(\"b1\")");
 
     let mut game = Game::start(dm);
-    assert_eq!(texts(&game.take_log()), ["a1", "b1"]);
+    assert_eq!(texts(&script_log(&game)), ["a1", "b1"]);
     assert_eq!(game.waiting_tasks(), 1);
 
     game.step(0.5);
-    assert!(game.take_log().is_empty(), "too early to wake");
+    assert!(script_log(&game).is_empty(), "too early to wake");
     game.step(0.6);
-    assert_eq!(texts(&game.take_log()), ["a2"]);
+    assert_eq!(texts(&script_log(&game)), ["a2"]);
     assert_eq!(game.waiting_tasks(), 0);
 }
 
@@ -98,7 +98,7 @@ print("done")
     let mut all = Vec::new();
     for _ in 0..4 {
         game.step(1.0);
-        all.extend(texts(&game.take_log()));
+        all.extend(texts(&script_log(&game)));
     }
     assert_eq!(all, ["count 1", "count 2", "count 3", "done"]);
 }
@@ -110,7 +110,7 @@ fn every_fires_on_schedule() {
     for _ in 0..3 {
         game.step(1.0);
     }
-    assert_eq!(texts(&game.take_log()), ["tick 1", "tick 2", "tick 3"]);
+    assert_eq!(texts(&script_log(&game)), ["tick 1", "tick 2", "tick 3"]);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn a_timer_never_overlaps_its_own_previous_run() {
         game.step(1.0);
     }
     // Fires at 1, is still busy at 2 and 3, finishes at 3.5 (seen at 4), fires again at 4 or 5.
-    let log = texts(&game.take_log());
+    let log = texts(&script_log(&game));
     let starts = log.iter().filter(|t| *t == "start").count();
     assert_eq!(starts, 2, "{log:?}");
 }
@@ -142,7 +142,7 @@ fn touched_fires_when_parts_start_overlapping() {
     let mut all = Vec::new();
     for _ in 0..6 {
         game.step(1.0);
-        all.extend(texts(&game.take_log()));
+        all.extend(texts(&script_log(&game)));
     }
     assert_eq!(all, ["touched by Mover"]);
     assert!(game.world().get(coin).is_none(), "the coin destroyed itself");
@@ -157,7 +157,7 @@ fn parts_already_touching_at_start_do_not_fire() {
     add_script(&mut dm, a, "S", "on touched(other)\n print(\"touch\")\nend");
     let mut game = Game::start(dm);
     game.step(0.1);
-    assert!(game.take_log().is_empty());
+    assert!(script_log(&game).is_empty());
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn resting_on_a_surface_is_not_touching() {
     let mut game = Game::start(dm);
     game.step(0.2);
     game.step(0.2);
-    assert!(game.take_log().is_empty());
+    assert!(script_log(&game).is_empty());
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn an_error_stops_only_that_script() {
     add_script(&mut dm, b, "Fine", "wait(1)\nprint(\"still running\")");
     let mut game = Game::start(dm);
     game.step(1.0);
-    let log = game.take_log();
+    let log = script_log(&game);
     assert_eq!(log[0].text, "before");
     assert!(log[1].is_error && log[1].text.contains("line 2") && log[1].source == "A/Broken");
     assert_eq!(log[2].text, "still running");
@@ -197,7 +197,7 @@ fn an_error_stops_only_that_script() {
 fn syntax_errors_are_reported_and_skipped() {
     let (dm, _) = scene_with_script("P", "if true then\n print(1)\n");
     let game = Game::start(dm);
-    let log = game.take_log();
+    let log = script_log(&game);
     assert_eq!(log.len(), 1);
     assert!(log[0].is_error && log[0].text.contains("missing its 'end'"));
 }
@@ -206,7 +206,7 @@ fn syntax_errors_are_reported_and_skipped() {
 fn a_runaway_loop_is_stopped_without_freezing() {
     let (dm, _) = scene_with_script("P", "while true do\nend");
     let game = Game::start(dm);
-    let log = game.take_log();
+    let log = script_log(&game);
     assert!(log[0].is_error && log[0].text.contains("too long"));
 }
 
@@ -237,7 +237,7 @@ print(find("Template"), find("Copy"))
 "#);
     let game = Game::start(dm);
     assert_eq!(
-        texts(&game.take_log()),
+        texts(&script_log(&game)),
         ["part part \"Copy\" (10, 1, 1)", "nil part \"Copy\""]
     );
     assert!(game.world().get(template).is_none());
@@ -247,7 +247,7 @@ print(find("Template"), find("Copy"))
 fn using_a_destroyed_part_gives_a_clear_error() {
     let (dm, _) = scene_with_script("P", "destroy(self)\nprint(self.name)");
     let game = Game::start(dm);
-    let log = game.take_log();
+    let log = script_log(&game);
     assert!(log[0].is_error && log[0].text.contains("was destroyed"), "{log:?}");
 }
 
@@ -264,7 +264,7 @@ fn destroying_a_script_stops_its_waiting_tasks() {
     let mut all = Vec::new();
     for _ in 0..4 {
         game.step(1.0);
-        all.extend(texts(&game.take_log()));
+        all.extend(texts(&script_log(&game)));
     }
     // Prints at 1 and at 2 (the killer wakes at 2 too, after Loop), then stops.
     assert!(all.len() <= 2 && !all.is_empty(), "{all:?}");
@@ -275,7 +275,7 @@ fn destroying_a_script_stops_its_waiting_tasks() {
 fn unknown_events_are_reported() {
     let (dm, _) = scene_with_script("P", "on clicked()\n print(1)\nend");
     let game = Game::start(dm);
-    let log = game.take_log();
+    let log = script_log(&game);
     assert!(log[0].is_error && log[0].text.contains("isn't an event"));
 }
 
@@ -283,7 +283,7 @@ fn unknown_events_are_reported() {
 fn unknown_part_fields_list_the_real_ones() {
     let (dm, _) = scene_with_script("P", "print(self.colour)");
     let game = Game::start(dm);
-    let log = game.take_log();
+    let log = script_log(&game);
     assert!(log[0].text.contains("Parts have name, position"), "{log:?}");
 }
 
@@ -293,7 +293,7 @@ fn time_counts_game_seconds() {
     let mut game = Game::start(dm);
     game.step(1.0);
     game.step(1.0);
-    assert_eq!(texts(&game.take_log()), ["2"]);
+    assert_eq!(texts(&script_log(&game)), ["2"]);
 }
 
 #[test]
@@ -302,5 +302,11 @@ fn disabled_scripts_do_not_run() {
     let script = dm.get(part).unwrap().children[0];
     dm.script_mut(script).unwrap().enabled = false;
     let game = Game::start(dm);
-    assert!(game.take_log().is_empty());
+    assert!(script_log(&game).is_empty());
+}
+
+/// Output from scripts, leaving out Brixo's own messages (every game now
+/// has a player, and in these floorless scenes it falls off the world).
+fn script_log(game: &Game) -> Vec<LogLine> {
+    game.take_log().into_iter().filter(|l| l.source != "Brixo").collect()
 }

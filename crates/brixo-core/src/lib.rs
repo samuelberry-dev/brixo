@@ -62,6 +62,19 @@ pub struct PartProps {
     /// Euler angles in degrees.
     pub rotation: Vec3,
     pub color: Color,
+    /// Anchored parts stay put during play (scripts can still move them).
+    /// Unanchored parts fall, collide and tumble. Saves from before physics
+    /// have no value here and load as anchored, so old scenes don't collapse.
+    #[serde(default = "yes")]
+    pub anchored: bool,
+    /// Whether other parts bump into this one. Parts that can't collide
+    /// still fire `on touched`, so they work as pickups and trigger zones.
+    #[serde(default = "yes")]
+    pub can_collide: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for PartProps {
@@ -71,6 +84,8 @@ impl Default for PartProps {
             size: Vec3::ONE,
             rotation: Vec3::ZERO,
             color: Color::new(160, 160, 160),
+            anchored: true,
+            can_collide: true,
         }
     }
 }
@@ -79,12 +94,8 @@ impl Default for PartProps {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScriptProps {
     pub source: String,
-    #[serde(default = "enabled_default")]
+    #[serde(default = "yes")]
     pub enabled: bool,
-}
-
-fn enabled_default() -> bool {
-    true
 }
 
 impl Default for ScriptProps {
@@ -96,6 +107,38 @@ impl Default for ScriptProps {
     }
 }
 
+/// A player's character during play. Players aren't saved with the scene;
+/// the game creates one at a SpawnLocation when Play starts.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PlayerProps {
+    /// Where the character is (its centre) and which way it faces
+    /// (rotation.y). Size is its bounding box.
+    pub body: PartProps,
+    pub health: f32,
+    pub max_health: f32,
+    /// Studs per second.
+    pub walk_speed: f32,
+    /// Upward speed when jumping, in studs per second.
+    pub jump_power: f32,
+}
+
+impl Default for PlayerProps {
+    fn default() -> Self {
+        Self {
+            body: PartProps {
+                size: Vec3::new(2.0, 5.0, 1.0),
+                color: Color::new(40, 110, 200),
+                anchored: true,
+                ..PartProps::default()
+            },
+            health: 100.0,
+            max_health: 100.0,
+            walk_speed: 16.0,
+            jump_power: 30.0,
+        }
+    }
+}
+
 /// What kind of thing an instance is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Class {
@@ -103,6 +146,9 @@ pub enum Class {
     Folder,
     Part,
     Script,
+    /// A pad players appear on when Play starts. It's a normal part too.
+    SpawnLocation,
+    Player,
 }
 
 impl Class {
@@ -117,8 +163,10 @@ impl Class {
 pub enum Props {
     Workspace,
     Folder,
+    /// Parts and SpawnLocations.
     Part(PartProps),
     Script(ScriptProps),
+    Player(PlayerProps),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +279,39 @@ impl DataModel {
         }
     }
 
+    /// Read a Player's properties.
+    pub fn player(&self, id: InstanceId) -> Option<&PlayerProps> {
+        match self.instances.get(&id).map(|i| &i.props) {
+            Some(Props::Player(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn player_mut(&mut self, id: InstanceId) -> Option<&mut PlayerProps> {
+        match self.instances.get_mut(&id).map(|i| &mut i.props) {
+            Some(Props::Player(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Position, size, rotation and color of anything with a body in the
+    /// world: parts, spawn locations and players.
+    pub fn body(&self, id: InstanceId) -> Option<&PartProps> {
+        match self.instances.get(&id).map(|i| &i.props) {
+            Some(Props::Part(p)) => Some(p),
+            Some(Props::Player(p)) => Some(&p.body),
+            _ => None,
+        }
+    }
+
+    pub fn body_mut(&mut self, id: InstanceId) -> Option<&mut PartProps> {
+        match self.instances.get_mut(&id).map(|i| &mut i.props) {
+            Some(Props::Part(p)) => Some(p),
+            Some(Props::Player(p)) => Some(&mut p.body),
+            _ => None,
+        }
+    }
+
     /// Read a Script's properties. None if the id is missing or isn't a Script.
     pub fn script(&self, id: InstanceId) -> Option<&ScriptProps> {
         match self.instances.get(&id).map(|i| &i.props) {
@@ -260,6 +341,12 @@ impl DataModel {
             Class::Folder => Props::Folder,
             Class::Part => Props::Part(PartProps::default()),
             Class::Script => Props::Script(ScriptProps::default()),
+            Class::SpawnLocation => Props::Part(PartProps {
+                size: Vec3::new(6.0, 1.0, 6.0),
+                color: Color::new(90, 90, 100),
+                ..PartProps::default()
+            }),
+            Class::Player => Props::Player(PlayerProps::default()),
         };
         self.instances.insert(
             id,
@@ -608,6 +695,33 @@ mod tests {
         assert_eq!(copied_children.len(), 1);
         assert_ne!(copied_children[0], script);
         assert!(dm.script(copied_children[0]).is_some());
+    }
+
+    #[test]
+    fn saves_from_before_physics_load_as_anchored() {
+        let json = r#"{"instances":[
+            {"id":0,"class":"Workspace","name":"Workspace","parent":null,"children":[1],"props":"Workspace"},
+            {"id":1,"class":"Part","name":"P","parent":0,"children":[],"props":{"Part":{
+                "position":{"x":0,"y":0,"z":0},"size":{"x":1,"y":1,"z":1},
+                "rotation":{"x":0,"y":0,"z":0},"color":{"r":1,"g":2,"b":3}}}}
+        ],"next_id":2,"root":0}"#;
+        let dm = DataModel::from_json(json).unwrap();
+        let p = dm.part(InstanceId(1)).unwrap();
+        assert!(p.anchored && p.can_collide);
+    }
+
+    #[test]
+    fn spawn_locations_are_parts_and_players_have_bodies() {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let spawn = dm.create(Class::SpawnLocation, "Spawn", root).unwrap();
+        let player = dm.create(Class::Player, "Player", root).unwrap();
+        assert_eq!(dm.part(spawn).unwrap().size, Vec3::new(6.0, 1.0, 6.0));
+        assert!(dm.part(player).is_none(), "players aren't simulated as parts");
+        assert_eq!(dm.player(player).unwrap().health, 100.0);
+        dm.body_mut(player).unwrap().position.y = 7.0;
+        assert_eq!(dm.player(player).unwrap().body.position.y, 7.0);
+        assert!(dm.body(spawn).is_some());
     }
 
     #[test]

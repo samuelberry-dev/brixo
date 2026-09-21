@@ -1,6 +1,6 @@
 //! Draws a Brixo DataModel: every Part becomes an instanced cube.
 
-use brixo_core::{Class, DataModel, Vec3 as BVec3};
+use brixo_core::{DataModel, Vec3 as BVec3};
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 
@@ -233,9 +233,12 @@ fn build_instances(
         let Some(inst) = model.get(id) else { continue };
         stack.extend(inst.children.iter().copied());
 
-        if inst.class != Class::Part {
+        let highlight = if selected == Some(id) { 1.0 } else { 0.0 };
+        if let Some(player) = model.player(id) {
+            push_player(&mut out, &player.body, highlight);
             continue;
         }
+        // Parts and SpawnLocations.
         let Some(p) = model.part(id) else { continue };
 
         let rotation = Quat::from_euler(
@@ -254,10 +257,40 @@ fn build_instances(
                 p.color.g as f32 / 255.0,
                 p.color.b as f32 / 255.0,
             ],
-            highlight: if selected == Some(id) { 1.0 } else { 0.0 },
+            highlight,
         });
     }
     out
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> [f32; 3] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
+}
+
+/// A blocky figure, built from six boxes around the character's centre
+/// (which is 2.5 studs above its feet).
+fn push_player(out: &mut Vec<InstanceRaw>, body: &brixo_core::PartProps, highlight: f32) {
+    let skin = rgb(245, 205, 70);
+    let shirt = rgb(body.color.r, body.color.g, body.color.b);
+    let pants = rgb(80, 160, 70);
+    let pieces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+        ([-0.5, -1.5, 0.0], [0.95, 2.0, 1.0], pants), // left leg
+        ([0.5, -1.5, 0.0], [0.95, 2.0, 1.0], pants),  // right leg
+        ([0.0, 0.5, 0.0], [2.0, 2.0, 1.0], shirt),    // torso
+        ([-1.5, 0.5, 0.0], [0.95, 2.0, 1.0], skin),   // left arm
+        ([1.5, 0.5, 0.0], [0.95, 2.0, 1.0], skin),    // right arm
+        ([0.0, 2.0, 0.0], [1.2, 1.0, 1.2], skin),     // head
+    ];
+    let base = Mat4::from_translation(to_glam(body.position))
+        * Mat4::from_rotation_y(body.rotation.y.to_radians());
+    for (offset, size, color) in pieces {
+        let m = base * Mat4::from_translation(Vec3::from(offset)) * Mat4::from_scale(Vec3::from(size));
+        out.push(InstanceRaw {
+            model: m.to_cols_array_2d(),
+            color,
+            highlight,
+        });
+    }
 }
 
 // --- renderer --------------------------------------------------------------
@@ -544,9 +577,7 @@ pub fn pick(
         let Some(inst) = model.get(id) else { continue };
         stack.extend(inst.children.iter().copied());
 
-        if inst.class != Class::Part {
-            continue;
-        }
+        // Parts and SpawnLocations can be picked.
         let Some(p) = model.part(id) else { continue };
 
         let rotation = Quat::from_euler(

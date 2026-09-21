@@ -2,6 +2,7 @@
 
 pub mod game;
 pub mod host;
-pub mod touch;
+pub mod physics;
 
-pub use game::{Game, LogLine, EVENTS, GAME_STEP_LIMIT};
+pub use game::{Game, LogLine, EVENTS, FALL_LIMIT, GAME_STEP_LIMIT};
+pub use physics::{PlayerInput, GRAVITY, PHYSICS_DT};

@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
-use brixo_runtime::{Game, LogLine};
+use brixo_runtime::{Game, LogLine, PlayerInput};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -193,6 +193,8 @@ struct Editor {
     /// True while a Properties edit is in progress (dragging a value,
     /// typing a name), so the whole edit becomes a single undo step.
     prop_session: bool,
+    /// How far the camera sits behind the player during Play.
+    follow_distance: f32,
 }
 
 impl Default for Editor {
@@ -203,6 +205,7 @@ impl Default for Editor {
             drag: None,
             history: History::default(),
             prop_session: false,
+            follow_distance: 16.0,
         }
     }
 }
@@ -219,6 +222,8 @@ struct Studio {
     /// The running game, while Play is on. It works on a copy of `model`.
     game: Option<Game>,
     output: Vec<LogLine>,
+    /// The studio camera, put back when Play stops.
+    saved_camera: Option<(Vec3, f32, f32)>,
     keys: HashSet<KeyCode>,
     last_frame: Instant,
 }
@@ -234,12 +239,42 @@ impl Studio {
             editor: Editor::default(),
             game: None,
             output: Vec::new(),
+            saved_camera: None,
             keys: HashSet::new(),
             last_frame: Instant::now(),
         }
     }
 
+    /// WASD relative to where the camera faces, flattened onto the ground.
+    fn player_input(&self) -> PlayerInput {
+        let forward = Vec3::new(self.camera.yaw.cos(), 0.0, self.camera.yaw.sin());
+        let right = Vec3::new(-forward.z, 0.0, forward.x);
+        let mut dir = Vec3::ZERO;
+        if self.keys.contains(&KeyCode::KeyW) {
+            dir += forward;
+        }
+        if self.keys.contains(&KeyCode::KeyS) {
+            dir -= forward;
+        }
+        if self.keys.contains(&KeyCode::KeyD) {
+            dir += right;
+        }
+        if self.keys.contains(&KeyCode::KeyA) {
+            dir -= right;
+        }
+        let dir = dir.normalize_or_zero();
+        PlayerInput {
+            move_x: dir.x,
+            move_z: dir.z,
+            jump: self.keys.contains(&KeyCode::Space),
+        }
+    }
+
     fn move_camera(&mut self, dt: f32) {
+        // During Play the keys drive the player and the camera follows it.
+        if self.game.is_some() {
+            return;
+        }
         let speed = if self.keys.contains(&KeyCode::ControlLeft) {
             40.0
         } else {
@@ -275,10 +310,17 @@ impl Studio {
 
     fn frame(&mut self, dt: f32) {
         // Advance the running game before drawing it.
+        let input = self.player_input();
         if let Some(game) = self.game.as_mut() {
+            game.set_input(input);
             game.step(dt as f64);
             self.output.extend(game.take_log());
             trim_output(&mut self.output);
+            // Third-person camera: orbit with right-drag, zoom with the wheel.
+            if let Some(target) = game.player_position() {
+                let target = target + Vec3::Y * 1.5;
+                self.camera.position = target - self.camera.forward() * self.editor.follow_distance;
+            }
         }
 
         let Studio {
@@ -290,6 +332,7 @@ impl Studio {
             editor,
             game,
             output,
+            saved_camera,
             ..
         } = self;
         let Some(gpu) = gpu.as_mut() else { return };
@@ -399,12 +442,19 @@ impl Studio {
             editor.prop_session = false;
             if game.take().is_some() {
                 // Stop: the copy is thrown away, so the scene is exactly as before.
+                if let Some((position, yaw, pitch)) = saved_camera.take() {
+                    camera.position = position;
+                    camera.yaw = yaw;
+                    camera.pitch = pitch;
+                }
                 output.push(system_line("Stopped"));
                 *status = "Stopped".to_string();
                 if selection.and_then(|id| model.get(id)).is_none() {
                     *selection = None;
                 }
             } else {
+                *saved_camera = Some((camera.position, camera.yaw, camera.pitch));
+                camera.pitch = -0.35;
                 output.push(system_line("Playing"));
                 let started = Game::start(model.clone());
                 output.extend(started.take_log());
@@ -435,6 +485,7 @@ fn trim_output(output: &mut Vec<LogLine>) {
 
 enum Action {
     AddPart,
+    AddSpawn,
     AddScript,
     AddFolder,
     Delete,
@@ -536,6 +587,9 @@ fn build_ui(
                 if ui.button("Add Part").clicked() {
                     action = Some(Action::AddPart);
                 }
+                if ui.button("Add Spawn").clicked() {
+                    action = Some(Action::AddSpawn);
+                }
                 if ui.button("Add Script").clicked() {
                     action = Some(Action::AddScript);
                 }
@@ -611,9 +665,23 @@ fn build_ui(
                 if let Some(p) = model.part_mut(id) {
                     p.position = V::new(spot.x.round(), spot.y.round().max(0.5), spot.z.round());
                     p.size = V::new(2.0, 2.0, 2.0);
+                    // Like Roblox: new parts are loose and fall when you press Play.
+                    p.anchored = false;
                 }
                 *selection = Some(id);
                 *status = "Added a Part".to_string();
+            }
+        }
+        Some(Action::AddSpawn) => {
+            editor.history.checkpoint(model);
+            let parent = container_for(model, *selection);
+            if let Some(id) = model.create(Class::SpawnLocation, "SpawnLocation", parent) {
+                let spot = camera.position + camera.forward() * 14.0;
+                if let Some(p) = model.part_mut(id) {
+                    p.position = V::new(spot.x.round(), 0.5, spot.z.round());
+                }
+                *selection = Some(id);
+                *status = "Added a SpawnLocation. Players appear here when you press Play".to_string();
             }
         }
         Some(Action::AddScript) => {
@@ -822,6 +890,17 @@ fn properties_panel(
                 }
             });
 
+            ui.horizontal(|ui| {
+                changed |= ui
+                    .checkbox(&mut p.anchored, "Anchored")
+                    .on_hover_text("Anchored parts stay put when you press Play. Unanchored parts fall.")
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut p.can_collide, "Can collide")
+                    .on_hover_text("Off: things pass through it, but it still fires 'on touched'.")
+                    .changed();
+            });
+
             p.size.x = p.size.x.max(0.01);
             p.size.y = p.size.y.max(0.01);
             p.size.z = p.size.z.max(0.01);
@@ -868,7 +947,13 @@ fn viewport(
     let screen = ui.ctx().screen_rect();
     let aspect = screen.width() / screen.height().max(1.0);
 
-    // Right-drag: look around.
+    // Scroll wheel: zoom the follow camera during Play.
+    if playing && response.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        editor.follow_distance = (editor.follow_distance - scroll * 0.05).clamp(6.0, 60.0);
+    }
+
+    // Right-drag: look around (during Play, orbit the player).
     if response.dragged_by(egui::PointerButton::Secondary) {
         let d = response.drag_delta();
         camera.yaw += d.x * 0.005;
@@ -1387,6 +1472,50 @@ fn demo_scene() -> DataModel {
         p.position = V::new(8.0, 1.0 + i as f32 * 2.0, -5.0);
         p.rotation = V::new(0.0, i as f32 * 15.0, 0.0);
         p.color = Color::new(220, 190, 80);
+        p.anchored = false;
+    }
+
+    // --- a little course for the player ---
+    let spawn = dm.create(Class::SpawnLocation, "SpawnLocation", root).unwrap();
+    dm.part_mut(spawn).unwrap().position = V::new(-12.0, 0.5, 8.0);
+
+    let coin = dm.create(Class::Part, "Coin", root).unwrap();
+    {
+        let p = dm.part_mut(coin).unwrap();
+        p.size = V::new(1.6, 1.6, 0.4);
+        p.position = V::new(-12.0, 2.5, 0.0);
+        p.color = Color::new(255, 200, 40);
+        p.can_collide = false;
+    }
+    let s = dm.create(Class::Script, "Collect", coin).unwrap();
+    dm.script_mut(s).unwrap().source = "-- Walk into me! Can collide is off, so you pass through.\non touched(other)\n    if other.class == \"player\" then\n        print(other.name + \" grabbed a coin!\")\n        destroy(self)\n    end\nend\n\nevery 0.03 seconds\n    self.rotation.y += 5\nend\n".to_string();
+
+    let lava = dm.create(Class::Part, "Lava", root).unwrap();
+    {
+        let p = dm.part_mut(lava).unwrap();
+        p.size = V::new(8.0, 0.2, 4.0);
+        p.position = V::new(-12.0, 0.1, -8.0);
+        p.color = Color::new(255, 80, 20);
+    }
+    let s = dm.create(Class::Script, "Burn", lava).unwrap();
+    dm.script_mut(s).unwrap().source = "-- Touching lava sends you back to the spawn.\non touched(other)\n    if other.class == \"player\" then\n        other.health = 0\n    end\nend\n".to_string();
+
+    let platform = dm.create(Class::Part, "Platform", root).unwrap();
+    {
+        let p = dm.part_mut(platform).unwrap();
+        p.size = V::new(6.0, 2.0, 6.0);
+        p.position = V::new(-3.0, 1.0, 8.0);
+        p.color = Color::new(120, 120, 150);
+    }
+
+    // Drops onto the edge of the tower and knocks it over when you press Play.
+    let wrecker = dm.create(Class::Part, "Wrecker", root).unwrap();
+    {
+        let p = dm.part_mut(wrecker).unwrap();
+        p.size = V::new(4.0, 4.0, 4.0);
+        p.position = V::new(10.0, 22.0, -5.0);
+        p.color = Color::new(70, 110, 200);
+        p.anchored = false;
     }
 
     dm

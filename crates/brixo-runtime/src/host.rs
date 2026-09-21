@@ -39,6 +39,8 @@ fn class_name(class: Class) -> &'static str {
         Class::Folder => "folder",
         Class::Part => "part",
         Class::Script => "script",
+        Class::SpawnLocation => "spawnlocation",
+        Class::Player => "player",
     }
 }
 
@@ -86,7 +88,7 @@ fn channel(value: &Value, what: &str) -> Result<u8, String> {
 }
 
 fn part_fields_hint() -> &'static str {
-    "Parts have name, position, size, rotation, color and parent"
+    "Parts have name, position, size, rotation, color, anchored, can_collide and parent"
 }
 
 impl WorldHost {
@@ -108,7 +110,7 @@ impl WorldHost {
                 Ok(v)
             }
             Value::Object(o) if matches!(o.facet, FACET_POSITION | FACET_SIZE | FACET_ROTATION) => {
-                let p = world.part(InstanceId::from_raw(o.id)).ok_or_else(gone)?;
+                let p = world.body(InstanceId::from_raw(o.id)).ok_or_else(gone)?;
                 Ok(read_vec(p, o.facet))
             }
             other => Err(format!(
@@ -134,7 +136,7 @@ impl WorldHost {
                 Ok(c)
             }
             Value::Object(o) if o.facet == FACET_COLOR => {
-                let p = world.part(InstanceId::from_raw(o.id)).ok_or_else(gone)?;
+                let p = world.body(InstanceId::from_raw(o.id)).ok_or_else(gone)?;
                 Ok(p.color)
             }
             other => Err(format!(
@@ -157,8 +159,21 @@ impl Host for WorldHost {
                 "class" => Ok(Value::str(class_name(inst.class))),
                 "parent" => Ok(inst.parent.map(object).unwrap_or(Value::Nil)),
                 "children" => Ok(Value::list(inst.children.iter().map(|c| object(*c)).collect())),
+                "health" | "max_health" | "walk_speed" | "jump_power" => match world.player(id) {
+                    Some(p) => Ok(Value::Num(match name {
+                        "health" => p.health,
+                        "max_health" => p.max_health,
+                        "walk_speed" => p.walk_speed,
+                        _ => p.jump_power,
+                    } as f64)),
+                    None => Err(format!("a {} doesn't have {name}. Only players do", class_name(inst.class))),
+                },
+                "anchored" | "can_collide" => match world.part(id) {
+                    Some(p) => Ok(Value::Bool(if name == "anchored" { p.anchored } else { p.can_collide })),
+                    None => Err(format!("a {} doesn't have {name}. Only parts do", class_name(inst.class))),
+                },
                 other => match vec_facet(other) {
-                    Some(facet) if world.part(id).is_some() => Ok(Value::Object(ObjectRef {
+                    Some(facet) if world.body(id).is_some() => Ok(Value::Object(ObjectRef {
                         id: obj.id,
                         facet,
                     })),
@@ -177,7 +192,7 @@ impl Host for WorldHost {
             },
 
             FACET_POSITION | FACET_SIZE | FACET_ROTATION => {
-                let v = read_vec(world.part(id).ok_or_else(gone)?, obj.facet);
+                let v = read_vec(world.body(id).ok_or_else(gone)?, obj.facet);
                 match name {
                     "x" => Ok(Value::Num(v.x as f64)),
                     "y" => Ok(Value::Num(v.y as f64)),
@@ -187,7 +202,7 @@ impl Host for WorldHost {
             }
 
             FACET_COLOR => {
-                let c = world.part(id).ok_or_else(gone)?.color;
+                let c = world.body(id).ok_or_else(gone)?.color;
                 match name {
                     "r" => Ok(Value::Num(c.r as f64)),
                     "g" => Ok(Value::Num(c.g as f64)),
@@ -215,6 +230,37 @@ impl Host for WorldHost {
                     other => Err(format!("name has to be text, not a {}", other.type_name())),
                 },
                 "class" => Err("class can't be changed".to_string()),
+                "health" | "max_health" | "walk_speed" | "jump_power" => {
+                    let n = number(&value, name)?.max(0.0);
+                    let p = world
+                        .player_mut(id)
+                        .ok_or_else(|| format!("a {} doesn't have {name}. Only players do", class_name(class)))?;
+                    match name {
+                        // Health can't go above max_health; 0 means dead.
+                        "health" => p.health = n.min(p.max_health),
+                        "max_health" => {
+                            p.max_health = n.max(1.0);
+                            p.health = p.health.min(p.max_health);
+                        }
+                        "walk_speed" => p.walk_speed = n,
+                        _ => p.jump_power = n,
+                    }
+                    Ok(())
+                }
+                "anchored" | "can_collide" => {
+                    let Value::Bool(flag) = value else {
+                        return Err(format!("{name} has to be true or false, not a {}", value.type_name()));
+                    };
+                    let p = world
+                        .part_mut(id)
+                        .ok_or_else(|| format!("a {} doesn't have {name}. Only parts do", class_name(class)))?;
+                    if name == "anchored" {
+                        p.anchored = flag;
+                    } else {
+                        p.can_collide = flag;
+                    }
+                    Ok(())
+                }
                 "children" => Err("children can't be set directly. Change a child's parent instead".to_string()),
                 "parent" => match value {
                     Value::Object(p) if p.facet == FACET_SELF => {
@@ -232,19 +278,19 @@ impl Host for WorldHost {
                     other => Err(format!("parent has to be an object, not a {}", other.type_name())),
                 },
                 "color" => {
-                    let current = world.part(id).ok_or_else(|| format!("a {} doesn't have a color", class_name(class)))?.color;
+                    let current = world.body(id).ok_or_else(|| format!("a {} doesn't have a color", class_name(class)))?.color;
                     let c = self.to_color(&world, &value, current)?;
-                    world.part_mut(id).unwrap().color = c;
+                    world.body_mut(id).unwrap().color = c;
                     Ok(())
                 }
                 other => match vec_facet(other) {
                     Some(facet) => {
                         let p = world
-                            .part(id)
+                            .body(id)
                             .ok_or_else(|| format!("a {} doesn't have a {other}", class_name(class)))?;
                         let current = read_vec(p, facet);
                         let v = self.to_vec3(&world, &value, current)?;
-                        write_vec(world.part_mut(id).unwrap(), facet, v);
+                        write_vec(world.body_mut(id).unwrap(), facet, v);
                         Ok(())
                     }
                     None => Err(format!(
@@ -256,7 +302,7 @@ impl Host for WorldHost {
 
             FACET_POSITION | FACET_SIZE | FACET_ROTATION => {
                 let n = number(&value, name)?;
-                let p = world.part_mut(id).ok_or_else(gone)?;
+                let p = world.body_mut(id).ok_or_else(gone)?;
                 let mut v = read_vec(p, obj.facet);
                 match name {
                     "x" => v.x = n,
@@ -270,7 +316,7 @@ impl Host for WorldHost {
 
             FACET_COLOR => {
                 let n = channel(&value, name)?;
-                let p = world.part_mut(id).ok_or_else(gone)?;
+                let p = world.body_mut(id).ok_or_else(gone)?;
                 match name {
                     "r" => p.color.r = n,
                     "g" => p.color.g = n,
@@ -292,11 +338,11 @@ impl Host for WorldHost {
         };
         match obj.facet {
             FACET_SELF => format!("{} \"{}\"", class_name(inst.class), inst.name),
-            FACET_COLOR => match world.part(id) {
+            FACET_COLOR => match world.body(id) {
                 Some(p) => format!("color({}, {}, {})", p.color.r, p.color.g, p.color.b),
                 None => "<destroyed>".to_string(),
             },
-            facet => match world.part(id) {
+            facet => match world.body(id) {
                 Some(p) => {
                     let v = read_vec(p, facet);
                     format!(

@@ -7,3 +7,5 @@ description = "Runs a Brixo game: scripts, timers, and events"
 [dependencies]
 brixo-core = { path = "../brixo-core" }
 rovik = { path = "../rovik" }
+glam = "0.33"
+rapier3d = "0.35"

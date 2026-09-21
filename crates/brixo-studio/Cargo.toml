@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-brixo-core = { version = "0.1.0", path = "../brixo-core" }
-brixo-render = { version = "0.1.0", path = "../brixo-render" }
-brixo-runtime = { version = "0.1.0", path = "../brixo-runtime" }
-bytemuck = { version = "1.25.2", features = ["derive"] }
+brixo-core = { path = "../brixo-core" }
+brixo-render = { path = "../brixo-render" }
+bytemuck = { version = "1", features = ["derive"] }
 egui = "0.31"
 egui-wgpu = "0.31"
 egui-winit = "0.31"
-glam = "0.33.8"
+glam = "0.33"
 pollster = "0.4"
-rovik = { version = "0.1.0", path = "../rovik" }
 wgpu = "24"
 winit = "0.30"
+brixo-runtime = { path = "../brixo-runtime" }
+rovik = { path = "../rovik" }

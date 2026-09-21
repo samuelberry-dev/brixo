@@ -14,12 +14,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
-use brixo_core::{Class, DataModel, InstanceId};
+use brixo_core::{Class, DataModel, InstanceId, Vec3 as BVec3};
 use rovik::ast::Stmt;
 use rovik::{Interpreter, RovikError, Trigger, Value};
 
 use crate::host::{object, WorldHost};
-use crate::touch::overlapping_pairs;
+use crate::physics::{Physics, PlayerInput};
 
 /// Statements a script may run between waits before it's stopped.
 /// Lower than the command line's limit so a runaway loop can't freeze a
@@ -29,6 +29,9 @@ pub const GAME_STEP_LIMIT: u64 = 1_000_000;
 const TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
 /// The error a paused wait() gets when the game stops. Never shown.
 const STOPPED: &str = "the game was stopped";
+
+/// Players below this height have fallen off the world and respawn.
+pub const FALL_LIMIT: f32 = -60.0;
 
 /// Events scripts can use with `on`.
 pub const EVENTS: &[&str] = &["touched"];
@@ -89,7 +92,11 @@ pub struct Game {
     known_scripts: HashSet<InstanceId>,
     tasks: Vec<Task>,
     next_task: u64,
-    touching: HashSet<(InstanceId, InstanceId)>,
+    physics: Physics,
+    input: PlayerInput,
+    player: Option<InstanceId>,
+    /// Where the player appears, on top of the first SpawnLocation.
+    spawn_point: BVec3,
     time: f64,
 }
 
@@ -97,7 +104,6 @@ impl Game {
     /// Starts a game on a copy of the scene. Every enabled script runs its
     /// body until it first waits or finishes.
     pub fn start(model: DataModel) -> Game {
-        let touching = overlapping_pairs(&model);
         let mut game = Game {
             world: Arc::new(Mutex::new(model)),
             clock: Arc::new(Mutex::new(0.0)),
@@ -106,12 +112,82 @@ impl Game {
             known_scripts: HashSet::new(),
             tasks: Vec::new(),
             next_task: 0,
-            // Things already touching when Play starts don't count as touches.
-            touching,
+            physics: Physics::new(),
+            input: PlayerInput::default(),
+            player: None,
+            spawn_point: BVec3::new(0.0, 10.0, 0.0),
             time: 0.0,
         };
+        // The player exists before scripts start, so they can find it.
+        game.spawn_player();
         game.discover_scripts();
         game
+    }
+
+    /// What the player is pressing. Call before each step().
+    pub fn set_input(&mut self, input: PlayerInput) {
+        self.input = input;
+    }
+
+    pub fn player_id(&self) -> Option<InstanceId> {
+        self.player
+    }
+
+    /// The player's character position, for the camera to follow.
+    pub fn player_position(&self) -> Option<glam::Vec3> {
+        self.physics.character_position()
+    }
+
+    pub fn player_grounded(&self) -> bool {
+        self.physics.character_grounded()
+    }
+
+    fn spawn_player(&mut self) {
+        let mut world = self.world.lock().unwrap();
+        let spawn = world
+            .walk()
+            .into_iter()
+            .find(|id| world.get(*id).map(|i| i.class) == Some(Class::SpawnLocation));
+        if let Some(pad) = spawn.and_then(|id| world.part(id)) {
+            // Standing on top of the pad: its top, plus half the character's height.
+            self.spawn_point = BVec3::new(
+                pad.position.x,
+                pad.position.y + pad.size.y / 2.0 + 2.55,
+                pad.position.z,
+            );
+        }
+        let root = world.root();
+        if let Some(id) = world.create(Class::Player, "Player", root) {
+            if let Some(p) = world.player_mut(id) {
+                p.body.position = self.spawn_point;
+            }
+            self.player = Some(id);
+        }
+    }
+
+    /// Dead or fallen players go back to the spawn point with full health.
+    fn check_respawn(&mut self) {
+        let Some(id) = self.player else { return };
+        let reason = {
+            let mut world = self.world.lock().unwrap();
+            let spawn = self.spawn_point;
+            let Some(p) = world.player_mut(id) else { return };
+            let reason = if p.health <= 0.0 {
+                Some("died")
+            } else if p.body.position.y < FALL_LIMIT {
+                Some("fell off the world")
+            } else {
+                None
+            };
+            if reason.is_some() {
+                p.health = p.max_health;
+                p.body.position = spawn;
+            }
+            reason
+        };
+        if let Some(reason) = reason {
+            self.push_log("Brixo", format!("Player {reason} and respawned"), false);
+        }
     }
 
     /// Advances the game by `dt` seconds.
@@ -123,7 +199,7 @@ impl Game {
         self.stop_removed_scripts();
         self.discover_scripts();
         self.run_timers();
-        self.detect_touches();
+        self.run_physics(dt);
     }
 
     /// The live world, for drawing. Don't hold this across step().
@@ -397,16 +473,23 @@ impl Game {
         }
     }
 
-    fn detect_touches(&mut self) {
-        let current = overlapping_pairs(&self.world.lock().unwrap());
-        let started: Vec<(InstanceId, InstanceId)> =
-            current.difference(&self.touching).copied().collect();
-        self.touching = current;
-
-        for (a, b) in started {
+    /// Simulates physics (which also finds touches), then runs `on touched`.
+    fn run_physics(&mut self, dt: f64) {
+        let listeners: HashSet<InstanceId> = self
+            .scripts
+            .iter()
+            .filter(|s| !s.touch_handlers.is_empty())
+            .filter_map(|s| s.parent)
+            .collect();
+        let touches = {
+            let mut world = self.world.lock().unwrap();
+            self.physics.step(&mut world, dt as f32, &listeners, self.input)
+        };
+        for (a, b) in touches {
             self.fire_touched(a, b);
             self.fire_touched(b, a);
         }
+        self.check_respawn();
     }
 
     /// Runs `on touched` for every script inside `part`, passing `other`.
