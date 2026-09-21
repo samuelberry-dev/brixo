@@ -1,0 +1,84 @@
+-- A tour of Rovik
+*** Block comments
+    can span lines ***
+
+print("Hello from Rovik!")
+
+-- numbers and text
+total = 0
+for i in [1, 2, 3, 4] do
+    total += i
+end
+print("sum is " + total)
+
+-- functions
+fn square(n)
+    return n * n
+end
+print("7 squared is " + square(7))
+
+-- if / elseif / else
+fn grade(score)
+    if score >= 90 then
+        return "A"
+    elseif score >= 80 then
+        return "B"
+    else
+        return "keep going"
+    end
+end
+print(grade(95), grade(85), grade(10))
+
+-- lists start at 1
+fruits = ["apple", "banana", "cherry"]
+print(fruits[1])
+push(fruits, "date")
+print(len(fruits), fruits)
+
+-- maps
+player = {name = "Sam", coins = 0}
+player.coins += 25
+print(player.name + " has " + player.coins + " coins")
+print(player)
+
+-- ranges, while, break, continue
+for i in 1..5 do
+    if i == 3 then
+        continue
+    end
+    print("counting " + i)
+end
+
+n = 0
+while true do
+    n += 1
+    if n > 3 then
+        break
+    end
+end
+print("n ended at " + n)
+
+-- functions update script-level variables
+coins_given = 0
+fn reward()
+    coins_given = coins_given + 1
+    bonus = 5          -- new name inside a function: stays local
+end
+reward()
+reward()
+print("coins given: " + coins_given)
+
+-- functions are values
+fn apply_twice(f, x)
+    return f(f(x))
+end
+print(apply_twice(fn (v) return v + 10 end, 1))
+
+-- events are recorded, and will run inside Brixo
+on touched(player)
+    print(player.name + " touched me")
+end
+
+every 5 seconds
+    print("tick")
+end

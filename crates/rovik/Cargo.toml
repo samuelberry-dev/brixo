@@ -1,0 +1,12 @@
+[package]
+name = "rovik"
+version = "0.1.0"
+edition = "2021"
+description = "Rovik, the scripting language for Brixo"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rovik"
+path = "src/main.rs"
