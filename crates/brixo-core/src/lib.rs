@@ -5,6 +5,17 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InstanceId(u64);
 
+impl InstanceId {
+    /// The raw number, for handing to scripts.
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+
+    pub fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
     pub x: f32,
@@ -64,20 +75,50 @@ impl Default for PartProps {
     }
 }
 
+/// A Rovik script. It runs when the game plays; `self` is its parent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScriptProps {
+    pub source: String,
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
+}
+
+fn enabled_default() -> bool {
+    true
+}
+
+impl Default for ScriptProps {
+    fn default() -> Self {
+        Self {
+            source: "-- This script runs when you press Play.\n-- 'self' is the part it's inside.\n\nprint(\"Hello from \" + self.name)\n".to_string(),
+            enabled: true,
+        }
+    }
+}
+
 /// What kind of thing an instance is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Class {
     Workspace,
     Folder,
     Part,
+    Script,
+}
+
+impl Class {
+    /// Whether this kind of instance may have children.
+    pub fn can_hold_children(self) -> bool {
+        !matches!(self, Class::Script)
+    }
 }
 
 /// Per-class data. Kept in sync with `Instance::class` by construction.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Props {
     Workspace,
     Folder,
     Part(PartProps),
+    Script(ScriptProps),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +190,31 @@ impl DataModel {
         self.instances.is_empty()
     }
 
+    /// Every instance, in no particular order.
+    pub fn iter(&self) -> impl Iterator<Item = &Instance> {
+        self.instances.values()
+    }
+
+    /// Every instance in tree order, starting at the root.
+    pub fn walk(&self) -> Vec<InstanceId> {
+        let mut out = Vec::new();
+        let mut stack = vec![self.root];
+        while let Some(id) = stack.pop() {
+            if let Some(inst) = self.instances.get(&id) {
+                out.push(id);
+                stack.extend(inst.children.iter().rev().copied());
+            }
+        }
+        out
+    }
+
+    /// The first instance with this name, searching in tree order.
+    pub fn find_first(&self, name: &str) -> Option<InstanceId> {
+        self.walk()
+            .into_iter()
+            .find(|id| self.instances[id].name == name)
+    }
+
     /// Read a Part's properties. None if the id is missing or isn't a Part.
     pub fn part(&self, id: InstanceId) -> Option<&PartProps> {
         match self.instances.get(&id).map(|i| &i.props) {
@@ -165,9 +231,26 @@ impl DataModel {
         }
     }
 
-    /// Creates an instance under `parent`. Returns None if the parent doesn't exist.
+    /// Read a Script's properties. None if the id is missing or isn't a Script.
+    pub fn script(&self, id: InstanceId) -> Option<&ScriptProps> {
+        match self.instances.get(&id).map(|i| &i.props) {
+            Some(Props::Script(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn script_mut(&mut self, id: InstanceId) -> Option<&mut ScriptProps> {
+        match self.instances.get_mut(&id).map(|i| &mut i.props) {
+            Some(Props::Script(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Creates an instance under `parent`. Returns None if the parent doesn't
+    /// exist or can't hold children.
     pub fn create(&mut self, class: Class, name: &str, parent: InstanceId) -> Option<InstanceId> {
-        if !self.instances.contains_key(&parent) {
+        let parent_class = self.instances.get(&parent)?.class;
+        if !parent_class.can_hold_children() {
             return None;
         }
         let id = InstanceId(self.next_id);
@@ -176,6 +259,7 @@ impl DataModel {
             Class::Workspace => Props::Workspace,
             Class::Folder => Props::Folder,
             Class::Part => Props::Part(PartProps::default()),
+            Class::Script => Props::Script(ScriptProps::default()),
         };
         self.instances.insert(
             id,
@@ -192,6 +276,41 @@ impl DataModel {
             p.children.push(id);
         }
         Some(id)
+    }
+
+    /// Copies an instance and everything inside it, placing the copy next to
+    /// the original. Returns the copy's id.
+    pub fn clone_subtree(&mut self, id: InstanceId) -> Option<InstanceId> {
+        if id == self.root {
+            return None;
+        }
+        let parent = self.instances.get(&id)?.parent?;
+        let copy = self.copy_into(id, parent)?;
+        Some(copy)
+    }
+
+    fn copy_into(&mut self, source: InstanceId, parent: InstanceId) -> Option<InstanceId> {
+        let original = self.instances.get(&source)?.clone();
+        let new_id = InstanceId(self.next_id);
+        self.next_id += 1;
+        self.instances.insert(
+            new_id,
+            Instance {
+                id: new_id,
+                class: original.class,
+                name: original.name.clone(),
+                parent: Some(parent),
+                children: Vec::new(),
+                props: original.props.clone(),
+            },
+        );
+        if let Some(p) = self.instances.get_mut(&parent) {
+            p.children.push(new_id);
+        }
+        for child in original.children {
+            self.copy_into(child, new_id);
+        }
+        Some(new_id)
     }
 
     /// Removes an instance and all its descendants.
@@ -232,13 +351,18 @@ impl DataModel {
     }
 
     /// Moves `id` under `new_parent`. Returns false if either doesn't exist,
-    /// `id` is the root, or the move would create a cycle.
+    /// `id` is the root, the new parent can't hold children, or the move
+    /// would create a cycle.
     pub fn reparent(&mut self, id: InstanceId, new_parent: InstanceId) -> bool {
         if id == self.root || id == new_parent {
             return false;
         }
-        if !self.instances.contains_key(&id) || !self.instances.contains_key(&new_parent) {
+        if !self.instances.contains_key(&id) {
             return false;
+        }
+        match self.instances.get(&new_parent) {
+            Some(p) if p.class.can_hold_children() => {}
+            _ => return false,
         }
         if self.is_descendant_of(new_parent, id) {
             return false;
@@ -432,5 +556,68 @@ mod tests {
         assert_ne!(a, b);
         assert!(loaded.get(a).is_some());
         assert!(loaded.get(b).is_some());
+    }
+
+    #[test]
+    fn scripts_hold_source_and_round_trip() {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let part = dm.create(Class::Part, "Coin", root).unwrap();
+        let script = dm.create(Class::Script, "Spin", part).unwrap();
+        dm.script_mut(script).unwrap().source = "print(1)".to_string();
+
+        let loaded = DataModel::from_json(&dm.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.script(script).unwrap().source, "print(1)");
+        assert!(loaded.script(script).unwrap().enabled);
+        assert!(loaded.part(script).is_none());
+    }
+
+    #[test]
+    fn scripts_cannot_hold_children() {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let script = dm.create(Class::Script, "S", root).unwrap();
+        let folder = dm.create(Class::Folder, "F", root).unwrap();
+        assert!(dm.create(Class::Part, "Inside", script).is_none());
+        assert!(!dm.reparent(folder, script));
+    }
+
+    #[test]
+    fn old_saves_without_enabled_still_load() {
+        let json = r#"{"instances":[
+            {"id":0,"class":"Workspace","name":"Workspace","parent":null,"children":[1],"props":"Workspace"},
+            {"id":1,"class":"Script","name":"S","parent":0,"children":[],"props":{"Script":{"source":"x = 1"}}}
+        ],"next_id":2,"root":0}"#;
+        let dm = DataModel::from_json(json).unwrap();
+        assert!(dm.script(InstanceId(1)).unwrap().enabled);
+    }
+
+    #[test]
+    fn clone_subtree_copies_children_with_new_ids() {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let part = dm.create(Class::Part, "Coin", root).unwrap();
+        let script = dm.create(Class::Script, "Spin", part).unwrap();
+        dm.part_mut(part).unwrap().position = Vec3::new(1.0, 2.0, 3.0);
+
+        let copy = dm.clone_subtree(part).unwrap();
+        assert_ne!(copy, part);
+        assert_eq!(dm.get(copy).unwrap().parent, Some(root));
+        assert_eq!(dm.part(copy).unwrap().position, Vec3::new(1.0, 2.0, 3.0));
+        let copied_children = &dm.get(copy).unwrap().children;
+        assert_eq!(copied_children.len(), 1);
+        assert_ne!(copied_children[0], script);
+        assert!(dm.script(copied_children[0]).is_some());
+    }
+
+    #[test]
+    fn find_first_searches_in_tree_order() {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let folder = dm.create(Class::Folder, "F", root).unwrap();
+        let deep = dm.create(Class::Part, "Target", folder).unwrap();
+        let _later = dm.create(Class::Part, "Target", root).unwrap();
+        assert_eq!(dm.find_first("Target"), Some(deep));
+        assert_eq!(dm.find_first("Nope"), None);
     }
 }

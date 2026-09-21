@@ -53,8 +53,29 @@ name that was never assigned is an error, which catches typos.
 print, len, str, num, type, push, pop, insert, remove, keys, wait,
 floor, round, abs, min, max, sqrt, random
 
-## Not yet
+## Inside Brixo
 
-wait() currently pauses the whole script; inside Brixo it will pause
-only that script. `on` and `every` blocks are recorded but only run
-once the script is inside Brixo.
+A script sits inside a part. `self` is that part.
+
+    self.name = "Coin"
+    self.position.y += 1            -- live: this really moves the part
+    self.size = {x = 4}             -- missing axes stay the same
+    self.color = {r = 255, g = 200, b = 0}
+    print(self.position)            -- (0, 1, 0)
+
+    other = find("Door")            -- first thing with that name, or nil
+    copy = clone(other)             -- copies it (and its scripts)
+    destroy(copy)
+    print(time())                   -- seconds since Play
+
+    wait(2)                         -- pauses only this script
+
+    on touched(other)               -- another part started overlapping
+        print(other.name)
+    end
+
+    every 1 seconds                 -- won't overlap its own last run
+        self.rotation.y += 15
+    end
+
+Parts have name, position, size, rotation, color, parent and children.

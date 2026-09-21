@@ -1,0 +1,447 @@
+//! Runs a game: every script, its waits, its timers and its events.
+//!
+//! Each script task (a script's main body, or one run of an event handler)
+//! gets its own thread, but only one task ever runs at a time. The game
+//! resumes a task and blocks until that task calls wait() or finishes. That
+//! gives scripts true pausing anywhere, even deep inside loops and
+//! functions, without anything actually running in parallel.
+//!
+//! Stopping the game drops the channels, so every paused wait() returns an
+//! error and its thread unwinds on its own.
+
+use std::collections::HashSet;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
+
+use brixo_core::{Class, DataModel, InstanceId};
+use rovik::ast::Stmt;
+use rovik::{Interpreter, RovikError, Trigger, Value};
+
+use crate::host::{object, WorldHost};
+use crate::touch::overlapping_pairs;
+
+/// Statements a script may run between waits before it's stopped.
+/// Lower than the command line's limit so a runaway loop can't freeze a
+/// frame for long.
+pub const GAME_STEP_LIMIT: u64 = 1_000_000;
+/// Stack for each task thread. Reserved address space, not memory used.
+const TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
+/// The error a paused wait() gets when the game stops. Never shown.
+const STOPPED: &str = "the game was stopped";
+
+/// Events scripts can use with `on`.
+pub const EVENTS: &[&str] = &["touched"];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogLine {
+    /// Which script, like "Coin/Spin".
+    pub source: String,
+    pub text: String,
+    pub is_error: bool,
+}
+
+enum TaskMsg {
+    Wait(f64),
+    Done(Result<(), RovikError>),
+}
+
+enum Job {
+    Run(Arc<Vec<Stmt>>),
+    Call(Value, Vec<Value>),
+}
+
+struct Task {
+    id: u64,
+    script: usize,
+    wake_at: f64,
+    resume: Sender<()>,
+    messages: Receiver<TaskMsg>,
+}
+
+struct Timer {
+    function: Value,
+    interval: f64,
+    next: f64,
+    /// The task from this timer's last run, if it's still going. A timer
+    /// won't start again until its previous run has finished.
+    running: Option<u64>,
+}
+
+struct ScriptInfo {
+    id: InstanceId,
+    label: String,
+    /// The part (or other instance) the script sits inside.
+    parent: Option<InstanceId>,
+    /// Never runs itself; each task runs on a fork of it, so they all share
+    /// the script's variables.
+    base: Interpreter,
+    handlers_seen: usize,
+    touch_handlers: Vec<Value>,
+    timers: Vec<Timer>,
+}
+
+pub struct Game {
+    world: Arc<Mutex<DataModel>>,
+    clock: Arc<Mutex<f64>>,
+    log: Arc<Mutex<Vec<LogLine>>>,
+    scripts: Vec<ScriptInfo>,
+    known_scripts: HashSet<InstanceId>,
+    tasks: Vec<Task>,
+    next_task: u64,
+    touching: HashSet<(InstanceId, InstanceId)>,
+    time: f64,
+}
+
+impl Game {
+    /// Starts a game on a copy of the scene. Every enabled script runs its
+    /// body until it first waits or finishes.
+    pub fn start(model: DataModel) -> Game {
+        let touching = overlapping_pairs(&model);
+        let mut game = Game {
+            world: Arc::new(Mutex::new(model)),
+            clock: Arc::new(Mutex::new(0.0)),
+            log: Arc::new(Mutex::new(Vec::new())),
+            scripts: Vec::new(),
+            known_scripts: HashSet::new(),
+            tasks: Vec::new(),
+            next_task: 0,
+            // Things already touching when Play starts don't count as touches.
+            touching,
+            time: 0.0,
+        };
+        game.discover_scripts();
+        game
+    }
+
+    /// Advances the game by `dt` seconds.
+    pub fn step(&mut self, dt: f64) {
+        self.time += dt.max(0.0);
+        *self.clock.lock().unwrap() = self.time;
+
+        self.resume_due_tasks();
+        self.stop_removed_scripts();
+        self.discover_scripts();
+        self.run_timers();
+        self.detect_touches();
+    }
+
+    /// The live world, for drawing. Don't hold this across step().
+    pub fn world(&self) -> MutexGuard<'_, DataModel> {
+        self.world.lock().unwrap()
+    }
+
+    /// Output since the last call.
+    pub fn take_log(&self) -> Vec<LogLine> {
+        std::mem::take(&mut *self.log.lock().unwrap())
+    }
+
+    pub fn time(&self) -> f64 {
+        self.time
+    }
+
+    /// How many tasks are paused in wait() right now.
+    pub fn waiting_tasks(&self) -> usize {
+        self.tasks.len()
+    }
+
+    // --- scripts ---
+
+    /// Starts any enabled script not seen yet (at the start of the game, or
+    /// one a script created with clone()).
+    fn discover_scripts(&mut self) {
+        let found: Vec<(InstanceId, String, Option<InstanceId>, String)> = {
+            let world = self.world.lock().unwrap();
+            world
+                .walk()
+                .into_iter()
+                .filter(|id| !self.known_scripts.contains(id))
+                .filter_map(|id| {
+                    let inst = world.get(id)?;
+                    let script = world.script(id)?;
+                    if !script.enabled {
+                        return None;
+                    }
+                    let label = match inst.parent.and_then(|p| world.get(p)) {
+                        Some(parent) if parent.class != Class::Workspace => {
+                            format!("{}/{}", parent.name, inst.name)
+                        }
+                        _ => inst.name.clone(),
+                    };
+                    Some((id, label, inst.parent, script.source.clone()))
+                })
+                .collect()
+        };
+
+        for (id, label, parent, source) in found {
+            self.known_scripts.insert(id);
+            self.start_script(id, label, parent, &source);
+        }
+    }
+
+    fn start_script(&mut self, id: InstanceId, label: String, parent: Option<InstanceId>, source: &str) {
+        let program = match rovik::lexer::lex(source).and_then(rovik::parser::parse) {
+            Ok(program) => program,
+            Err(e) => {
+                self.push_log(&label, e.to_string(), true);
+                return;
+            }
+        };
+
+        let mut base = Interpreter::new();
+        base.step_limit = GAME_STEP_LIMIT;
+        base.host = Some(Arc::new(WorldHost {
+            world: self.world.clone(),
+            clock: self.clock.clone(),
+        }));
+        let log = self.log.clone();
+        let source_label = label.clone();
+        base.on_print = Some(Arc::new(move |text: &str| {
+            log.lock().unwrap().push(LogLine {
+                source: source_label.clone(),
+                text: text.to_string(),
+                is_error: false,
+            });
+        }));
+        if let Some(p) = parent {
+            base.define_global("self", object(p));
+        }
+
+        self.scripts.push(ScriptInfo {
+            id,
+            label,
+            parent,
+            base,
+            handlers_seen: 0,
+            touch_handlers: Vec::new(),
+            timers: Vec::new(),
+        });
+        let index = self.scripts.len() - 1;
+        self.spawn(index, Job::Run(Arc::new(program)));
+    }
+
+    /// If a script is destroyed, its paused tasks stop too.
+    fn stop_removed_scripts(&mut self) {
+        let alive: Vec<bool> = {
+            let world = self.world.lock().unwrap();
+            self.scripts.iter().map(|s| world.get(s.id).is_some()).collect()
+        };
+        // Dropping a task drops its channel, which ends its wait() with an error.
+        self.tasks.retain(|t| alive[t.script]);
+        for (script, is_alive) in self.scripts.iter_mut().zip(&alive) {
+            if !is_alive {
+                script.touch_handlers.clear();
+                script.timers.clear();
+            }
+        }
+    }
+
+    /// Picks up `on` and `every` blocks a script has registered.
+    fn collect_handlers(&mut self, index: usize) {
+        let handlers = self.scripts[index].base.handlers();
+        let seen = self.scripts[index].handlers_seen;
+        let label = self.scripts[index].label.clone();
+        for handler in &handlers[seen..] {
+            match &handler.trigger {
+                Trigger::Event(name) if name == "touched" => {
+                    self.scripts[index].touch_handlers.push(handler.function.clone());
+                }
+                Trigger::Event(name) => {
+                    self.push_log(
+                        &label,
+                        format!(
+                            "'on {name}' isn't an event Brixo has yet. Events you can use: {}",
+                            EVENTS.join(", ")
+                        ),
+                        true,
+                    );
+                }
+                Trigger::Every(seconds) => {
+                    self.scripts[index].timers.push(Timer {
+                        function: handler.function.clone(),
+                        interval: *seconds,
+                        next: self.time + seconds,
+                        running: None,
+                    });
+                }
+            }
+        }
+        self.scripts[index].handlers_seen = handlers.len();
+    }
+
+    // --- tasks ---
+
+    /// Starts a task and runs it until it first waits or finishes.
+    fn spawn(&mut self, script: usize, job: Job) -> Option<u64> {
+        let (resume_tx, resume_rx) = mpsc::channel::<()>();
+        let (msg_tx, msg_rx) = mpsc::channel::<TaskMsg>();
+
+        let mut interp = self.scripts[script].base.fork();
+        let wait_tx = msg_tx.clone();
+        let resume_rx = Mutex::new(resume_rx);
+        interp.on_wait = Some(Arc::new(move |seconds: f64| {
+            // Tell the game we're pausing, then sleep until it resumes us.
+            wait_tx
+                .send(TaskMsg::Wait(seconds))
+                .map_err(|_| STOPPED.to_string())?;
+            resume_rx
+                .lock()
+                .unwrap()
+                .recv()
+                .map_err(|_| STOPPED.to_string())
+        }));
+
+        let spawned = thread::Builder::new()
+            .name(format!("script {}", self.scripts[script].label))
+            .stack_size(TASK_STACK_SIZE)
+            .spawn(move || {
+                let result = match job {
+                    Job::Run(program) => interp.run(&program),
+                    Job::Call(function, args) => interp.call(function, args, 0).map(|_| ()),
+                };
+                let _ = msg_tx.send(TaskMsg::Done(result));
+            });
+
+        if let Err(e) = spawned {
+            let label = self.scripts[script].label.clone();
+            self.push_log(&label, format!("couldn't start: {e}"), true);
+            return None;
+        }
+
+        let id = self.next_task;
+        self.next_task += 1;
+        self.settle(Task {
+            id,
+            script,
+            wake_at: 0.0,
+            resume: resume_tx,
+            messages: msg_rx,
+        });
+        Some(id)
+    }
+
+    /// Blocks until the task pauses or finishes, then files it accordingly.
+    fn settle(&mut self, mut task: Task) {
+        let script = task.script;
+        match task.messages.recv() {
+            Ok(TaskMsg::Wait(seconds)) => {
+                task.wake_at = self.time + seconds.max(0.0);
+                self.tasks.push(task);
+            }
+            Ok(TaskMsg::Done(Ok(()))) => {}
+            Ok(TaskMsg::Done(Err(e))) => {
+                if e.message != STOPPED {
+                    let label = self.scripts[script].label.clone();
+                    self.push_log(&label, e.to_string(), true);
+                }
+            }
+            Err(_) => {
+                let label = self.scripts[script].label.clone();
+                self.push_log(&label, "the script crashed".to_string(), true);
+            }
+        }
+        self.collect_handlers(script);
+    }
+
+    /// Wakes every task whose wait is over. Each task runs at most once per
+    /// step, so wait(0) in a loop can't spin forever inside one frame.
+    fn resume_due_tasks(&mut self) {
+        let time = self.time;
+        let (mut due, waiting): (Vec<Task>, Vec<Task>) =
+            std::mem::take(&mut self.tasks).into_iter().partition(|t| t.wake_at <= time);
+        self.tasks = waiting;
+        due.sort_by(|a, b| a.wake_at.total_cmp(&b.wake_at).then(a.id.cmp(&b.id)));
+
+        for task in due {
+            if task.resume.send(()).is_ok() {
+                self.settle(task);
+            }
+        }
+    }
+
+    fn task_running(&self, id: u64) -> bool {
+        self.tasks.iter().any(|t| t.id == id)
+    }
+
+    // --- timers and events ---
+
+    fn run_timers(&mut self) {
+        let mut to_fire: Vec<(usize, usize, Value)> = Vec::new();
+        for (s, script) in self.scripts.iter_mut().enumerate() {
+            for (t, timer) in script.timers.iter_mut().enumerate() {
+                if self.time < timer.next {
+                    continue;
+                }
+                timer.next += timer.interval;
+                if timer.next <= self.time {
+                    // Fell far behind (a long frame): don't fire a burst.
+                    timer.next = self.time + timer.interval;
+                }
+                to_fire.push((s, t, timer.function.clone()));
+            }
+        }
+
+        for (s, t, function) in to_fire {
+            let busy = self.scripts[s].timers[t]
+                .running
+                .map(|id| self.task_running(id))
+                .unwrap_or(false);
+            if busy {
+                continue;
+            }
+            let task = self.spawn(s, Job::Call(function, Vec::new()));
+            let still_going = task.filter(|id| self.task_running(*id));
+            if let Some(timer) = self.scripts[s].timers.get_mut(t) {
+                timer.running = still_going;
+            }
+        }
+    }
+
+    fn detect_touches(&mut self) {
+        let current = overlapping_pairs(&self.world.lock().unwrap());
+        let started: Vec<(InstanceId, InstanceId)> =
+            current.difference(&self.touching).copied().collect();
+        self.touching = current;
+
+        for (a, b) in started {
+            self.fire_touched(a, b);
+            self.fire_touched(b, a);
+        }
+    }
+
+    /// Runs `on touched` for every script inside `part`, passing `other`.
+    fn fire_touched(&mut self, part: InstanceId, other: InstanceId) {
+        let mut calls = Vec::new();
+        for (s, script) in self.scripts.iter().enumerate() {
+            if script.parent != Some(part) {
+                continue;
+            }
+            for handler in &script.touch_handlers {
+                calls.push((s, handler.clone()));
+            }
+        }
+        for (s, handler) in calls {
+            // Pass the other part only if the handler asked for it:
+            // `on touched()` and `on touched(other)` both work.
+            let wanted = handler.param_count().unwrap_or(1);
+            let args = if wanted >= 1 { vec![object(other)] } else { Vec::new() };
+            self.spawn(s, Job::Call(handler, args));
+        }
+    }
+
+    fn push_log(&self, source: &str, text: String, is_error: bool) {
+        self.log.lock().unwrap().push(LogLine {
+            source: source.to_string(),
+            text,
+            is_error,
+        });
+    }
+}
+
+impl Drop for Game {
+    fn drop(&mut self) {
+        // Dropping the channels makes every paused wait() fail, so each
+        // task thread unwinds and exits on its own.
+        self.tasks.clear();
+    }
+}

@@ -1,15 +1,15 @@
 //! Walks the syntax tree and runs it.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::ast::*;
 use crate::error::{Result, RovikError};
-use crate::value::{format_number, values_equal, Builtin, Closure, Env, Value};
+use crate::value::{format_number, show, values_equal, Builtin, Closure, Env, Host, ObjectRef, Value};
 
-/// How many statements a script may run before it has to pause with
-/// wait(). Stops a `while true do` from freezing everything.
+/// Default number of statements a script may run before it has to pause
+/// with wait(). Stops a `while true do` from freezing everything.
 pub const STEP_LIMIT: u64 = 10_000_000;
 /// How deep function calls may nest.
 pub const CALL_DEPTH_LIMIT: usize = 200;
@@ -22,6 +22,7 @@ enum Flow {
     Continue,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub enum Trigger {
     /// `on touched(player)`
     Event(String),
@@ -31,18 +32,30 @@ pub enum Trigger {
 
 /// An `on` or `every` block the script registered. In milestone 1 these are
 /// recorded but not run; the engine will run them once Rovik is inside Brixo.
+#[derive(Clone)]
 pub struct Handler {
     pub trigger: Trigger,
     pub function: Value,
 }
 
+/// Called by print(). Lets a game send output to its own log.
+pub type PrintHook = Arc<dyn Fn(&str) + Send + Sync>;
+/// Called by wait(). Lets a game pause just this task; returning an error
+/// stops the script (the game uses that when it's stopped).
+pub type WaitHook = Arc<dyn Fn(f64) -> std::result::Result<(), String> + Send + Sync>;
+
 pub struct Interpreter {
-    globals: Rc<Env>,
-    pub handlers: Vec<Handler>,
-    /// Everything print() produced.
+    globals: Arc<Env>,
+    handlers: Arc<Mutex<Vec<Handler>>>,
+    /// Everything print() produced, when no print hook is set.
     pub output: Vec<String>,
     /// Also write print() output to the terminal as it happens.
     pub echo: bool,
+    /// Statements allowed between waits.
+    pub step_limit: u64,
+    pub host: Option<Arc<dyn Host>>,
+    pub on_print: Option<PrintHook>,
+    pub on_wait: Option<WaitHook>,
     steps: u64,
     depth: usize,
     rng: u64,
@@ -62,13 +75,51 @@ impl Interpreter {
             .unwrap_or(0x2545_F491_4F6C_DD1D);
         Self {
             globals: Env::new_global(),
-            handlers: Vec::new(),
+            handlers: Arc::new(Mutex::new(Vec::new())),
             output: Vec::new(),
             echo: false,
+            step_limit: STEP_LIMIT,
+            host: None,
+            on_print: None,
+            on_wait: None,
             steps: 0,
             depth: 0,
             rng: seed | 1,
         }
+    }
+
+    /// A second interpreter for the same script: it shares the script's
+    /// variables, handlers and host, but keeps its own call depth and step
+    /// count. A game runs each task (the script body, each event) on a fork.
+    pub fn fork(&self) -> Interpreter {
+        Interpreter {
+            globals: self.globals.clone(),
+            handlers: self.handlers.clone(),
+            output: Vec::new(),
+            echo: self.echo,
+            step_limit: self.step_limit,
+            host: self.host.clone(),
+            on_print: self.on_print.clone(),
+            on_wait: None,
+            steps: 0,
+            depth: 0,
+            rng: self.rng.rotate_left(17) ^ 0x9E37_79B9_7F4A_7C15,
+        }
+    }
+
+    /// Set a script-level variable before the script runs (like `self`).
+    pub fn define_global(&self, name: &str, value: Value) {
+        self.globals.define(name, value);
+    }
+
+    /// The `on` and `every` blocks registered so far.
+    pub fn handlers(&self) -> Vec<Handler> {
+        self.handlers.lock().unwrap().clone()
+    }
+
+    /// Formats a value the way print() does.
+    pub fn display(&self, value: &Value) -> String {
+        show(value, self.host.as_deref(), false, 0)
     }
 
     /// Lex, parse and run a whole script.
@@ -79,6 +130,7 @@ impl Interpreter {
     }
 
     pub fn run(&mut self, program: &[Stmt]) -> Result<()> {
+        self.steps = 0;
         let env = self.globals.clone();
         // `return` at the top level just ends the script.
         self.exec_block(program, &env)?;
@@ -92,7 +144,7 @@ impl Interpreter {
 
     // --- statements ---
 
-    fn exec_block(&mut self, stmts: &[Stmt], env: &Rc<Env>) -> Result<Flow> {
+    fn exec_block(&mut self, stmts: &[Stmt], env: &Arc<Env>) -> Result<Flow> {
         for stmt in stmts {
             match self.exec(stmt, env)? {
                 Flow::Normal => {}
@@ -104,7 +156,7 @@ impl Interpreter {
 
     fn tick(&mut self, line: usize) -> Result<()> {
         self.steps += 1;
-        if self.steps > STEP_LIMIT {
+        if self.steps > self.step_limit {
             return Err(RovikError::new(
                 line,
                 "this script ran for too long without pausing. Is there a loop that never ends? Add wait() inside long loops",
@@ -113,7 +165,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn exec(&mut self, stmt: &Stmt, env: &Rc<Env>) -> Result<Flow> {
+    fn exec(&mut self, stmt: &Stmt, env: &Arc<Env>) -> Result<Flow> {
         self.tick(stmt.line)?;
         match &stmt.kind {
             StmtKind::Expr(expr) => {
@@ -153,8 +205,8 @@ impl Interpreter {
             StmtKind::ForIn(var, iterable, body) => {
                 let items = match self.eval(iterable, env)? {
                     // Loop over a copy, so changing the list inside the loop is safe.
-                    Value::List(list) => list.borrow().clone(),
-                    Value::Map(map) => map.borrow().keys().map(|k| Value::str(k.as_str())).collect(),
+                    Value::List(list) => list.read().unwrap().clone(),
+                    Value::Map(map) => map.read().unwrap().keys().map(|k| Value::str(k.as_str())).collect(),
                     Value::Str(s) => s.chars().map(|c| Value::str(c.to_string())).collect(),
                     other => {
                         return Err(RovikError::new(
@@ -195,7 +247,7 @@ impl Interpreter {
 
             StmtKind::Fn(def) => {
                 let name = def.name.clone().unwrap_or_default();
-                let closure = Value::Func(Rc::new(Closure {
+                let closure = Value::Func(Arc::new(Closure {
                     def: def.clone(),
                     env: env.clone(),
                 }));
@@ -203,9 +255,9 @@ impl Interpreter {
             }
 
             StmtKind::On { event, handler } => {
-                self.handlers.push(Handler {
+                self.handlers.lock().unwrap().push(Handler {
                     trigger: Trigger::Event(event.clone()),
-                    function: Value::Func(Rc::new(Closure {
+                    function: Value::Func(Arc::new(Closure {
                         def: handler.clone(),
                         env: env.clone(),
                     })),
@@ -220,9 +272,9 @@ impl Interpreter {
                         "'every' needs a time greater than 0 seconds",
                     ));
                 }
-                self.handlers.push(Handler {
+                self.handlers.lock().unwrap().push(Handler {
                     trigger: Trigger::Every(seconds),
-                    function: Value::Func(Rc::new(Closure {
+                    function: Value::Func(Arc::new(Closure {
                         def: handler.clone(),
                         env: env.clone(),
                     })),
@@ -243,7 +295,7 @@ impl Interpreter {
         Ok(Flow::Normal)
     }
 
-    fn assign(&mut self, target: &Expr, value: Value, env: &Rc<Env>) -> Result<()> {
+    fn assign(&mut self, target: &Expr, value: Value, env: &Arc<Env>) -> Result<()> {
         match &target.kind {
             ExprKind::Var(name) => {
                 env.assign(name, value);
@@ -255,14 +307,14 @@ impl Interpreter {
                 let index = self.eval(index, env)?;
                 match obj {
                     Value::List(list) => {
-                        let len = list.borrow().len();
+                        let len = list.read().unwrap().len();
                         let i = list_index(&index, len, target.line)?;
-                        list.borrow_mut()[i] = value;
+                        list.write().unwrap()[i] = value;
                         Ok(())
                     }
                     Value::Map(map) => {
                         let key = map_key(&index, target.line)?;
-                        map.borrow_mut().insert(key, value);
+                        map.write().unwrap().insert(key, value);
                         Ok(())
                     }
                     other => Err(RovikError::new(
@@ -274,8 +326,13 @@ impl Interpreter {
 
             ExprKind::Field(obj, name) => match self.eval(obj, env)? {
                 Value::Map(map) => {
-                    map.borrow_mut().insert(name.clone(), value);
+                    map.write().unwrap().insert(name.clone(), value);
                     Ok(())
+                }
+                Value::Object(o) => {
+                    let host = self.require_host(target.line)?;
+                    host.set_field(o, name, value)
+                        .map_err(|m| RovikError::new(target.line, m))
                 }
                 other => Err(RovikError::new(
                     target.line,
@@ -289,7 +346,7 @@ impl Interpreter {
 
     // --- expressions ---
 
-    fn eval(&mut self, expr: &Expr, env: &Rc<Env>) -> Result<Value> {
+    fn eval(&mut self, expr: &Expr, env: &Arc<Env>) -> Result<Value> {
         let line = expr.line;
         match &expr.kind {
             ExprKind::Number(n) => Ok(Value::Num(*n)),
@@ -348,7 +405,7 @@ impl Interpreter {
             ExprKind::Binary(op, a, b) => {
                 let left = self.eval(a, env)?;
                 let right = self.eval(b, env)?;
-                binary(*op, left, right, line)
+                self.binary(*op, left, right, line)
             }
 
             ExprKind::Call(callee, args) => {
@@ -365,13 +422,13 @@ impl Interpreter {
                 let index = self.eval(index, env)?;
                 match obj {
                     Value::List(list) => {
-                        let list = list.borrow();
+                        let list = list.read().unwrap();
                         let i = list_index(&index, list.len(), line)?;
                         Ok(list[i].clone())
                     }
                     Value::Map(map) => {
                         let key = map_key(&index, line)?;
-                        Ok(map.borrow().get(&key).cloned().unwrap_or(Value::Nil))
+                        Ok(map.read().unwrap().get(&key).cloned().unwrap_or(Value::Nil))
                     }
                     Value::Str(s) => {
                         let chars: Vec<char> = s.chars().collect();
@@ -386,8 +443,9 @@ impl Interpreter {
             }
 
             ExprKind::Field(obj, name) => match self.eval(obj, env)? {
+                Value::Object(o) => self.host_get(o, name, line),
                 // A missing field is nil, so `if player.shield then` works.
-                Value::Map(map) => Ok(map.borrow().get(name).cloned().unwrap_or(Value::Nil)),
+                Value::Map(map) => Ok(map.read().unwrap().get(name).cloned().unwrap_or(Value::Nil)),
                 Value::Nil => Err(RovikError::new(
                     line,
                     format!("can't read '{name}' from nil. The value before the '.' doesn't exist"),
@@ -398,24 +456,32 @@ impl Interpreter {
                 )),
             },
 
-            ExprKind::Lambda(def) => Ok(Value::Func(Rc::new(Closure {
+            ExprKind::Lambda(def) => Ok(Value::Func(Arc::new(Closure {
                 def: def.clone(),
                 env: env.clone(),
             }))),
         }
     }
 
-    fn lookup(&self, name: &str, env: &Rc<Env>, line: usize) -> Result<Value> {
+    fn lookup(&self, name: &str, env: &Arc<Env>, line: usize) -> Result<Value> {
         if let Some(v) = env.get(name) {
             return Ok(v);
         }
         if let Some(b) = Builtin::lookup(name) {
             return Ok(Value::Builtin(b));
         }
+        if let Some(host) = &self.host {
+            if host.function_names().contains(&name) {
+                return Ok(Value::HostFn(name.into()));
+            }
+        }
 
         // Reading a name that was never given a value is almost always a typo.
         let mut candidates = env.visible_names();
         candidates.extend(Builtin::ALL.iter().map(|(n, _)| n.to_string()));
+        if let Some(host) = &self.host {
+            candidates.extend(host.function_names().iter().map(|n| n.to_string()));
+        }
         let suggestion = candidates
             .iter()
             .filter(|c| c.as_str() != name)
@@ -431,7 +497,7 @@ impl Interpreter {
         ))
     }
 
-    fn expect_number(&mut self, expr: &Expr, env: &Rc<Env>, what: &str) -> Result<f64> {
+    fn expect_number(&mut self, expr: &Expr, env: &Arc<Env>, what: &str) -> Result<f64> {
         match self.eval(expr, env)? {
             Value::Num(n) => Ok(n),
             other => Err(RovikError::new(
@@ -480,6 +546,10 @@ impl Interpreter {
                 }
             }
             Value::Builtin(b) => self.call_builtin(b, args, line),
+            Value::HostFn(name) => {
+                let host = self.require_host(line)?;
+                host.call(&name, &args).map_err(|m| RovikError::new(line, m))
+            }
             other => Err(RovikError::new(
                 line,
                 format!("a {} can't be called like a function", other.type_name()),
@@ -511,12 +581,17 @@ impl Interpreter {
 
         match b {
             Builtin::Print => {
-                let text: Vec<String> = args.iter().map(|v| v.display()).collect();
+                let text: Vec<String> = args.iter().map(|v| self.display(v)).collect();
                 let text = text.join(" ");
-                if self.echo {
-                    println!("{text}");
+                match &self.on_print {
+                    Some(hook) => hook(&text),
+                    None => {
+                        if self.echo {
+                            println!("{text}");
+                        }
+                        self.output.push(text);
+                    }
                 }
-                self.output.push(text);
                 Ok(Value::Nil)
             }
 
@@ -524,8 +599,8 @@ impl Interpreter {
                 need(1)?;
                 match &args[0] {
                     Value::Str(s) => Ok(Value::Num(s.chars().count() as f64)),
-                    Value::List(l) => Ok(Value::Num(l.borrow().len() as f64)),
-                    Value::Map(m) => Ok(Value::Num(m.borrow().len() as f64)),
+                    Value::List(l) => Ok(Value::Num(l.read().unwrap().len() as f64)),
+                    Value::Map(m) => Ok(Value::Num(m.read().unwrap().len() as f64)),
                     other => Err(RovikError::new(
                         line,
                         format!("len works on text, lists and maps, not a {}", other.type_name()),
@@ -535,7 +610,7 @@ impl Interpreter {
 
             Builtin::Str => {
                 need(1)?;
-                Ok(Value::str(args[0].display()))
+                Ok(Value::str(self.display(&args[0])))
             }
 
             Builtin::Num => {
@@ -549,14 +624,14 @@ impl Interpreter {
 
             Builtin::Type => {
                 need(1)?;
-                Ok(Value::str(args[0].type_name()))
+                Ok(Value::str(self.type_of(&args[0])))
             }
 
             Builtin::Push => {
                 need(2)?;
                 match &args[0] {
                     Value::List(l) => {
-                        l.borrow_mut().push(args[1].clone());
+                        l.write().unwrap().push(args[1].clone());
                         Ok(Value::Nil)
                     }
                     other => Err(RovikError::new(
@@ -569,7 +644,7 @@ impl Interpreter {
             Builtin::Pop => {
                 need(1)?;
                 match &args[0] {
-                    Value::List(l) => Ok(l.borrow_mut().pop().unwrap_or(Value::Nil)),
+                    Value::List(l) => Ok(l.write().unwrap().pop().unwrap_or(Value::Nil)),
                     other => Err(RovikError::new(
                         line,
                         format!("pop needs a list, but got a {}", other.type_name()),
@@ -581,10 +656,10 @@ impl Interpreter {
                 need(3)?;
                 match &args[0] {
                     Value::List(l) => {
-                        let len = l.borrow().len();
+                        let len = l.read().unwrap().len();
                         // Inserting at len+1 is allowed: it adds to the end.
                         let i = list_index(&args[1], len + 1, line)?;
-                        l.borrow_mut().insert(i, args[2].clone());
+                        l.write().unwrap().insert(i, args[2].clone());
                         Ok(Value::Nil)
                     }
                     other => Err(RovikError::new(
@@ -598,13 +673,13 @@ impl Interpreter {
                 need(2)?;
                 match &args[0] {
                     Value::List(l) => {
-                        let len = l.borrow().len();
+                        let len = l.read().unwrap().len();
                         let i = list_index(&args[1], len, line)?;
-                        Ok(l.borrow_mut().remove(i))
+                        Ok(l.write().unwrap().remove(i))
                     }
                     Value::Map(m) => {
                         let key = map_key(&args[1], line)?;
-                        Ok(m.borrow_mut().remove(&key).unwrap_or(Value::Nil))
+                        Ok(m.write().unwrap().remove(&key).unwrap_or(Value::Nil))
                     }
                     other => Err(RovikError::new(
                         line,
@@ -617,7 +692,7 @@ impl Interpreter {
                 need(1)?;
                 match &args[0] {
                     Value::Map(m) => Ok(Value::list(
-                        m.borrow().keys().map(|k| Value::str(k.as_str())).collect(),
+                        m.read().unwrap().keys().map(|k| Value::str(k.as_str())).collect(),
                     )),
                     other => Err(RovikError::new(
                         line,
@@ -632,9 +707,12 @@ impl Interpreter {
                 if seconds < 0.0 {
                     return Err(RovikError::new(line, "wait can't take a negative time"));
                 }
-                // For now this pauses the whole script. Inside Brixo, wait will
-                // pause only this script while the game keeps running.
-                std::thread::sleep(Duration::from_secs_f64(seconds));
+                match &self.on_wait {
+                    // Inside a game: pause just this task.
+                    Some(hook) => hook(seconds).map_err(|m| RovikError::new(line, m))?,
+                    // On its own (the command line): pause the program.
+                    None => std::thread::sleep(Duration::from_secs_f64(seconds)),
+                }
                 self.steps = 0;
                 Ok(Value::Nil)
             }
@@ -693,6 +771,24 @@ impl Interpreter {
         }
     }
 
+    fn require_host(&self, line: usize) -> Result<Arc<dyn Host>> {
+        self.host.clone().ok_or_else(|| {
+            RovikError::new(line, "objects only work when the script runs inside Brixo")
+        })
+    }
+
+    fn host_get(&self, obj: ObjectRef, name: &str, line: usize) -> Result<Value> {
+        let host = self.require_host(line)?;
+        host.get_field(obj, name).map_err(|m| RovikError::new(line, m))
+    }
+
+    fn type_of(&self, value: &Value) -> String {
+        match (value, &self.host) {
+            (Value::Object(o), Some(host)) => host.type_name(*o),
+            _ => value.type_name().to_string(),
+        }
+    }
+
     /// xorshift64*: small and good enough for games.
     fn next_random(&mut self) -> f64 {
         let mut x = self.rng;
@@ -707,7 +803,8 @@ impl Interpreter {
 
 // --- operators ---
 
-fn binary(op: BinOp, left: Value, right: Value, line: usize) -> Result<Value> {
+impl Interpreter {
+fn binary(&self, op: BinOp, left: Value, right: Value, line: usize) -> Result<Value> {
     use Value::{Num, Str};
     match op {
         BinOp::Eq => return Ok(Value::Bool(values_equal(&left, &right))),
@@ -719,11 +816,12 @@ fn binary(op: BinOp, left: Value, right: Value, line: usize) -> Result<Value> {
         (BinOp::Add, Num(a), Num(b)) => Ok(Num(a + b)),
         // If either side is text, + joins them as text.
         (BinOp::Add, Str(_), _) | (BinOp::Add, _, Str(_)) => {
-            Ok(Value::str(format!("{}{}", left.display(), right.display())))
+            Ok(Value::str(format!("{}{}", self.display(&left), self.display(&right))))
         }
         (BinOp::Add, Value::List(a), Value::List(b)) => {
-            let mut items = a.borrow().clone();
-            items.extend(b.borrow().iter().cloned());
+            let mut items = a.read().unwrap().clone();
+            let more = b.read().unwrap().clone();
+            items.extend(more);
             Ok(Value::list(items))
         }
         (BinOp::Sub, Num(a), Num(b)) => Ok(Num(a - b)),
@@ -757,8 +855,8 @@ fn binary(op: BinOp, left: Value, right: Value, line: usize) -> Result<Value> {
             };
             let mut message = format!(
                 "can't use {symbol} with a {} and a {}",
-                left.type_name(),
-                right.type_name()
+                self.type_of(&left),
+                self.type_of(&right)
             );
             if matches!(left, Value::Nil) || matches!(right, Value::Nil) {
                 message.push_str(". One side is nil, so something may not have been set");
@@ -766,6 +864,7 @@ fn binary(op: BinOp, left: Value, right: Value, line: usize) -> Result<Value> {
             Err(RovikError::new(line, message))
         }
     }
+}
 }
 
 /// Turns a 1-based Rovik index into a 0-based position, with a clear error.

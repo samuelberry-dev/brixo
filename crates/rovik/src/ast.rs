@@ -1,6 +1,6 @@
 //! The syntax tree the parser builds and the interpreter walks.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -25,7 +25,7 @@ pub enum ExprKind {
     Index(Box<Expr>, Box<Expr>),
     Field(Box<Expr>, String),
     /// `fn (a, b) ... end` used as a value.
-    Lambda(Rc<FnDef>),
+    Lambda(Arc<FnDef>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,16 +76,16 @@ pub enum StmtKind {
     While(Expr, Vec<Stmt>),
     ForIn(String, Expr, Vec<Stmt>),
     ForRange(String, Expr, Expr, Vec<Stmt>),
-    Fn(Rc<FnDef>),
+    Fn(Arc<FnDef>),
     /// `on touched(player) ... end`
     On {
         event: String,
-        handler: Rc<FnDef>,
+        handler: Arc<FnDef>,
     },
     /// `every 5 seconds ... end`
     Every {
         interval: Expr,
-        handler: Rc<FnDef>,
+        handler: Arc<FnDef>,
     },
     Return(Option<Expr>),
     Break,

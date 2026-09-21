@@ -32,13 +32,13 @@ fn run_cli() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if !interp.handlers.is_empty() {
-        let events = interp
-            .handlers
+    let handlers = interp.handlers();
+    if !handlers.is_empty() {
+        let events = handlers
             .iter()
             .filter(|h| matches!(h.trigger, Trigger::Event(_)))
             .count();
-        let timers = interp.handlers.len() - events;
+        let timers = handlers.len() - events;
         eprintln!(
             "\n(set up {events} 'on' and {timers} 'every' block(s). These run once the script is inside Brixo.)"
         );

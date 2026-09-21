@@ -196,9 +196,10 @@ fn on_and_every_register_handlers() {
     interp
         .run_source("on touched(player)\n print(player)\nend\nevery 2 seconds\n print(1)\nend")
         .unwrap();
-    assert_eq!(interp.handlers.len(), 2);
-    assert!(matches!(&interp.handlers[0].trigger, Trigger::Event(e) if e == "touched"));
-    assert!(matches!(interp.handlers[1].trigger, Trigger::Every(s) if s == 2.0));
+    let handlers = interp.handlers();
+    assert_eq!(handlers.len(), 2);
+    assert!(matches!(&handlers[0].trigger, Trigger::Event(e) if e == "touched"));
+    assert!(matches!(handlers[1].trigger, Trigger::Every(s) if s == 2.0));
     assert!(interp.output.is_empty(), "handlers shouldn't run yet");
 }
 
@@ -208,7 +209,7 @@ fn handlers_can_be_called_by_the_engine() {
     interp
         .run_source("hits = 0\non touched(who)\n hits += 1\n print(who + \" hit\")\nend")
         .unwrap();
-    let handler = interp.handlers[0].function.clone();
+    let handler = interp.handlers()[0].function.clone();
     interp.call(handler.clone(), vec![rovik::Value::str("Sam")], 0).unwrap();
     interp.call(handler, vec![rovik::Value::str("Asher")], 0).unwrap();
     assert_eq!(interp.output, ["Sam hit", "Asher hit"]);

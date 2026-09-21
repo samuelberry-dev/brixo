@@ -41,8 +41,9 @@ impl Camera {
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        let view = Mat4::look_to_rh(self.position, self.forward(), Vec3::Y);
-        let proj = Mat4::perspective_rh(
+        let view = glam::camera::rh::view::look_to_mat4(self.position, self.forward(), Vec3::Y);
+        // "directx" means depth runs 0 to 1, which is what wgpu uses.
+        let proj = glam::camera::rh::proj::directx::perspective(
             self.fov_degrees.to_radians(),
             aspect.max(0.0001),
             0.1,

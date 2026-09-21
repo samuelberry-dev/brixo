@@ -1,6 +1,6 @@
 //! Turns tokens into a syntax tree.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ast::*;
 use crate::error::{Result, RovikError};
@@ -182,7 +182,7 @@ impl Parser {
                 let body = self.function_body("on", line)?;
                 StmtKind::On {
                     event: event.clone(),
-                    handler: Rc::new(FnDef {
+                    handler: Arc::new(FnDef {
                         name: Some(format!("on {event}")),
                         params,
                         body,
@@ -207,7 +207,7 @@ impl Parser {
                 let body = self.function_body("every", line)?;
                 StmtKind::Every {
                     interval,
-                    handler: Rc::new(FnDef {
+                    handler: Arc::new(FnDef {
                         name: Some("every".to_string()),
                         params: Vec::new(),
                         body,
@@ -348,10 +348,10 @@ impl Parser {
         Ok(body)
     }
 
-    fn function_rest(&mut self, name: Option<String>, line: usize) -> Result<Rc<FnDef>> {
+    fn function_rest(&mut self, name: Option<String>, line: usize) -> Result<Arc<FnDef>> {
         let params = self.params()?;
         let body = self.function_body("fn", line)?;
-        Ok(Rc::new(FnDef {
+        Ok(Arc::new(FnDef {
             name,
             params,
             body,

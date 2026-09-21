@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
+use brixo_runtime::{Game, LogLine};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -13,6 +14,8 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 const SCENE_PATH: &str = "scene.brixo";
+/// Output lines kept in the Output panel.
+const OUTPUT_LIMIT: usize = 1000;
 
 // --- gpu + egui ------------------------------------------------------------
 
@@ -213,6 +216,9 @@ struct Studio {
     selection: Option<InstanceId>,
     status: String,
     editor: Editor,
+    /// The running game, while Play is on. It works on a copy of `model`.
+    game: Option<Game>,
+    output: Vec<LogLine>,
     keys: HashSet<KeyCode>,
     last_frame: Instant,
 }
@@ -226,6 +232,8 @@ impl Studio {
             selection: None,
             status: "Ready".to_string(),
             editor: Editor::default(),
+            game: None,
+            output: Vec::new(),
             keys: HashSet::new(),
             last_frame: Instant::now(),
         }
@@ -265,7 +273,14 @@ impl Studio {
         }
     }
 
-    fn frame(&mut self) {
+    fn frame(&mut self, dt: f32) {
+        // Advance the running game before drawing it.
+        if let Some(game) = self.game.as_mut() {
+            game.step(dt as f64);
+            self.output.extend(game.take_log());
+            trim_output(&mut self.output);
+        }
+
         let Studio {
             gpu,
             model,
@@ -273,95 +288,146 @@ impl Studio {
             selection,
             status,
             editor,
+            game,
+            output,
             ..
         } = self;
         let Some(gpu) = gpu.as_mut() else { return };
-
-        // --- build the UI (this also handles viewport mouse input) ---
-        let raw_input = gpu.egui_state.take_egui_input(&gpu.window);
-        let full_output = gpu.egui_ctx.run(raw_input, |ctx| {
-            build_ui(ctx, model, selection, status, camera, editor);
-        });
-        gpu.egui_state
-            .handle_platform_output(&gpu.window, full_output.platform_output);
-
-        let pixels_per_point = gpu.egui_ctx.pixels_per_point();
-        let paint_jobs = gpu
-            .egui_ctx
-            .tessellate(full_output.shapes, pixels_per_point);
-
-        // --- draw ---
-        let frame = match gpu.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(_) => {
-                gpu.surface.configure(&gpu.device, &gpu.config);
-                return;
-            }
-        };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("frame encoder"),
-            });
-
-        gpu.scene.render(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &view,
-            model,
-            camera,
-            *selection,
-            gpu.config.width,
-            gpu.config.height,
-        );
-
-        let screen_descriptor = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [gpu.config.width, gpu.config.height],
-            pixels_per_point,
-        };
-        for (id, delta) in &full_output.textures_delta.set {
-            gpu.egui_renderer
-                .update_texture(&gpu.device, &gpu.queue, *id, delta);
-        }
-        gpu.egui_renderer.update_buffers(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &paint_jobs,
-            &screen_descriptor,
-        );
+        let playing = game.is_some();
+        let play_time = game.as_ref().map(|g| g.time());
+        let mut toggle_play = false;
 
         {
-            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
+            // While playing, show and click the live game world, not the scene.
+            let mut world_guard = game.as_ref().map(|g| g.world());
+            let scene: &mut DataModel = match world_guard.as_mut() {
+                Some(world) => world,
+                None => model,
+            };
+
+            // --- build the UI (this also handles viewport mouse input) ---
+            let raw_input = gpu.egui_state.take_egui_input(&gpu.window);
+            let full_output = gpu.egui_ctx.run(raw_input, |ctx| {
+                toggle_play |= build_ui(
+                    ctx, scene, selection, status, camera, editor, output, playing, play_time,
+                );
             });
-            let mut pass = pass.forget_lifetime();
-            gpu.egui_renderer
-                .render(&mut pass, &paint_jobs, &screen_descriptor);
-        }
+            gpu.egui_state
+                .handle_platform_output(&gpu.window, full_output.platform_output);
 
-        gpu.queue.submit(Some(encoder.finish()));
-        frame.present();
+            let pixels_per_point = gpu.egui_ctx.pixels_per_point();
+            let paint_jobs = gpu
+                .egui_ctx
+                .tessellate(full_output.shapes, pixels_per_point);
 
-        for id in &full_output.textures_delta.free {
-            gpu.egui_renderer.free_texture(id);
+            // --- draw ---
+            let frame = match gpu.surface.get_current_texture() {
+                Ok(f) => f,
+                Err(_) => {
+                    gpu.surface.configure(&gpu.device, &gpu.config);
+                    return;
+                }
+            };
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("frame encoder"),
+                });
+
+            gpu.scene.render(
+                &gpu.device,
+                &gpu.queue,
+                &mut encoder,
+                &view,
+                scene,
+                camera,
+                *selection,
+                gpu.config.width,
+                gpu.config.height,
+            );
+
+            let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [gpu.config.width, gpu.config.height],
+                pixels_per_point,
+            };
+            for (id, delta) in &full_output.textures_delta.set {
+                gpu.egui_renderer
+                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
+            }
+            gpu.egui_renderer.update_buffers(
+                &gpu.device,
+                &gpu.queue,
+                &mut encoder,
+                &paint_jobs,
+                &screen_descriptor,
+            );
+
+            {
+                let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("egui pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                let mut pass = pass.forget_lifetime();
+                gpu.egui_renderer
+                    .render(&mut pass, &paint_jobs, &screen_descriptor);
+            }
+
+            gpu.queue.submit(Some(encoder.finish()));
+            frame.present();
+
+            for id in &full_output.textures_delta.free {
+                gpu.egui_renderer.free_texture(id);
+            }
+        } // the game world is unlocked here
+
+        if toggle_play {
+            editor.drag = None;
+            editor.prop_session = false;
+            if game.take().is_some() {
+                // Stop: the copy is thrown away, so the scene is exactly as before.
+                output.push(system_line("Stopped"));
+                *status = "Stopped".to_string();
+                if selection.and_then(|id| model.get(id)).is_none() {
+                    *selection = None;
+                }
+            } else {
+                output.push(system_line("Playing"));
+                let started = Game::start(model.clone());
+                output.extend(started.take_log());
+                trim_output(output);
+                *game = Some(started);
+                *status = "Playing".to_string();
+            }
         }
+    }
+}
+
+fn system_line(text: &str) -> LogLine {
+    LogLine {
+        source: "Brixo".to_string(),
+        text: format!("--- {text} ---"),
+        is_error: false,
+    }
+}
+
+fn trim_output(output: &mut Vec<LogLine>) {
+    if output.len() > OUTPUT_LIMIT {
+        let extra = output.len() - OUTPUT_LIMIT;
+        output.drain(..extra);
     }
 }
 
@@ -369,6 +435,7 @@ impl Studio {
 
 enum Action {
     AddPart,
+    AddScript,
     AddFolder,
     Delete,
     Save,
@@ -377,6 +444,8 @@ enum Action {
     Redo,
 }
 
+/// Returns true if Play or Stop was pressed.
+#[allow(clippy::too_many_arguments)]
 fn build_ui(
     ctx: &egui::Context,
     model: &mut DataModel,
@@ -384,8 +453,12 @@ fn build_ui(
     status: &mut String,
     camera: &mut Camera,
     editor: &mut Editor,
-) {
+    output: &mut Vec<LogLine>,
+    playing: bool,
+    play_time: Option<f64>,
+) -> bool {
     let mut action: Option<Action> = None;
+    let mut toggle_play = ctx.input(|i| i.key_pressed(egui::Key::F5));
 
     // Shortcuts, only when no text field has focus.
     if !ctx.wants_keyboard_input() {
@@ -406,7 +479,7 @@ fn build_ui(
         if k3 {
             editor.tool = Tool::Scale;
         }
-        if del {
+        if del && !playing {
             action = Some(Action::Delete);
         }
 
@@ -417,7 +490,9 @@ fn build_ui(
             let undo = i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
             (redo, undo)
         });
-        if redo {
+        if playing {
+            // Scene history is frozen while the game runs.
+        } else if redo {
             action = Some(Action::Redo);
         } else if undo {
             action = Some(Action::Undo);
@@ -426,44 +501,80 @@ fn build_ui(
 
     egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut editor.tool, Tool::Move, "Move (1)");
-            ui.selectable_value(&mut editor.tool, Tool::Rotate, "Rotate (2)");
-            ui.selectable_value(&mut editor.tool, Tool::Scale, "Scale (3)");
-            ui.checkbox(&mut editor.snap, "Snap");
-            ui.separator();
+            let (label, color) = if playing {
+                ("■ Stop (F5)", egui::Color32::from_rgb(200, 70, 70))
+            } else {
+                ("▶ Play (F5)", egui::Color32::from_rgb(60, 160, 80))
+            };
             if ui
-                .add_enabled(!editor.history.undo.is_empty(), egui::Button::new("Undo"))
+                .add(egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(color))
                 .clicked()
             {
-                action = Some(Action::Undo);
-            }
-            if ui
-                .add_enabled(!editor.history.redo.is_empty(), egui::Button::new("Redo"))
-                .clicked()
-            {
-                action = Some(Action::Redo);
+                toggle_play = true;
             }
             ui.separator();
-            if ui.button("Add Part").clicked() {
-                action = Some(Action::AddPart);
-            }
-            if ui.button("Add Folder").clicked() {
-                action = Some(Action::AddFolder);
-            }
-            if ui.button("Delete").clicked() {
-                action = Some(Action::Delete);
-            }
+
+            ui.add_enabled_ui(!playing, |ui| {
+                ui.selectable_value(&mut editor.tool, Tool::Move, "Move (1)");
+                ui.selectable_value(&mut editor.tool, Tool::Rotate, "Rotate (2)");
+                ui.selectable_value(&mut editor.tool, Tool::Scale, "Scale (3)");
+                ui.checkbox(&mut editor.snap, "Snap");
+                ui.separator();
+                if ui
+                    .add_enabled(!editor.history.undo.is_empty(), egui::Button::new("Undo"))
+                    .clicked()
+                {
+                    action = Some(Action::Undo);
+                }
+                if ui
+                    .add_enabled(!editor.history.redo.is_empty(), egui::Button::new("Redo"))
+                    .clicked()
+                {
+                    action = Some(Action::Redo);
+                }
+                ui.separator();
+                if ui.button("Add Part").clicked() {
+                    action = Some(Action::AddPart);
+                }
+                if ui.button("Add Script").clicked() {
+                    action = Some(Action::AddScript);
+                }
+                if ui.button("Add Folder").clicked() {
+                    action = Some(Action::AddFolder);
+                }
+                if ui.button("Delete").clicked() {
+                    action = Some(Action::Delete);
+                }
+                ui.separator();
+                if ui.button("Save").clicked() {
+                    action = Some(Action::Save);
+                }
+                if ui.button("Load").clicked() {
+                    action = Some(Action::Load);
+                }
+            });
             ui.separator();
-            if ui.button("Save").clicked() {
-                action = Some(Action::Save);
-            }
-            if ui.button("Load").clicked() {
-                action = Some(Action::Load);
-            }
-            ui.separator();
-            ui.label(status.as_str());
+            match play_time {
+                Some(t) => ui.label(format!("Playing  {t:.1}s")),
+                None => ui.label(status.as_str()),
+            };
         });
     });
+
+    // Bottom panels go before the side panels so they span the full width.
+    egui::TopBottomPanel::bottom("output")
+        .resizable(true)
+        .default_height(140.0)
+        .show(ctx, |ui| output_panel(ui, output));
+
+    let selected_script = selection.filter(|id| model.script(*id).is_some());
+    if let Some(script_id) = selected_script {
+        egui::TopBottomPanel::bottom("script_editor")
+            .resizable(true)
+            .default_height(280.0)
+            .min_height(160.0)
+            .show(ctx, |ui| script_panel(ui, model, script_id, editor, playing));
+    }
 
     egui::SidePanel::left("explorer")
         .default_width(220.0)
@@ -477,14 +588,16 @@ fn build_ui(
 
     egui::SidePanel::right("properties")
         .default_width(260.0)
-        .show(ctx, |ui| properties_panel(ui, model, *selection, editor));
+        .show(ctx, |ui| {
+            ui.add_enabled_ui(!playing, |ui| properties_panel(ui, model, *selection, editor));
+        });
 
     // The central panel is the 3D viewport. It's transparent, so the scene
     // drawn underneath shows through; egui just handles its input.
     egui::CentralPanel::default()
         .frame(egui::Frame::default())
         .show(ctx, |ui| {
-            viewport(ui, model, selection, status, camera, editor);
+            viewport(ui, model, selection, status, camera, editor, playing);
         });
 
     // Apply actions after the UI is built, so nothing is borrowed twice.
@@ -501,6 +614,14 @@ fn build_ui(
                 }
                 *selection = Some(id);
                 *status = "Added a Part".to_string();
+            }
+        }
+        Some(Action::AddScript) => {
+            editor.history.checkpoint(model);
+            let parent = script_parent_for(model, *selection);
+            if let Some(id) = model.create(Class::Script, "Script", parent) {
+                *selection = Some(id);
+                *status = "Added a Script. Press Play to run it".to_string();
             }
         }
         Some(Action::AddFolder) => {
@@ -552,6 +673,94 @@ fn build_ui(
             }
         }
         None => {}
+    }
+
+    toggle_play
+}
+
+fn output_panel(ui: &mut egui::Ui, output: &mut Vec<LogLine>) {
+    ui.horizontal(|ui| {
+        ui.strong("Output");
+        if ui.small_button("Clear").clicked() {
+            output.clear();
+        }
+    });
+    ui.separator();
+    egui::ScrollArea::vertical()
+        .stick_to_bottom(true)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for line in output.iter() {
+                let text = egui::RichText::new(format!("[{}] {}", line.source, line.text)).monospace();
+                if line.is_error {
+                    ui.label(text.color(egui::Color32::from_rgb(240, 95, 95)));
+                } else {
+                    ui.label(text);
+                }
+            }
+        });
+}
+
+/// The code editor for the selected script, with a live syntax check.
+fn script_panel(
+    ui: &mut egui::Ui,
+    model: &mut DataModel,
+    id: InstanceId,
+    editor: &mut Editor,
+    playing: bool,
+) {
+    let Some(inst) = model.get(id) else { return };
+    let name = inst.name.clone();
+    let Some(script) = model.script(id) else { return };
+    let mut source = script.source.clone();
+    let mut enabled = script.enabled;
+    let mut changed = false;
+
+    ui.horizontal(|ui| {
+        ui.strong(format!("Script: {name}"));
+        ui.separator();
+        changed |= ui
+            .add_enabled(!playing, egui::Checkbox::new(&mut enabled, "Enabled"))
+            .changed();
+        if playing {
+            ui.weak("read-only while playing");
+        }
+    });
+    ui.separator();
+
+    let editor_height = (ui.available_height() - 24.0).max(60.0);
+    egui::ScrollArea::vertical()
+        .max_height(editor_height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let edit = egui::TextEdit::multiline(&mut source)
+                .code_editor()
+                .desired_width(f32::INFINITY)
+                .desired_rows(12)
+                .interactive(!playing);
+            changed |= ui.add(edit).changed();
+        });
+
+    // Parsing is fast, so check on every frame for instant feedback.
+    match rovik::lexer::lex(&source).and_then(rovik::parser::parse) {
+        Ok(_) => {
+            ui.weak("No syntax errors");
+        }
+        Err(e) => {
+            ui.colored_label(egui::Color32::from_rgb(240, 95, 95), format!("⚠ {e}"));
+        }
+    }
+
+    if changed && !playing {
+        // One undo step per typing session, like the Properties panel.
+        if !editor.prop_session {
+            editor.history.checkpoint(model);
+            editor.prop_session = true;
+        }
+        if let Some(script) = model.script_mut(id) {
+            script.source = source;
+            script.enabled = enabled;
+        }
     }
 }
 
@@ -650,6 +859,7 @@ fn viewport(
     status: &mut String,
     camera: &mut Camera,
     editor: &mut Editor,
+    playing: bool,
 ) {
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -669,7 +879,12 @@ fn viewport(
     let tool = editor.tool;
     let snap = editor.snap;
 
-    let gizmo = selection.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool)));
+    // No gizmos while playing: the game world isn't editable.
+    let gizmo = if playing {
+        None
+    } else {
+        selection.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool)))
+    };
 
     // Left-drag starting on a handle: begin a gizmo drag.
     if response.drag_started_by(egui::PointerButton::Primary) {
@@ -725,7 +940,8 @@ fn viewport(
     }
 
     // Draw the gizmo for the (possibly just-moved) selection.
-    if let Some(g) = selection.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool))) {
+    let visible = if playing { None } else { *selection };
+    if let Some(g) = visible.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool))) {
         let active = match editor.drag.as_ref() {
             Some(d) => Some(d.axis),
             None => response
@@ -1011,11 +1227,21 @@ fn polyline_distance(points: &[egui::Pos2], p: egui::Pos2) -> f32 {
 
 // --- explorer --------------------------------------------------------------
 
-/// New instances go inside the selection when it can hold children,
-/// otherwise beside it.
+/// New parts and folders go inside a selected folder, otherwise beside
+/// the selection.
 fn container_for(model: &DataModel, selection: Option<InstanceId>) -> InstanceId {
     match selection.and_then(|id| model.get(id)) {
-        Some(inst) if inst.class != Class::Part => inst.id,
+        Some(inst) if matches!(inst.class, Class::Folder | Class::Workspace) => inst.id,
+        Some(inst) => inst.parent.unwrap_or_else(|| model.root()),
+        None => model.root(),
+    }
+}
+
+/// New scripts go inside the selection (usually a part), or beside a
+/// selected script since scripts can't hold children.
+fn script_parent_for(model: &DataModel, selection: Option<InstanceId>) -> InstanceId {
+    match selection.and_then(|id| model.get(id)) {
+        Some(inst) if inst.class.can_hold_children() => inst.id,
         Some(inst) => inst.parent.unwrap_or_else(|| model.root()),
         None => model.root(),
     }
@@ -1117,7 +1343,7 @@ impl ApplicationHandler for Studio {
                 self.last_frame = now;
 
                 self.move_camera(dt);
-                self.frame();
+                self.frame(dt);
 
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
@@ -1148,6 +1374,8 @@ fn demo_scene() -> DataModel {
         p.position = V::new(0.0, 2.0, 0.0);
         p.color = Color::new(200, 60, 60);
     }
+    let spin = dm.create(Class::Script, "Spin", red).unwrap();
+    dm.script_mut(spin).unwrap().source = "-- Spins this block. Press Play!\nevery 0.05 seconds\n    self.rotation.y += 3\nend\n".to_string();
 
     let tower = dm.create(Class::Folder, "Tower", root).unwrap();
     for i in 0..5 {

@@ -196,17 +196,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "brixo-runtime"
+version = "0.1.0"
+dependencies = [
+ "brixo-core",
+ "rovik",
+]
+
+[[package]]
 name = "brixo-studio"
 version = "0.1.0"
 dependencies = [
  "brixo-core",
  "brixo-render",
+ "brixo-runtime",
  "bytemuck",
  "egui",
  "egui-wgpu",
  "egui-winit",
  "glam",
  "pollster",
+ "rovik",
  "wgpu",
  "winit",
 ]

@@ -1,0 +1,9 @@
+[package]
+name = "brixo-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Runs a Brixo game: scripts, timers, and events"
+
+[dependencies]
+brixo-core = { path = "../brixo-core" }
+rovik = { path = "../rovik" }

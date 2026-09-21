@@ -12,8 +12,8 @@ pub mod parser;
 pub mod value;
 
 pub use error::RovikError;
-pub use interpreter::{Handler, Interpreter, Trigger};
-pub use value::Value;
+pub use interpreter::{Handler, Interpreter, PrintHook, Trigger, WaitHook};
+pub use value::{Host, ObjectRef, Value};
 
 /// Stack size for the thread that runs scripts.
 ///
