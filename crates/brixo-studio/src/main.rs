@@ -3,7 +3,7 @@ use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
 use std::time::Instant;
 
-use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Vec3 as V};
+use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Shape, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
 use brixo_client::{movement_input, FollowCamera, Held};
 use brixo_runtime::{Game, LogLine, PlayerInput};
@@ -201,6 +201,12 @@ struct Editor {
     /// How many players Play starts. More than one hosts a local server
     /// and opens a Brixo Player window for each.
     players: u32,
+    /// Selected alongside the main selection (Ctrl-click).
+    also: Vec<InstanceId>,
+    /// What Ctrl+C copied.
+    clipboard: Vec<InstanceId>,
+    /// While dragging a group: the group's box and every part's start.
+    group_drag: Option<(PartProps, Vec<(InstanceId, PartProps)>)>,
 }
 
 impl Default for Editor {
@@ -214,6 +220,9 @@ impl Default for Editor {
             follow: FollowCamera::default(),
             publish_name: "My Game".to_string(),
             players: 1,
+            also: Vec::new(),
+            clipboard: Vec::new(),
+            group_drag: None,
         }
     }
 }
@@ -423,6 +432,15 @@ impl Studio {
                 });
 
             gpu.scene.hidden_player = first_person_player;
+            // Highlight everything selected, and every part inside it.
+            let highlight: Vec<InstanceId> = if playing {
+                Vec::new()
+            } else {
+                let items = selected_items(scene, *selection, &editor.also);
+                let mut h = moving_parts(scene, &items);
+                h.extend(items);
+                h
+            };
             gpu.scene.render(
                 &gpu.device,
                 &gpu.queue,
@@ -430,7 +448,7 @@ impl Studio {
                 &view,
                 scene,
                 camera,
-                *selection,
+                &highlight,
                 gpu.config.width,
                 gpu.config.height,
             );
@@ -527,6 +545,23 @@ impl Studio {
     }
 }
 
+fn shape_label(shape: Shape) -> &'static str {
+    match shape {
+        Shape::Block => "Part",
+        Shape::Wedge => "Wedge",
+        Shape::Cylinder => "Cylinder",
+        Shape::Ball => "Ball",
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    match (n, word) {
+        (1, _) => format!("1 {word}"),
+        (_, "copy") => format!("{n} copies"),
+        _ => format!("{n} {word}s"),
+    }
+}
+
 fn system_line(text: &str) -> LogLine {
     LogLine {
         source: "Brixo".to_string(),
@@ -546,7 +581,13 @@ fn trim_output(output: &mut Vec<LogLine>) {
 
 enum Action {
     Publish,
-    AddPart,
+    AddShape(Shape),
+    Copy,
+    Paste,
+    Duplicate,
+    Group,
+    Ungroup,
+    Focus,
     AddSpawn,
     AddScript,
     AddFolder,
@@ -573,6 +614,12 @@ fn build_ui(
     let mut action: Option<Action> = None;
     let mut toggle_play = ctx.input(|i| i.key_pressed(egui::Key::F5));
 
+    // Keep the extra selection valid after undo, deletes and Stop.
+    editor.also.retain(|id| model.get(*id).is_some() && Some(*id) != *selection);
+    if selection.is_none() && !editor.also.is_empty() {
+        *selection = Some(editor.also.remove(0));
+    }
+
     // Shortcuts, only when no text field has focus.
     if !ctx.wants_keyboard_input() {
         let (k1, k2, k3, del) = ctx.input(|i| {
@@ -594,6 +641,30 @@ fn build_ui(
         }
         if del && !playing {
             action = Some(Action::Delete);
+        }
+        if !playing {
+            let (copy, paste, dup, group, ungroup, focus) = ctx.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::C),
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::V),
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::D),
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::G),
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::U),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::F),
+                )
+            });
+            for (pressed, a) in [
+                (copy, Action::Copy),
+                (paste, Action::Paste),
+                (dup, Action::Duplicate),
+                (group, Action::Group),
+                (ungroup, Action::Ungroup),
+                (focus, Action::Focus),
+            ] {
+                if pressed {
+                    action = Some(a);
+                }
+            }
         }
 
         // Check redo first so Ctrl+Shift+Z isn't also read as Ctrl+Z.
@@ -648,9 +719,31 @@ fn build_ui(
                     action = Some(Action::Redo);
                 }
                 ui.separator();
-                if ui.button("Add Part").clicked() {
-                    action = Some(Action::AddPart);
-                }
+                ui.menu_button("Add Part", |ui| {
+                    for shape in Shape::ALL {
+                        if ui.button(shape_label(shape)).clicked() {
+                            action = Some(Action::AddShape(shape));
+                            ui.close_menu();
+                        }
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    for (label, keys, a) in [
+                        ("Copy", "Ctrl+C", Action::Copy),
+                        ("Paste (on top)", "Ctrl+V", Action::Paste),
+                        ("Duplicate (beside)", "Ctrl+D", Action::Duplicate),
+                        ("Group into Model", "Ctrl+G", Action::Group),
+                        ("Ungroup", "Ctrl+U", Action::Ungroup),
+                        ("Focus camera", "F", Action::Focus),
+                    ] {
+                        if ui.add(egui::Button::new(label).shortcut_text(keys)).clicked() {
+                            action = Some(a);
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    ui.label("Ctrl-click to select more.\nAlt-click picks a part inside a Model.");
+                });
                 if ui.button("Add Spawn").clicked() {
                     action = Some(Action::AddSpawn);
                 }
@@ -706,7 +799,7 @@ fn build_ui(
             ui.heading("Explorer");
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
-                tree_node(ui, model, model.root(), selection);
+                tree_node(ui, model, model.root(), selection, &mut editor.also);
             });
         });
 
@@ -726,20 +819,21 @@ fn build_ui(
 
     // Apply actions after the UI is built, so nothing is borrowed twice.
     match action {
-        Some(Action::AddPart) => {
+        Some(Action::AddShape(shape)) => {
             editor.history.checkpoint(model);
             let parent = container_for(model, *selection);
-            if let Some(id) = model.create(Class::Part, "Part", parent) {
+            if let Some(id) = model.create(Class::Part, shape_label(shape), parent) {
                 // Drop it in front of the camera instead of at the origin.
                 let spot = camera.position + camera.forward() * 12.0;
                 if let Some(p) = model.part_mut(id) {
                     p.position = V::new(spot.x.round(), spot.y.round().max(0.5), spot.z.round());
                     p.size = V::new(2.0, 2.0, 2.0);
+                    p.shape = shape;
                     // Like Roblox: new parts are loose and fall when you press Play.
                     p.anchored = false;
                 }
-                *selection = Some(id);
-                *status = "Added a Part".to_string();
+                select(vec![id], selection, editor);
+                *status = format!("Added a {}", shape_label(shape));
             }
         }
         Some(Action::AddSpawn) => {
@@ -771,17 +865,89 @@ fn build_ui(
             }
         }
         Some(Action::Delete) => {
-            if let Some(id) = *selection {
-                if id != model.root() && model.get(id).is_some() {
-                    editor.history.checkpoint(model);
+            let items = selected_items(model, *selection, &editor.also);
+            if items.is_empty() {
+                *status = "Nothing to delete".to_string();
+            } else {
+                editor.history.checkpoint(model);
+                for id in &items {
+                    model.remove(*id);
                 }
-                if model.remove(id) {
-                    *selection = None;
-                    editor.drag = None;
-                    *status = "Deleted".to_string();
-                } else {
-                    *status = "Can't delete that".to_string();
+                select(Vec::new(), selection, editor);
+                editor.drag = None;
+                *status = format!("Deleted {}", plural(items.len(), "thing"));
+            }
+        }
+        Some(Action::Copy) => {
+            editor.clipboard = selected_items(model, *selection, &editor.also);
+            *status = format!("Copied {}", plural(editor.clipboard.len(), "thing"));
+        }
+        Some(a @ (Action::Paste | Action::Duplicate)) => {
+            // Paste stacks copies on top; Duplicate puts them beside.
+            let source = if matches!(a, Action::Paste) {
+                editor.clipboard.clone()
+            } else {
+                selected_items(model, *selection, &editor.also)
+            };
+            let source: Vec<InstanceId> = source.into_iter().filter(|id| model.get(*id).is_some()).collect();
+            if source.is_empty() {
+                *status = "Nothing to paste".to_string();
+            } else {
+                editor.history.checkpoint(model);
+                let size = bounds(model, &moving_parts(model, &source)).map(|b| to_glam(b.size)).unwrap_or(Vec3::ONE);
+                let copies: Vec<InstanceId> = source.iter().filter_map(|id| model.clone_subtree(*id)).collect();
+                let by = if matches!(a, Action::Paste) { Vec3::Y * size.y } else { Vec3::X * size.x };
+                shift(model, &copies, by);
+                *status = format!("Made {}", plural(copies.len(), "copy"));
+                select(copies, selection, editor);
+            }
+        }
+        Some(Action::Group) => {
+            let items = selected_items(model, *selection, &editor.also);
+            if items.is_empty() {
+                *status = "Select some parts to group".to_string();
+            } else {
+                editor.history.checkpoint(model);
+                let parent = model.get(items[0]).and_then(|i| i.parent).unwrap_or(model.root());
+                if let Some(group) = model.create(Class::Model, "Model", parent) {
+                    for id in &items {
+                        model.reparent(*id, group);
+                    }
+                    select(vec![group], selection, editor);
+                    *status = format!("Grouped {} into a Model. Its parts are welded together in play", plural(items.len(), "thing"));
                 }
+            }
+        }
+        Some(Action::Ungroup) => {
+            let models: Vec<InstanceId> = selected_items(model, *selection, &editor.also)
+                .into_iter()
+                .filter(|id| model.get(*id).is_some_and(|i| i.class == Class::Model))
+                .collect();
+            if models.is_empty() {
+                *status = "Select a Model to ungroup".to_string();
+            } else {
+                editor.history.checkpoint(model);
+                let mut freed = Vec::new();
+                for m in models {
+                    let Some(inst) = model.get(m) else { continue };
+                    let (parent, children) = (inst.parent.unwrap_or(model.root()), inst.children.clone());
+                    for c in children {
+                        if model.reparent(c, parent) {
+                            freed.push(c);
+                        }
+                    }
+                    model.remove(m);
+                }
+                *status = format!("Ungrouped {}", plural(freed.len(), "thing"));
+                select(freed, selection, editor);
+            }
+        }
+        Some(Action::Focus) => {
+            let items = selected_items(model, *selection, &editor.also);
+            if let Some(b) = bounds(model, &moving_parts(model, &items)) {
+                let reach = b.size.x.max(b.size.y).max(b.size.z);
+                camera.position = to_glam(b.position) - camera.forward() * (reach * 1.5 + 6.0);
+                *status = "Focused".to_string();
             }
         }
         Some(Action::Publish) => match brixo_client::publish(model, &editor.publish_name) {
@@ -922,6 +1088,9 @@ fn properties_panel(
     editor: &mut Editor,
 ) {
     ui.heading("Properties");
+    if !editor.also.is_empty() {
+        ui.label(format!("{} selected; showing the first", editor.also.len() + 1));
+    }
     ui.separator();
 
     let Some(id) = selection else {
@@ -964,6 +1133,16 @@ fn properties_panel(
                 }
             });
 
+            ui.horizontal(|ui| {
+                ui.label("Shape");
+                egui::ComboBox::from_id_salt("shape")
+                    .selected_text(shape_label(p.shape))
+                    .show_ui(ui, |ui| {
+                        for shape in Shape::ALL {
+                            changed |= ui.selectable_value(&mut p.shape, shape, shape_label(shape)).changed();
+                        }
+                    });
+            });
             ui.horizontal(|ui| {
                 changed |= ui
                     .checkbox(&mut p.anchored, "Anchored")
@@ -1038,36 +1217,54 @@ fn viewport(
     let tool = editor.tool;
     let snap = editor.snap;
 
-    // No gizmos while playing: the game world isn't editable.
-    let gizmo = if playing {
-        None
-    } else {
-        selection.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool)))
+    // What's selected, and what the gizmo sits on: a single part, or (for
+    // a Model or several things) the box around all their parts.
+    let items = selected_items(model, *selection, &editor.also);
+    let group = is_group(model, &items);
+    let target = |model: &DataModel| -> Option<PartProps> {
+        if group {
+            bounds(model, &moving_parts(model, &items))
+        } else {
+            items.first().and_then(|id| model.part(*id).copied())
+        }
     };
+
+    // No gizmos while playing: the game world isn't editable.
+    let gizmo = if playing { None } else { target(model).map(|p| Gizmo::new(&p, camera, tool)) };
 
     // Left-drag starting on a handle: begin a gizmo drag.
     if response.drag_started_by(egui::PointerButton::Primary) {
         let origin = ui.input(|i| i.pointer.press_origin());
-        if let (Some(g), Some(o), Some(id)) = (gizmo.as_ref(), origin, *selection) {
+        if let (Some(g), Some(o), Some(start)) = (gizmo.as_ref(), origin, target(model)) {
             if let Some(axis) = g.hit_test(&vp, screen, o) {
-                let start = model.part(id).copied();
-                if let Some(start) = start {
-                    if let Some(drag) = Drag::begin(g, &vp, screen, axis, o, start, camera) {
-                        // One undo step per drag, taken before anything moves.
-                        editor.history.checkpoint(model);
-                        editor.drag = Some(drag);
-                    }
+                if group && tool == Tool::Scale {
+                    *status = "Scale works on one part at a time: select a single part".to_string();
+                } else if let Some(drag) = Drag::begin(g, &vp, screen, axis, o, start, camera) {
+                    // One undo step per drag, taken before anything moves.
+                    editor.history.checkpoint(model);
+                    editor.group_drag = group.then(|| {
+                        let parts = moving_parts(model, &items);
+                        (start, parts.iter().filter_map(|id| model.part(*id).map(|p| (*id, *p))).collect())
+                    });
+                    editor.drag = Some(drag);
                 }
             }
         }
     }
 
-    // Continue an active drag.
+    // Continue an active drag: move the part, or the whole group.
     if response.dragged_by(egui::PointerButton::Primary) {
-        if let (Some(drag), Some(id)) = (editor.drag.as_mut(), *selection) {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if let Some(p) = model.part_mut(id) {
-                    drag.apply(pos, snap, p);
+        if let (Some(drag), Some(pos)) = (editor.drag.as_mut(), response.interact_pointer_pos()) {
+            match &editor.group_drag {
+                Some((start, parts)) => {
+                    let mut now = *start;
+                    drag.apply(pos, snap, &mut now);
+                    apply_group(model, start, &now, parts);
+                }
+                None => {
+                    if let Some(p) = selection.and_then(|id| model.part_mut(id)) {
+                        drag.apply(pos, snap, p);
+                    }
                 }
             }
         }
@@ -1075,37 +1272,54 @@ fn viewport(
 
     if response.drag_stopped() {
         editor.drag = None;
+        editor.group_drag = None;
     }
 
     // Plain left-click (no drag): select whatever is under the cursor,
-    // unless the click landed on a gizmo handle.
+    // unless the click landed on a gizmo handle. Clicking a part inside a
+    // Model selects the Model (Alt-click picks the part itself); Ctrl-click
+    // adds to or removes from the selection.
     if response.clicked() {
         if let Some(pos) = response.interact_pointer_pos() {
-            let on_handle = gizmo
-                .as_ref()
-                .and_then(|g| g.hit_test(&vp, screen, pos))
-                .is_some();
+            let on_handle = gizmo.as_ref().and_then(|g| g.hit_test(&vp, screen, pos)).is_some();
             if !on_handle {
                 let ndc_x = (pos.x - screen.left()) / screen.width() * 2.0 - 1.0;
                 let ndc_y = 1.0 - (pos.y - screen.top()) / screen.height() * 2.0;
-                let hit = brixo_render::pick(model, camera, aspect, ndc_x, ndc_y);
-                *status = match hit.and_then(|id| model.get(id)) {
-                    Some(inst) => format!("Selected {}", inst.name),
-                    None => "Nothing there".to_string(),
-                };
-                *selection = hit;
+                let (ctrl, alt) = ui.input(|i| (i.modifiers.command, i.modifiers.alt));
+                let hit = brixo_render::pick(model, camera, aspect, ndc_x, ndc_y)
+                    .map(|id| if alt || playing { id } else { model.top_model(id) });
+                match hit {
+                    Some(id) if ctrl && selection.is_some() => {
+                        if *selection == Some(id) {
+                            *selection = if editor.also.is_empty() { None } else { Some(editor.also.remove(0)) };
+                        } else if let Some(k) = editor.also.iter().position(|x| *x == id) {
+                            editor.also.remove(k);
+                        } else {
+                            editor.also.push(id);
+                        }
+                        let n = selected_items(model, *selection, &editor.also).len();
+                        *status = format!("{} selected", plural(n, "thing"));
+                    }
+                    _ => {
+                        *status = match hit.and_then(|id| model.get(id)) {
+                            Some(inst) => format!("Selected {}", inst.name),
+                            None => "Nothing there".to_string(),
+                        };
+                        *selection = hit;
+                        editor.also.clear();
+                    }
+                }
             }
         }
     }
 
     // Draw the gizmo for the (possibly just-moved) selection.
-    let visible = if playing { None } else { *selection };
-    if let Some(g) = visible.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool))) {
+    let visible = if playing { None } else { target(model) };
+    if let Some(p) = visible {
+        let g = Gizmo::new(&p, camera, tool);
         let active = match editor.drag.as_ref() {
             Some(d) => Some(d.axis),
-            None => response
-                .hover_pos()
-                .and_then(|pos| g.hit_test(&vp, screen, pos)),
+            None => response.hover_pos().and_then(|pos| g.hit_test(&vp, screen, pos)),
         };
         g.draw(&ui.painter_at(rect), &vp, screen, active);
     }
@@ -1384,6 +1598,80 @@ fn polyline_distance(points: &[egui::Pos2], p: egui::Pos2) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
+// --- selection -------------------------------------------------------------
+
+/// Everything selected: the main selection, then any Ctrl-clicked extras.
+fn selected_items(model: &DataModel, selection: Option<InstanceId>, also: &[InstanceId]) -> Vec<InstanceId> {
+    let mut items: Vec<InstanceId> = selection.into_iter().chain(also.iter().copied()).collect();
+    let mut seen = HashSet::new();
+    items.retain(|id| model.get(*id).is_some() && *id != model.root() && seen.insert(*id));
+    items
+}
+
+/// The parts that move when the selection moves.
+fn moving_parts(model: &DataModel, items: &[InstanceId]) -> Vec<InstanceId> {
+    let mut seen = HashSet::new();
+    items.iter().flat_map(|id| model.parts_under(*id)).filter(|id| seen.insert(*id)).collect()
+}
+
+/// More than one single part: moved and rotated as one, around its box.
+fn is_group(model: &DataModel, items: &[InstanceId]) -> bool {
+    items.len() > 1 || items.first().is_some_and(|id| model.part(*id).is_none())
+}
+
+/// The box around some parts (rotations included), as a part-shaped box:
+/// the group gizmo sits on it and the camera focuses on it.
+fn bounds(model: &DataModel, parts: &[InstanceId]) -> Option<PartProps> {
+    let mut lo = Vec3::splat(f32::MAX);
+    let mut hi = Vec3::splat(f32::MIN);
+    for p in parts.iter().filter_map(|id| model.part(*id)) {
+        let (q, c, h) = (part_quat(p), to_glam(p.position), to_glam(p.size) / 2.0);
+        for sx in [-1.0, 1.0] {
+            for sy in [-1.0, 1.0] {
+                for sz in [-1.0, 1.0] {
+                    let corner = c + q * Vec3::new(sx * h.x, sy * h.y, sz * h.z);
+                    lo = lo.min(corner);
+                    hi = hi.max(corner);
+                }
+            }
+        }
+    }
+    (lo.x <= hi.x).then(|| PartProps {
+        position: from_glam((lo + hi) / 2.0),
+        size: from_glam(hi - lo),
+        ..PartProps::default()
+    })
+}
+
+/// Moves (and turns) a group's parts to follow its box, from where each
+/// part started. `q` turns around the box's starting centre.
+fn apply_group(model: &mut DataModel, start: &PartProps, now: &PartProps, parts: &[(InstanceId, PartProps)]) {
+    let q = part_quat(now) * part_quat(start).inverse();
+    let (c0, c1) = (to_glam(start.position), to_glam(now.position));
+    for (id, s) in parts {
+        let Some(p) = model.part_mut(*id) else { continue };
+        p.position = from_glam(c1 + q * (to_glam(s.position) - c0));
+        let (y, x, z) = (q * part_quat(s)).to_euler(EulerRot::YXZ);
+        p.rotation = V::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+    }
+}
+
+/// Shifts every part under `items` by `by`.
+fn shift(model: &mut DataModel, items: &[InstanceId], by: Vec3) {
+    for id in moving_parts(model, items) {
+        if let Some(p) = model.part_mut(id) {
+            p.position = from_glam(to_glam(p.position) + by);
+        }
+    }
+}
+
+/// Makes `items` the selection (the first is the main one).
+fn select(items: Vec<InstanceId>, selection: &mut Option<InstanceId>, editor: &mut Editor) {
+    let mut it = items.into_iter();
+    *selection = it.next();
+    editor.also = it.collect();
+}
+
 // --- explorer --------------------------------------------------------------
 
 /// New parts and folders go inside a selected folder, otherwise beside
@@ -1411,19 +1699,33 @@ fn tree_node(
     model: &DataModel,
     id: InstanceId,
     selection: &mut Option<InstanceId>,
+    also: &mut Vec<InstanceId>,
 ) {
     let Some(inst) = model.get(id) else { return };
     let label = format!("{}  ({:?})", inst.name, inst.class);
     let children = inst.children.clone();
 
-    if ui.selectable_label(*selection == Some(id), label).clicked() {
-        *selection = Some(id);
+    let selected = *selection == Some(id) || also.contains(&id);
+    if ui.selectable_label(selected, label).clicked() {
+        if ui.input(|i| i.modifiers.command) && selection.is_some() {
+            // Ctrl-click: add to or remove from the selection.
+            if *selection == Some(id) {
+                *selection = if also.is_empty() { None } else { Some(also.remove(0)) };
+            } else if let Some(k) = also.iter().position(|x| *x == id) {
+                also.remove(k);
+            } else {
+                also.push(id);
+            }
+        } else {
+            *selection = Some(id);
+            also.clear();
+        }
     }
 
     if !children.is_empty() {
         ui.indent(id, |ui| {
             for child in children {
-                tree_node(ui, model, child, selection);
+                tree_node(ui, model, child, selection, also);
             }
         });
     }
@@ -1547,6 +1849,31 @@ fn demo_scene() -> DataModel {
         p.rotation = V::new(0.0, i as f32 * 15.0, 0.0);
         p.color = Color::new(220, 190, 80);
         p.anchored = false;
+    }
+
+    // --- building examples: shapes and Models ---
+    let shaped = |dm: &mut DataModel, parent: InstanceId, name: &str, shape: Shape, pos: V, size: V, color: Color, anchored: bool| {
+        let id = dm.create(Class::Part, name, parent).unwrap();
+        let p = dm.part_mut(id).unwrap();
+        p.shape = shape;
+        p.position = pos;
+        p.size = size;
+        p.color = color;
+        p.anchored = anchored;
+        id
+    };
+    // A ramp with a ball on top: press Play and it rolls down.
+    shaped(&mut dm, root, "Ramp", Shape::Wedge, V::new(12.0, 2.0, 14.0), V::new(6.0, 4.0, 10.0), Color::new(99, 95, 98), true);
+    shaped(&mut dm, root, "Ball", Shape::Ball, V::new(12.0, 6.0, 17.5), V::new(2.0, 2.0, 2.0), Color::new(13, 105, 172), false);
+    // A tree is a Model: click it and the whole tree is selected.
+    let tree = dm.create(Class::Model, "Tree", root).unwrap();
+    shaped(&mut dm, tree, "Trunk", Shape::Cylinder, V::new(-22.0, 3.0, -4.0), V::new(1.6, 6.0, 1.6), Color::new(105, 64, 40), true);
+    shaped(&mut dm, tree, "Leaves", Shape::Ball, V::new(-22.0, 7.5, -4.0), V::new(5.0, 5.0, 5.0), Color::new(75, 151, 75), true);
+    // A loose table: its parts are welded, so it stands (and tips) as one.
+    let table = dm.create(Class::Model, "Table", root).unwrap();
+    shaped(&mut dm, table, "Top", Shape::Block, V::new(20.0, 3.3, 2.0), V::new(5.0, 0.6, 3.0), Color::new(218, 133, 65), false);
+    for (dx, dz) in [(-2.0, -1.0), (2.0, -1.0), (-2.0, 1.0), (2.0, 1.0)] {
+        shaped(&mut dm, table, "Leg", Shape::Block, V::new(20.0 + dx, 1.5, 2.0 + dz), V::new(0.6, 3.0, 0.6), Color::new(105, 64, 40), false);
     }
 
     // Greets players as they join a (multiplayer) game.

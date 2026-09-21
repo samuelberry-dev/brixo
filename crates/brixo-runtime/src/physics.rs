@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver};
 
-use brixo_core::{DataModel, InstanceId, PartProps, Vec3 as BVec3};
+use brixo_core::{DataModel, InstanceId, PartProps, Vec3 as BVec3, Shape};
 use glam::{EulerRot, Quat, Vec3};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::prelude::*;
@@ -104,6 +104,9 @@ pub struct Physics {
     steps_taken: u64,
     /// One character per player, by the player's id.
     characters: HashMap<InstanceId, Character>,
+    /// Parts in a Model are welded to the Model's first part:
+    /// part -> (the part it's welded to, the joint).
+    welds: HashMap<InstanceId, (InstanceId, ImpulseJointHandle)>,
 }
 
 impl Default for Physics {
@@ -137,6 +140,7 @@ impl Physics {
             accumulator: 0.0,
             steps_taken: 0,
             characters: HashMap::new(),
+            welds: HashMap::new(),
         }
     }
 
@@ -151,6 +155,7 @@ impl Physics {
         inputs: &HashMap<InstanceId, PlayerInput>,
     ) -> Vec<(InstanceId, InstanceId)> {
         self.pull_from_world(world, listeners);
+        self.sync_welds(world);
         self.sync_characters(world);
 
         self.accumulator = (self.accumulator + dt.max(0.0)).min(MAX_CATCH_UP);
@@ -198,6 +203,57 @@ impl Physics {
             touches.extend(self.character_touches(world, id));
         }
         touches
+    }
+
+    // --- welds ---
+
+    /// Makes the joints match the Models: every part in a Model is held to
+    /// the Model's first part, exactly where it was placed.
+    fn sync_welds(&mut self, world: &DataModel) {
+        let mut groups: HashMap<InstanceId, Vec<InstanceId>> = HashMap::new();
+        for id in world.walk() {
+            if self.parts.contains_key(&id) {
+                if let Some(model) = world.weld_group(id) {
+                    groups.entry(model).or_default().push(id);
+                }
+            }
+        }
+        let mut wanted: HashMap<InstanceId, InstanceId> = HashMap::new();
+        for members in groups.values() {
+            for &part in &members[1..] {
+                wanted.insert(part, members[0]);
+            }
+        }
+
+        // Drop welds that shouldn't exist, or whose joint went away with a
+        // removed body.
+        let stale: Vec<InstanceId> = self
+            .welds
+            .iter()
+            .filter(|(part, (to, joint))| wanted.get(*part) != Some(to) || self.impulse_joints.get(*joint).is_none())
+            .map(|(part, _)| *part)
+            .collect();
+        for part in stale {
+            let (_, joint) = self.welds.remove(&part).unwrap();
+            self.impulse_joints.remove(joint, true);
+        }
+
+        for (part, to) in wanted {
+            if self.welds.contains_key(&part) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (self.parts.get(&to), self.parts.get(&part)) else { continue };
+            let (body_a, body_b) = (a.body, b.body);
+            let (Some(ra), Some(rb)) = (self.bodies.get(body_a), self.bodies.get(body_b)) else { continue };
+            // Hold `part` wherever it sits relative to `to` right now.
+            let relative = ra.position().inverse() * *rb.position();
+            let joint = FixedJointBuilder::new()
+                .local_frame1(relative)
+                .local_frame2(Pose::IDENTITY)
+                .contacts_enabled(false);
+            let handle = self.impulse_joints.insert(body_a, body_b, joint, true);
+            self.welds.insert(part, (to, handle));
+        }
     }
 
     // --- the player's character ---
@@ -538,7 +594,7 @@ impl Physics {
         // A new size or collision setting gets a brand-new collider. That
         // goes through the same path as a new part, so contacts and the
         // part's mass are recomputed properly.
-        if old.size != props.size || old.can_collide != props.can_collide {
+        if old.size != props.size || old.can_collide != props.can_collide || old.shape != props.shape {
             self.owners.remove(&old_collider);
             self.colliders
                 .remove(old_collider, &mut self.islands, &mut self.bodies, true);
@@ -609,9 +665,32 @@ fn touch_settings(listening: bool) -> (ActiveEvents, ActiveCollisionTypes) {
     }
 }
 
+/// The corners of a wedge filling a box of half-size (hx, hy, hz): a ramp
+/// rising toward +Z. The renderer draws exactly this shape.
+fn wedge_points(hx: f32, hy: f32, hz: f32) -> Vec<Vec3> {
+    vec![
+        Vec3::new(-hx, -hy, -hz),
+        Vec3::new(hx, -hy, -hz),
+        Vec3::new(hx, -hy, hz),
+        Vec3::new(-hx, -hy, hz),
+        Vec3::new(-hx, hy, hz),
+        Vec3::new(hx, hy, hz),
+    ]
+}
+
 fn collider_for(props: &PartProps, listening: bool) -> ColliderBuilder {
     let (events, types) = touch_settings(listening);
-    ColliderBuilder::cuboid(props.size.x / 2.0, props.size.y / 2.0, props.size.z / 2.0)
+    let (hx, hy, hz) = (props.size.x / 2.0, props.size.y / 2.0, props.size.z / 2.0);
+    let block = || ColliderBuilder::cuboid(hx, hy, hz);
+    let shape = match props.shape {
+        Shape::Block => block(),
+        // Round shapes use the smallest side, so they never poke outside
+        // their box.
+        Shape::Ball => ColliderBuilder::ball(hx.min(hy).min(hz)),
+        Shape::Cylinder => ColliderBuilder::cylinder(hy, hx.min(hz)),
+        Shape::Wedge => ColliderBuilder::convex_hull(&wedge_points(hx, hy, hz)).unwrap_or_else(block),
+    };
+    shape
         .friction(0.6)
         .restitution(0.0)
         .density(1.0)

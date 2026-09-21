@@ -305,7 +305,7 @@ impl Player {
                 &view,
                 model,
                 &self.camera,
-                None,
+                &[],
                 gpu.config.width,
                 gpu.config.height,
             );

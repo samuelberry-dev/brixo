@@ -54,6 +54,35 @@ impl Color {
     }
 }
 
+/// A part's shape. Every shape fills its size box: a Wedge is a ramp
+/// rising toward +Z, a Cylinder stands upright (along Y), a Ball is round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Shape {
+    #[default]
+    Block,
+    Wedge,
+    Cylinder,
+    Ball,
+}
+
+impl Shape {
+    pub const ALL: [Shape; 4] = [Shape::Block, Shape::Wedge, Shape::Cylinder, Shape::Ball];
+
+    /// The name scripts use: `self.shape = "ball"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Shape::Block => "block",
+            Shape::Wedge => "wedge",
+            Shape::Cylinder => "cylinder",
+            Shape::Ball => "ball",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Shape> {
+        Shape::ALL.into_iter().find(|s| s.name() == name)
+    }
+}
+
 /// Properties that only a Part has.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PartProps {
@@ -71,6 +100,9 @@ pub struct PartProps {
     /// still fire `on touched`, so they work as pickups and trigger zones.
     #[serde(default = "yes")]
     pub can_collide: bool,
+    /// Older saves have no shape: they're all blocks.
+    #[serde(default)]
+    pub shape: Shape,
 }
 
 fn yes() -> bool {
@@ -86,6 +118,7 @@ impl Default for PartProps {
             color: Color::new(160, 160, 160),
             anchored: true,
             can_collide: true,
+            shape: Shape::Block,
         }
     }
 }
@@ -214,6 +247,9 @@ pub enum Class {
     Script,
     /// A pad players appear on when Play starts. It's a normal part too.
     SpawnLocation,
+    /// A group of parts that act as one object: they move together in the
+    /// studio, and during play the parts inside are welded together.
+    Model,
     Player,
 }
 
@@ -229,6 +265,7 @@ impl Class {
 pub enum Props {
     Workspace,
     Folder,
+    Model,
     /// Parts and SpawnLocations.
     Part(PartProps),
     Script(ScriptProps),
@@ -378,6 +415,49 @@ impl DataModel {
         }
     }
 
+    /// The closest Model around `id` (not counting `id` itself). Parts
+    /// under the same Model are welded together during play.
+    pub fn weld_group(&self, id: InstanceId) -> Option<InstanceId> {
+        let mut at = self.instances.get(&id)?.parent;
+        while let Some(p) = at {
+            let inst = self.instances.get(&p)?;
+            if inst.class == Class::Model {
+                return Some(p);
+            }
+            at = inst.parent;
+        }
+        None
+    }
+
+    /// The outermost Model around `id`, or `id` itself if it isn't in one.
+    /// Clicking a part in the studio selects this, like in Roblox.
+    pub fn top_model(&self, id: InstanceId) -> InstanceId {
+        let mut top = id;
+        let mut at = self.instances.get(&id).and_then(|i| i.parent);
+        while let Some(p) = at {
+            let Some(inst) = self.instances.get(&p) else { break };
+            if inst.class == Class::Model {
+                top = p;
+            }
+            at = inst.parent;
+        }
+        top
+    }
+
+    /// Every part (including spawn locations) at or under `id`.
+    pub fn parts_under(&self, id: InstanceId) -> Vec<InstanceId> {
+        let mut out = Vec::new();
+        let mut stack = vec![id];
+        while let Some(n) = stack.pop() {
+            let Some(inst) = self.instances.get(&n) else { continue };
+            if self.part(n).is_some() {
+                out.push(n);
+            }
+            stack.extend(inst.children.iter().rev().copied());
+        }
+        out
+    }
+
     /// Read a Script's properties. None if the id is missing or isn't a Script.
     pub fn script(&self, id: InstanceId) -> Option<&ScriptProps> {
         match self.instances.get(&id).map(|i| &i.props) {
@@ -405,6 +485,7 @@ impl DataModel {
         let props = match class {
             Class::Workspace => Props::Workspace,
             Class::Folder => Props::Folder,
+            Class::Model => Props::Model,
             Class::Part => Props::Part(PartProps::default()),
             Class::Script => Props::Script(ScriptProps::default()),
             Class::SpawnLocation => Props::Part(PartProps {
@@ -799,6 +880,35 @@ mod tests {
             assert_eq!(CameraMode::from_name(m.name()), Some(m));
         }
         assert_eq!(Face::from_name("grumpy"), None);
+    }
+
+    #[test]
+    fn models_group_parts_and_find_their_weld_group() {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let car = dm.create(Class::Model, "Car", root).unwrap();
+        let body = dm.create(Class::Part, "Body", car).unwrap();
+        let wheels = dm.create(Class::Model, "Wheels", car).unwrap();
+        let wheel = dm.create(Class::Part, "Wheel", wheels).unwrap();
+        let loose = dm.create(Class::Part, "Loose", root).unwrap();
+        assert_eq!(dm.weld_group(body), Some(car));
+        assert_eq!(dm.weld_group(wheel), Some(wheels), "closest model welds");
+        assert_eq!(dm.weld_group(loose), None);
+        assert_eq!(dm.top_model(wheel), car, "clicking a wheel selects the car");
+        assert_eq!(dm.top_model(loose), loose);
+        let mut parts = dm.parts_under(car);
+        parts.sort_by_key(|id| id.raw());
+        assert_eq!(parts, vec![body, wheel]);
+    }
+
+    #[test]
+    fn old_saves_load_as_blocks() {
+        let json = r#"{"position":{"x":0,"y":0,"z":0},"size":{"x":1,"y":1,"z":1},"rotation":{"x":0,"y":0,"z":0},"color":{"r":1,"g":2,"b":3}}"#;
+        let p: PartProps = serde_json::from_str(json).unwrap();
+        assert_eq!(p.shape, Shape::Block);
+        for s in Shape::ALL {
+            assert_eq!(Shape::from_name(s.name()), Some(s));
+        }
     }
 
     #[test]

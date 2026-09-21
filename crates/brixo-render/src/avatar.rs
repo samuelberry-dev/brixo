@@ -61,8 +61,26 @@ pub(crate) fn meshes() -> Vec<AvatarMesh> {
 }
 
 #[derive(Default)]
-struct Mesh {
-    vertices: Vec<Vertex>,
+pub(crate) struct Mesh {
+    pub vertices: Vec<Vertex>,
+}
+
+/// Unit-sized meshes (filling -0.5..0.5) for each part shape, in
+/// `Shape::ALL` order. Instances scale them to the part's size.
+pub(crate) fn shape_meshes() -> Vec<Vec<Vertex>> {
+    brixo_core::Shape::ALL
+        .iter()
+        .map(|shape| {
+            let mut m = Mesh::default();
+            match shape {
+                brixo_core::Shape::Block => m.cuboid(Vec3::ZERO, Vec3::ONE),
+                brixo_core::Shape::Wedge => m.wedge(),
+                brixo_core::Shape::Cylinder => m.cylinder(),
+                brixo_core::Shape::Ball => m.sphere(Vec3::ZERO, 0.5),
+            }
+            m.vertices
+        })
+        .collect()
 }
 
 impl Mesh {
@@ -77,6 +95,55 @@ impl Mesh {
             let v = cube[i as usize];
             let p = center + Vec3::from(v.position) * size;
             self.vertex(p, Vec3::from(v.normal), Vec2::from(v.uv));
+        }
+    }
+
+    /// A flat triangle facing away from `inside` (for closed solids).
+    fn facet(&mut self, a: Vec3, b: Vec3, c: Vec3, inside: Vec3) {
+        let n = (b - a).cross(c - a);
+        let (b, c, n) = if n.dot((a + b + c) / 3.0 - inside) < 0.0 { (c, b, -n) } else { (b, c, n) };
+        let n = n.normalize_or_zero();
+        for p in [a, b, c] {
+            self.vertex(p, n, Vec2::ZERO);
+        }
+    }
+
+    /// A ramp filling the unit box, rising toward +Z (the physics collider
+    /// is built from the same six corners).
+    fn wedge(&mut self) {
+        let h = 0.5;
+        let v = [
+            Vec3::new(-h, -h, -h), Vec3::new(h, -h, -h), Vec3::new(h, -h, h), Vec3::new(-h, -h, h), // bottom
+            Vec3::new(-h, h, h), Vec3::new(h, h, h),                                                 // top edge, at the back
+        ];
+        let inside = Vec3::new(0.0, -0.2, 0.2);
+        self.facet(v[0], v[1], v[2], inside); // bottom
+        self.facet(v[0], v[2], v[3], inside);
+        self.facet(v[3], v[2], v[5], inside); // back
+        self.facet(v[3], v[5], v[4], inside);
+        self.facet(v[0], v[4], v[5], inside); // slope
+        self.facet(v[0], v[5], v[1], inside);
+        self.facet(v[0], v[3], v[4], inside); // left side
+        self.facet(v[1], v[5], v[2], inside); // right side
+    }
+
+    /// An upright cylinder filling the unit box: smooth round side, flat caps.
+    fn cylinder(&mut self) {
+        let (n, r, h) = (32, 0.5, 0.5);
+        let at = |i: usize| {
+            let a = i as f32 / n as f32 * TAU;
+            Vec3::new(a.cos(), 0.0, a.sin())
+        };
+        for i in 0..n {
+            let (d0, d1) = (at(i), at(i + 1));
+            let (b0, b1) = (d0 * r - Vec3::Y * h, d1 * r - Vec3::Y * h);
+            let (t0, t1) = (d0 * r + Vec3::Y * h, d1 * r + Vec3::Y * h);
+            // Side: outward normals per vertex so it shades round.
+            for (p, nn) in [(b0, d0), (t1, d1), (b1, d1), (b0, d0), (t0, d0), (t1, d1)] {
+                self.vertex(p, nn, Vec2::ZERO);
+            }
+            self.facet(Vec3::Y * h, t0, t1, Vec3::ZERO);
+            self.facet(-Vec3::Y * h, b0, b1, Vec3::ZERO);
         }
     }
 
@@ -262,6 +329,26 @@ mod tests {
             let area = (b - a).cross(c - a);
             if mid.distance(HEAD_CENTER) < HEAD_RADIUS * 1.01 && area.length() > 1e-6 {
                 assert!(area.dot(mid - HEAD_CENTER) > 0.0, "head triangle wound inward");
+            }
+        }
+    }
+
+    #[test]
+    fn shape_meshes_fill_the_unit_box_and_face_outward() {
+        for (shape, verts) in brixo_core::Shape::ALL.iter().zip(shape_meshes()) {
+            assert!(!verts.is_empty(), "{shape:?}");
+            for v in &verts {
+                assert!(v.position.iter().all(|c| c.abs() <= 0.5001), "{shape:?} pokes out");
+            }
+            for tri in verts.chunks(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
+                let area = (b - a).cross(c - a);
+                if area.length() > 1e-6 {
+                    let mid = (a + b + c) / 3.0;
+                    // The wedge's centre of mass sits low and back.
+                    let inside = if *shape == brixo_core::Shape::Wedge { Vec3::new(0.0, -0.2, 0.2) } else { Vec3::ZERO };
+                    assert!(area.dot(mid - inside) > 0.0, "{shape:?} triangle wound inward");
+                }
             }
         }
     }

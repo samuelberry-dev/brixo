@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use brixo_core::{CameraMode, Class, Color, DataModel, Face, InstanceId, PartProps, Vec3};
+use brixo_core::{CameraMode, Class, Color, DataModel, Face, InstanceId, PartProps, Shape, Vec3};
 use rovik::value::format_number;
 use rovik::{Host, ObjectRef, Value};
 
@@ -97,6 +97,7 @@ fn class_name(class: Class) -> &'static str {
         Class::Part => "part",
         Class::Script => "script",
         Class::SpawnLocation => "spawnlocation",
+        Class::Model => "model",
         Class::Player => "player",
     }
 }
@@ -236,6 +237,10 @@ impl Host for WorldHost {
                     } as f64)),
                     None => Err(format!("a {} doesn't have {name}. Only players do", class_name(inst.class))),
                 },
+                "shape" => match world.part(id) {
+                    Some(p) => Ok(Value::str(p.shape.name())),
+                    None => Err(format!("a {} doesn't have a shape. Only parts do", class_name(inst.class))),
+                },
                 "anchored" | "can_collide" => match world.part(id) {
                     Some(p) => Ok(Value::Bool(if name == "anchored" { p.anchored } else { p.can_collide })),
                     None => Err(format!("a {} doesn't have {name}. Only parts do", class_name(inst.class))),
@@ -306,6 +311,19 @@ impl Host for WorldHost {
                     other => Err(format!("name has to be text, not a {}", other.type_name())),
                 },
                 "class" => Err("class can't be changed".to_string()),
+                "shape" => {
+                    let names = Shape::ALL.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
+                    let Value::Str(text) = &value else {
+                        return Err(format!("shape should be text, one of: {names}"));
+                    };
+                    let shape = Shape::from_name(text)
+                        .ok_or_else(|| format!("there's no shape called '{text}'. Try one of: {names}"))?;
+                    let p = world
+                        .part_mut(id)
+                        .ok_or_else(|| format!("a {} doesn't have a shape. Only parts do", class_name(class)))?;
+                    p.shape = shape;
+                    Ok(())
+                }
                 "camera_mode" => {
                     let names = CameraMode::ALL.iter().map(|m| m.name()).collect::<Vec<_>>().join(", ");
                     let Value::Str(text) = &value else {

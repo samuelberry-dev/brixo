@@ -261,10 +261,13 @@ fn to_glam(v: BVec3) -> Vec3 {
 
 /// Instances for every part, plus the players (drawn separately, as
 /// avatars) with their highlight values.
+/// Parts (with their shape) and players, with highlight values. Anything
+/// in `selected` is highlighted.
+#[allow(clippy::type_complexity)]
 fn build_instances(
     model: &DataModel,
-    selected: Option<brixo_core::InstanceId>,
-) -> (Vec<InstanceRaw>, Vec<(brixo_core::InstanceId, brixo_core::PlayerProps, f32)>) {
+    selected: &[brixo_core::InstanceId],
+) -> (Vec<(brixo_core::Shape, InstanceRaw)>, Vec<(brixo_core::InstanceId, brixo_core::PlayerProps, f32)>) {
     let mut out = Vec::new();
     let mut players = Vec::new();
     let mut stack = vec![model.root()];
@@ -272,7 +275,7 @@ fn build_instances(
         let Some(inst) = model.get(id) else { continue };
         stack.extend(inst.children.iter().copied());
 
-        let highlight = if selected == Some(id) { 1.0 } else { 0.0 };
+        let highlight = if selected.contains(&id) { 1.0 } else { 0.0 };
         if let Some(player) = model.player(id) {
             players.push((id, *player, highlight));
             continue;
@@ -286,15 +289,26 @@ fn build_instances(
             p.rotation.x.to_radians(),
             p.rotation.z.to_radians(),
         );
-        let m =
-            Mat4::from_scale_rotation_translation(to_glam(p.size), rotation, to_glam(p.position));
+        // Round shapes use their smallest side, exactly like their colliders.
+        let size = match p.shape {
+            brixo_core::Shape::Ball => Vec3::splat(p.size.x.min(p.size.y).min(p.size.z)),
+            brixo_core::Shape::Cylinder => {
+                let d = p.size.x.min(p.size.z);
+                Vec3::new(d, p.size.y, d)
+            }
+            _ => to_glam(p.size),
+        };
+        let m = Mat4::from_scale_rotation_translation(size, rotation, to_glam(p.position));
 
-        out.push(InstanceRaw {
-            model: m.to_cols_array_2d(),
-            color: rgb(p.color.r, p.color.g, p.color.b),
-            highlight,
-            uv_rect: WHITE,
-        });
+        out.push((
+            p.shape,
+            InstanceRaw {
+                model: m.to_cols_array_2d(),
+                color: rgb(p.color.r, p.color.g, p.color.b),
+                highlight,
+                uv_rect: WHITE,
+            },
+        ));
     }
     (out, players)
 }
@@ -342,9 +356,9 @@ struct AvatarDraw {
 
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
+    /// Every part shape's mesh, one after another, and where each one is.
+    shape_buffer: wgpu::Buffer,
+    shape_ranges: Vec<std::ops::Range<u32>>,
     /// All the avatar meshes, one after another.
     avatar_buffer: wgpu::Buffer,
     avatar_draws: Vec<AvatarDraw>,
@@ -369,16 +383,17 @@ impl SceneRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        let (vertices, indices) = cube();
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cube vertices"),
-            contents: bytemuck::cast_slice(&vertices),
+        let mut shape_vertices: Vec<Vertex> = Vec::new();
+        let mut shape_ranges = Vec::new();
+        for mesh in avatar::shape_meshes() {
+            let start = shape_vertices.len() as u32;
+            shape_vertices.extend(mesh);
+            shape_ranges.push(start..shape_vertices.len() as u32);
+        }
+        let shape_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("part shapes"),
+            contents: bytemuck::cast_slice(&shape_vertices),
             usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cube indices"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
         });
 
         let mut avatar_vertices: Vec<Vertex> = Vec::new();
@@ -603,9 +618,8 @@ impl SceneRenderer {
 
         Self {
             pipeline,
-            vertex_buffer,
-            index_buffer,
-            index_count: indices.len() as u32,
+            shape_buffer,
+            shape_ranges,
             avatar_buffer,
             avatar_draws,
             hidden_player: None,
@@ -634,7 +648,7 @@ impl SceneRenderer {
         color_view: &wgpu::TextureView,
         model: &DataModel,
         camera: &Camera,
-        selected: Option<brixo_core::InstanceId>,
+        selected: &[brixo_core::InstanceId],
         width: u32,
         height: u32,
     ) {
@@ -673,8 +687,18 @@ impl SceneRenderer {
         }
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
 
-        let (mut instances, players) = build_instances(model, selected);
-        let part_count = instances.len() as u32;
+        let (parts, players) = build_instances(model, selected);
+        // Parts first, grouped by shape so each shape is one draw call.
+        let mut instances = Vec::with_capacity(parts.len());
+        let mut part_batches = Vec::new();
+        for (k, shape) in brixo_core::Shape::ALL.iter().enumerate() {
+            let start = instances.len() as u32;
+            instances.extend(parts.iter().filter(|(s, _)| s == shape).map(|(_, i)| *i));
+            let end = instances.len() as u32;
+            if end > start {
+                part_batches.push((k, start..end));
+            }
+        }
         // Avatar instances go after the parts, grouped by mesh.
         let mut avatar_batches = Vec::new();
         for (i, draw) in self.avatar_draws.iter().enumerate() {
@@ -714,11 +738,10 @@ impl SceneRenderer {
             if !instances.is_empty() {
                 shadow.set_pipeline(&self.shadow_pipeline);
                 shadow.set_bind_group(0, &self.shadow_bind_group, &[]);
-                shadow.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                shadow.set_vertex_buffer(0, self.shape_buffer.slice(..));
                 shadow.set_vertex_buffer(1, instance_buffer.slice(..));
-                shadow.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                if part_count > 0 {
-                    shadow.draw_indexed(0..self.index_count, 0, 0..part_count);
+                for (k, batch) in &part_batches {
+                    shadow.draw(self.shape_ranges[*k].clone(), batch.clone());
                 }
                 shadow.set_vertex_buffer(0, self.avatar_buffer.slice(..));
                 for (i, batch) in &avatar_batches {
@@ -761,11 +784,10 @@ impl SceneRenderer {
         if !instances.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_vertex_buffer(0, self.shape_buffer.slice(..));
             pass.set_vertex_buffer(1, instance_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            if part_count > 0 {
-                pass.draw_indexed(0..self.index_count, 0, 0..part_count);
+            for (k, batch) in &part_batches {
+                pass.draw(self.shape_ranges[*k].clone(), batch.clone());
             }
             pass.set_vertex_buffer(0, self.avatar_buffer.slice(..));
             for (i, batch) in avatar_batches {
