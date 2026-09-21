@@ -1,12 +1,13 @@
 use std::collections::HashSet;
+use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
 use std::time::Instant;
 
-use brixo_core::{Class, Color, DataModel, InstanceId, Vec3 as V};
+use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
-use glam::Vec3;
+use glam::{EulerRot, Mat4, Quat, Vec3};
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -111,6 +112,51 @@ impl Gpu {
     }
 }
 
+// --- editor state ----------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tool {
+    Move,
+    Rotate,
+    Scale,
+}
+
+/// An in-progress gizmo drag. Everything is measured from the drag's start,
+/// so the part never drifts from rounding.
+struct Drag {
+    tool: Tool,
+    axis: usize,
+    world_axis: Vec3,
+    start: PartProps,
+    start_pointer: egui::Pos2,
+    /// Unit direction of the axis on screen (move/scale).
+    screen_dir: egui::Vec2,
+    /// World units per screen pixel along that axis (move/scale).
+    units_per_px: f32,
+    /// Gizmo centre on screen (rotate).
+    center_screen: egui::Pos2,
+    /// +1 or -1 depending on whether the axis points toward the camera (rotate).
+    facing: f32,
+    last_angle: f32,
+    accum: f32,
+}
+
+struct Editor {
+    tool: Tool,
+    snap: bool,
+    drag: Option<Drag>,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self {
+            tool: Tool::Move,
+            snap: true,
+            drag: None,
+        }
+    }
+}
+
 // --- app -------------------------------------------------------------------
 
 struct Studio {
@@ -119,9 +165,8 @@ struct Studio {
     camera: Camera,
     selection: Option<InstanceId>,
     status: String,
+    editor: Editor,
     keys: HashSet<KeyCode>,
-    looking: bool,
-    cursor: (f32, f32),
     last_frame: Instant,
 }
 
@@ -133,9 +178,8 @@ impl Studio {
             camera: Camera::new(),
             selection: None,
             status: "Ready".to_string(),
+            editor: Editor::default(),
             keys: HashSet::new(),
-            looking: false,
-            cursor: (0.0, 0.0),
             last_frame: Instant::now(),
         }
     }
@@ -181,14 +225,15 @@ impl Studio {
             camera,
             selection,
             status,
+            editor,
             ..
         } = self;
         let Some(gpu) = gpu.as_mut() else { return };
 
-        // --- build the UI ---
+        // --- build the UI (this also handles viewport mouse input) ---
         let raw_input = gpu.egui_state.take_egui_input(&gpu.window);
         let full_output = gpu.egui_ctx.run(raw_input, |ctx| {
-            build_ui(ctx, model, selection, status);
+            build_ui(ctx, model, selection, status, camera, editor);
         });
         gpu.egui_state
             .handle_platform_output(&gpu.window, full_output.platform_output);
@@ -288,11 +333,42 @@ fn build_ui(
     model: &mut DataModel,
     selection: &mut Option<InstanceId>,
     status: &mut String,
+    camera: &mut Camera,
+    editor: &mut Editor,
 ) {
     let mut action: Option<Action> = None;
 
+    // Shortcuts, only when no text field has focus.
+    if !ctx.wants_keyboard_input() {
+        let (k1, k2, k3, del) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::Num1),
+                i.key_pressed(egui::Key::Num2),
+                i.key_pressed(egui::Key::Num3),
+                i.key_pressed(egui::Key::Delete),
+            )
+        });
+        if k1 {
+            editor.tool = Tool::Move;
+        }
+        if k2 {
+            editor.tool = Tool::Rotate;
+        }
+        if k3 {
+            editor.tool = Tool::Scale;
+        }
+        if del {
+            action = Some(Action::Delete);
+        }
+    }
+
     egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
         ui.horizontal(|ui| {
+            ui.selectable_value(&mut editor.tool, Tool::Move, "Move (1)");
+            ui.selectable_value(&mut editor.tool, Tool::Rotate, "Rotate (2)");
+            ui.selectable_value(&mut editor.tool, Tool::Scale, "Scale (3)");
+            ui.checkbox(&mut editor.snap, "Snap");
+            ui.separator();
             if ui.button("Add Part").clicked() {
                 action = Some(Action::AddPart);
             }
@@ -326,53 +402,14 @@ fn build_ui(
 
     egui::SidePanel::right("properties")
         .default_width(260.0)
+        .show(ctx, |ui| properties_panel(ui, model, *selection));
+
+    // The central panel is the 3D viewport. It's transparent, so the scene
+    // drawn underneath shows through; egui just handles its input.
+    egui::CentralPanel::default()
+        .frame(egui::Frame::default())
         .show(ctx, |ui| {
-            ui.heading("Properties");
-            ui.separator();
-
-            let Some(id) = *selection else {
-                ui.label("Nothing selected.");
-                return;
-            };
-            let Some(inst) = model.get(id) else {
-                ui.label("Nothing selected.");
-                return;
-            };
-
-            let class = inst.class;
-            let mut name = inst.name.clone();
-            ui.horizontal(|ui| {
-                ui.label("Name");
-                if ui.text_edit_singleline(&mut name).changed() {
-                    if let Some(i) = model.get_mut(id) {
-                        i.name = name.clone();
-                    }
-                }
-            });
-            ui.label(format!("Class: {class:?}"));
-            ui.separator();
-
-            let Some(p) = model.part_mut(id) else {
-                ui.label("No editable properties.");
-                return;
-            };
-
-            vec3_row(ui, "Position", &mut p.position, 0.1);
-            vec3_row(ui, "Size", &mut p.size, 0.1);
-            vec3_row(ui, "Rotation", &mut p.rotation, 1.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                let mut rgb = [p.color.r, p.color.g, p.color.b];
-                if ui.color_edit_button_srgb(&mut rgb).changed() {
-                    p.color = Color::new(rgb[0], rgb[1], rgb[2]);
-                }
-            });
-
-            // Sizes below zero flip the cube inside out.
-            p.size.x = p.size.x.max(0.01);
-            p.size.y = p.size.y.max(0.01);
-            p.size.z = p.size.z.max(0.01);
+            viewport(ui, model, selection, status, camera, editor);
         });
 
     // Apply actions after the UI is built, so nothing is borrowed twice.
@@ -380,6 +417,12 @@ fn build_ui(
         Some(Action::AddPart) => {
             let parent = container_for(model, *selection);
             if let Some(id) = model.create(Class::Part, "Part", parent) {
+                // Drop it in front of the camera instead of at the origin.
+                let spot = camera.position + camera.forward() * 12.0;
+                if let Some(p) = model.part_mut(id) {
+                    p.position = V::new(spot.x.round(), spot.y.round().max(0.5), spot.z.round());
+                    p.size = V::new(2.0, 2.0, 2.0);
+                }
                 *selection = Some(id);
                 *status = "Added a Part".to_string();
             }
@@ -395,6 +438,7 @@ fn build_ui(
             if let Some(id) = *selection {
                 if model.remove(id) {
                     *selection = None;
+                    editor.drag = None;
                     *status = "Deleted".to_string();
                 } else {
                     *status = "Can't delete that".to_string();
@@ -409,6 +453,7 @@ fn build_ui(
             Ok(loaded) => {
                 *model = loaded;
                 *selection = None;
+                editor.drag = None;
                 *status = format!("Loaded {SCENE_PATH}");
             }
             Err(e) => *status = format!("Load failed: {e}"),
@@ -416,6 +461,417 @@ fn build_ui(
         None => {}
     }
 }
+
+fn properties_panel(ui: &mut egui::Ui, model: &mut DataModel, selection: Option<InstanceId>) {
+    ui.heading("Properties");
+    ui.separator();
+
+    let Some(id) = selection else {
+        ui.label("Nothing selected.");
+        return;
+    };
+    let Some(inst) = model.get(id) else {
+        ui.label("Nothing selected.");
+        return;
+    };
+
+    let class = inst.class;
+    let mut name = inst.name.clone();
+    ui.horizontal(|ui| {
+        ui.label("Name");
+        if ui.text_edit_singleline(&mut name).changed() {
+            if let Some(i) = model.get_mut(id) {
+                i.name = name.clone();
+            }
+        }
+    });
+    ui.label(format!("Class: {class:?}"));
+    ui.separator();
+
+    let Some(p) = model.part_mut(id) else {
+        ui.label("No editable properties.");
+        return;
+    };
+
+    vec3_row(ui, "Position", &mut p.position, 0.1);
+    vec3_row(ui, "Size", &mut p.size, 0.1);
+    vec3_row(ui, "Rotation", &mut p.rotation, 1.0);
+
+    ui.horizontal(|ui| {
+        ui.label("Color");
+        let mut rgb = [p.color.r, p.color.g, p.color.b];
+        if ui.color_edit_button_srgb(&mut rgb).changed() {
+            p.color = Color::new(rgb[0], rgb[1], rgb[2]);
+        }
+    });
+
+    p.size.x = p.size.x.max(0.01);
+    p.size.y = p.size.y.max(0.01);
+    p.size.z = p.size.z.max(0.01);
+}
+
+fn viewport(
+    ui: &mut egui::Ui,
+    model: &mut DataModel,
+    selection: &mut Option<InstanceId>,
+    status: &mut String,
+    camera: &mut Camera,
+    editor: &mut Editor,
+) {
+    let (rect, response) =
+        ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+
+    // The 3D scene fills the whole window, so projection uses the screen rect.
+    let screen = ui.ctx().screen_rect();
+    let aspect = screen.width() / screen.height().max(1.0);
+
+    // Right-drag: look around.
+    if response.dragged_by(egui::PointerButton::Secondary) {
+        let d = response.drag_delta();
+        camera.yaw += d.x * 0.005;
+        camera.pitch = (camera.pitch - d.y * 0.005).clamp(-1.55, 1.55);
+    }
+
+    let vp = camera.view_proj(aspect);
+    let tool = editor.tool;
+    let snap = editor.snap;
+
+    let gizmo = selection.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool)));
+
+    // Left-drag starting on a handle: begin a gizmo drag.
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        let origin = ui.input(|i| i.pointer.press_origin());
+        if let (Some(g), Some(o), Some(id)) = (gizmo.as_ref(), origin, *selection) {
+            if let Some(axis) = g.hit_test(&vp, screen, o) {
+                if let Some(p) = model.part(id) {
+                    editor.drag = Drag::begin(g, &vp, screen, axis, o, *p, camera);
+                }
+            }
+        }
+    }
+
+    // Continue an active drag.
+    if response.dragged_by(egui::PointerButton::Primary) {
+        if let (Some(drag), Some(id)) = (editor.drag.as_mut(), *selection) {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(p) = model.part_mut(id) {
+                    drag.apply(pos, snap, p);
+                }
+            }
+        }
+    }
+
+    if response.drag_stopped() {
+        editor.drag = None;
+    }
+
+    // Plain left-click (no drag): select whatever is under the cursor,
+    // unless the click landed on a gizmo handle.
+    if response.clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            let on_handle = gizmo
+                .as_ref()
+                .and_then(|g| g.hit_test(&vp, screen, pos))
+                .is_some();
+            if !on_handle {
+                let ndc_x = (pos.x - screen.left()) / screen.width() * 2.0 - 1.0;
+                let ndc_y = 1.0 - (pos.y - screen.top()) / screen.height() * 2.0;
+                let hit = brixo_render::pick(model, camera, aspect, ndc_x, ndc_y);
+                *status = match hit.and_then(|id| model.get(id)) {
+                    Some(inst) => format!("Selected {}", inst.name),
+                    None => "Nothing there".to_string(),
+                };
+                *selection = hit;
+            }
+        }
+    }
+
+    // Draw the gizmo for the (possibly just-moved) selection.
+    if let Some(g) = selection.and_then(|id| model.part(id).map(|p| Gizmo::new(p, camera, tool))) {
+        let active = match editor.drag.as_ref() {
+            Some(d) => Some(d.axis),
+            None => response
+                .hover_pos()
+                .and_then(|pos| g.hit_test(&vp, screen, pos)),
+        };
+        g.draw(&ui.painter_at(rect), &vp, screen, active);
+    }
+}
+
+// --- gizmo -----------------------------------------------------------------
+
+struct Gizmo {
+    tool: Tool,
+    center: Vec3,
+    axes: [Vec3; 3],
+    /// Handle length in world units, scaled with distance so the gizmo
+    /// stays roughly the same size on screen.
+    length: f32,
+}
+
+impl Gizmo {
+    fn new(p: &PartProps, camera: &Camera, tool: Tool) -> Self {
+        let center = to_glam(p.position);
+        let length = (camera.position - center).length().max(1.0) * 0.18;
+        let axes = match tool {
+            // Scale works along the part's own axes.
+            Tool::Scale => {
+                let q = part_quat(p);
+                [q * Vec3::X, q * Vec3::Y, q * Vec3::Z]
+            }
+            Tool::Move | Tool::Rotate => [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        Self {
+            tool,
+            center,
+            axes,
+            length,
+        }
+    }
+
+    fn handle_end(&self, i: usize) -> Vec3 {
+        self.center + self.axes[i] * self.length
+    }
+
+    fn ring_points(&self, i: usize, vp: &Mat4, screen: egui::Rect) -> Vec<egui::Pos2> {
+        let u = self.axes[(i + 1) % 3];
+        let v = self.axes[(i + 2) % 3];
+        (0..=64)
+            .filter_map(|k| {
+                let t = k as f32 / 64.0 * TAU;
+                project(vp, screen, self.center + (u * t.cos() + v * t.sin()) * self.length)
+            })
+            .collect()
+    }
+
+    /// Which handle (0 = X, 1 = Y, 2 = Z) is under `pos`, if any.
+    fn hit_test(&self, vp: &Mat4, screen: egui::Rect, pos: egui::Pos2) -> Option<usize> {
+        const THRESHOLD: f32 = 10.0;
+        let mut best: Option<(f32, usize)> = None;
+
+        for i in 0..3 {
+            let dist = match self.tool {
+                Tool::Rotate => polyline_distance(&self.ring_points(i, vp, screen), pos),
+                Tool::Move | Tool::Scale => {
+                    let (Some(a), Some(b)) = (
+                        project(vp, screen, self.center),
+                        project(vp, screen, self.handle_end(i)),
+                    ) else {
+                        continue;
+                    };
+                    segment_distance(pos, a, b)
+                }
+            };
+            if dist < THRESHOLD && best.map_or(true, |(bd, _)| dist < bd) {
+                best = Some((dist, i));
+            }
+        }
+        best.map(|(_, i)| i)
+    }
+
+    fn draw(&self, painter: &egui::Painter, vp: &Mat4, screen: egui::Rect, active: Option<usize>) {
+        let colors = [
+            egui::Color32::from_rgb(230, 70, 70),
+            egui::Color32::from_rgb(80, 200, 90),
+            egui::Color32::from_rgb(70, 130, 240),
+        ];
+        let highlight = egui::Color32::from_rgb(255, 210, 60);
+
+        let Some(c) = project(vp, screen, self.center) else {
+            return;
+        };
+
+        for i in 0..3 {
+            let is_active = active == Some(i);
+            let color = if is_active { highlight } else { colors[i] };
+            let stroke = egui::Stroke::new(if is_active { 4.0 } else { 2.5 }, color);
+
+            match self.tool {
+                Tool::Rotate => {
+                    let points = self.ring_points(i, vp, screen);
+                    if points.len() > 1 {
+                        painter.add(egui::Shape::line(points, stroke));
+                    }
+                }
+                Tool::Move | Tool::Scale => {
+                    let Some(e) = project(vp, screen, self.handle_end(i)) else {
+                        continue;
+                    };
+                    painter.line_segment([c, e], stroke);
+                    if self.tool == Tool::Move {
+                        painter.circle_filled(e, 6.0, color);
+                    } else {
+                        painter.rect_filled(
+                            egui::Rect::from_center_size(e, egui::vec2(11.0, 11.0)),
+                            0.0,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+        painter.circle_filled(c, 3.0, egui::Color32::WHITE);
+    }
+}
+
+impl Drag {
+    fn begin(
+        g: &Gizmo,
+        vp: &Mat4,
+        screen: egui::Rect,
+        axis: usize,
+        origin: egui::Pos2,
+        start: PartProps,
+        camera: &Camera,
+    ) -> Option<Self> {
+        let c = project(vp, screen, g.center)?;
+        let e = project(vp, screen, g.handle_end(axis))?;
+        let along = e - c;
+        let len = along.length();
+
+        // An axis pointing straight at the camera can't be dragged along.
+        if g.tool != Tool::Rotate && len < 2.0 {
+            return None;
+        }
+
+        let facing = if g.axes[axis].dot(camera.position - g.center) > 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+
+        Some(Self {
+            tool: g.tool,
+            axis,
+            world_axis: g.axes[axis],
+            start,
+            start_pointer: origin,
+            screen_dir: if len > 0.0 { along / len } else { egui::Vec2::X },
+            units_per_px: g.length / len.max(1e-3),
+            center_screen: c,
+            facing,
+            last_angle: (origin - c).angle(),
+            accum: 0.0,
+        })
+    }
+
+    fn apply(&mut self, pos: egui::Pos2, snap: bool, p: &mut PartProps) {
+        match self.tool {
+            Tool::Move => {
+                let mut amount = (pos - self.start_pointer).dot(self.screen_dir) * self.units_per_px;
+                if snap {
+                    amount = amount.round();
+                }
+                p.position = from_glam(to_glam(self.start.position) + self.world_axis * amount);
+            }
+
+            Tool::Scale => {
+                let mut amount = (pos - self.start_pointer).dot(self.screen_dir) * self.units_per_px;
+                if snap {
+                    amount = amount.round();
+                }
+                let start_size = component(self.start.size, self.axis);
+                let new_size = (start_size + amount).max(0.1);
+                let grown = new_size - start_size;
+                set_component(&mut p.size, self.axis, new_size);
+                // Grow toward the handle: the opposite face stays put.
+                p.position =
+                    from_glam(to_glam(self.start.position) + self.world_axis * (grown * 0.5));
+            }
+
+            Tool::Rotate => {
+                let angle = (pos - self.center_screen).angle();
+                let mut delta = angle - self.last_angle;
+                if delta > PI {
+                    delta -= TAU;
+                } else if delta < -PI {
+                    delta += TAU;
+                }
+                self.accum += delta;
+                self.last_angle = angle;
+
+                let mut degrees = (self.accum * self.facing).to_degrees();
+                if snap {
+                    degrees = (degrees / 15.0).round() * 15.0;
+                }
+
+                // Rotate about the world axis as a quaternion, then store as Euler.
+                let q = Quat::from_axis_angle(self.world_axis, degrees.to_radians())
+                    * part_quat(&self.start);
+                let (y, x, z) = q.to_euler(EulerRot::YXZ);
+                p.rotation = V::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+            }
+        }
+    }
+}
+
+// --- math helpers ----------------------------------------------------------
+
+fn to_glam(v: V) -> Vec3 {
+    Vec3::new(v.x, v.y, v.z)
+}
+
+fn from_glam(v: Vec3) -> V {
+    V::new(v.x, v.y, v.z)
+}
+
+fn component(v: V, i: usize) -> f32 {
+    match i {
+        0 => v.x,
+        1 => v.y,
+        _ => v.z,
+    }
+}
+
+fn set_component(v: &mut V, i: usize, value: f32) {
+    match i {
+        0 => v.x = value,
+        1 => v.y = value,
+        _ => v.z = value,
+    }
+}
+
+/// Must match the rotation order the renderer uses.
+fn part_quat(p: &PartProps) -> Quat {
+    Quat::from_euler(
+        EulerRot::YXZ,
+        p.rotation.y.to_radians(),
+        p.rotation.x.to_radians(),
+        p.rotation.z.to_radians(),
+    )
+}
+
+/// World point to screen position (in egui points). None if behind the camera.
+fn project(vp: &Mat4, screen: egui::Rect, p: Vec3) -> Option<egui::Pos2> {
+    let clip = *vp * p.extend(1.0);
+    if clip.w <= 1e-4 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    Some(egui::pos2(
+        screen.left() + (ndc.x + 1.0) * 0.5 * screen.width(),
+        screen.top() + (1.0 - ndc.y) * 0.5 * screen.height(),
+    ))
+}
+
+fn segment_distance(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_sq();
+    if len_sq < 1e-6 {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    (p - (a + ab * t)).length()
+}
+
+fn polyline_distance(points: &[egui::Pos2], p: egui::Pos2) -> f32 {
+    points
+        .windows(2)
+        .map(|w| segment_distance(p, w[0], w[1]))
+        .fold(f32::INFINITY, f32::min)
+}
+
+// --- explorer --------------------------------------------------------------
 
 /// New instances go inside the selection when it can hold children,
 /// otherwise beside it.
@@ -478,7 +934,8 @@ impl ApplicationHandler for Studio {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        // Let egui see the event first; it tells us whether it used it.
+        // egui sees every event first. Mouse input is handled inside the UI
+        // pass now; winit only tracks movement keys for the camera.
         let consumed = if let Some(gpu) = self.gpu.as_mut() {
             let window = gpu.window.clone();
             gpu.egui_state.on_window_event(&window, &event).consumed
@@ -496,56 +953,22 @@ impl ApplicationHandler for Studio {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                if consumed {
-                    return;
-                }
                 if let PhysicalKey::Code(code) = event.physical_key {
                     match event.state {
-                        ElementState::Pressed => {
-                            self.keys.insert(code);
-                        }
+                        // Always honour releases so keys can't get stuck
+                        // when focus moves into a text field.
                         ElementState::Released => {
                             self.keys.remove(&code);
                         }
+                        ElementState::Pressed if !consumed => {
+                            self.keys.insert(code);
+                        }
+                        ElementState::Pressed => {}
                     }
                 }
             }
 
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = (position.x as f32, position.y as f32);
-            }
-
-            WindowEvent::MouseInput { button, state, .. } => {
-                // Always let go of mouse-look, even if the release lands on a panel.
-                if button == MouseButton::Right && state == ElementState::Released {
-                    self.looking = false;
-                }
-                if consumed {
-                    return;
-                }
-                if button == MouseButton::Right && state == ElementState::Pressed {
-                    self.looking = true;
-                }
-                if button == MouseButton::Left && state == ElementState::Pressed {
-                    let dims = self.gpu.as_ref().map(|g| (g.config.width, g.config.height));
-                    if let Some((w, h)) = dims {
-                        let ndc_x = 2.0 * self.cursor.0 / w as f32 - 1.0;
-                        let ndc_y = 1.0 - 2.0 * self.cursor.1 / h as f32;
-                        let hit = brixo_render::pick(
-                            &self.model,
-                            &self.camera,
-                            w as f32 / h as f32,
-                            ndc_x,
-                            ndc_y,
-                        );
-                        self.status = match hit.and_then(|id| self.model.get(id)) {
-                            Some(inst) => format!("Selected {}", inst.name),
-                            None => "Nothing there".to_string(),
-                        };
-                        self.selection = hit;
-                    }
-                }
-            }
+            WindowEvent::Focused(false) => self.keys.clear(),
 
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
@@ -561,17 +984,6 @@ impl ApplicationHandler for Studio {
             }
 
             _ => {}
-        }
-    }
-
-    fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            if self.looking {
-                let sensitivity = 0.003;
-                self.camera.yaw += delta.0 as f32 * sensitivity;
-                self.camera.pitch -= delta.1 as f32 * sensitivity;
-                self.camera.pitch = self.camera.pitch.clamp(-1.55, 1.55);
-            }
         }
     }
 }
