@@ -107,6 +107,60 @@ impl Default for ScriptProps {
     }
 }
 
+/// The expression drawn on a player's face panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Face {
+    #[default]
+    Smile,
+    Happy,
+    Surprised,
+    Determined,
+}
+
+impl Face {
+    pub const ALL: [Face; 4] = [Face::Smile, Face::Happy, Face::Surprised, Face::Determined];
+
+    /// The name scripts use: `player.face = "surprised"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Face::Smile => "smile",
+            Face::Happy => "happy",
+            Face::Surprised => "surprised",
+            Face::Determined => "determined",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Face> {
+        Face::ALL.into_iter().find(|f| f.name() == name)
+    }
+}
+
+/// How the camera follows a player. Games choose; `Default` lets the
+/// player scroll between third and first person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CameraMode {
+    #[default]
+    Default,
+    FirstPerson,
+    ThirdPerson,
+}
+
+impl CameraMode {
+    pub const ALL: [CameraMode; 3] = [CameraMode::Default, CameraMode::FirstPerson, CameraMode::ThirdPerson];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CameraMode::Default => "default",
+            CameraMode::FirstPerson => "first_person",
+            CameraMode::ThirdPerson => "third_person",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<CameraMode> {
+        CameraMode::ALL.into_iter().find(|m| m.name() == name)
+    }
+}
+
 /// A player's character during play. Players aren't saved with the scene;
 /// the game creates one at a SpawnLocation when Play starts.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -120,6 +174,12 @@ pub struct PlayerProps {
     pub walk_speed: f32,
     /// Upward speed when jumping, in studs per second.
     pub jump_power: f32,
+    pub face: Face,
+    pub skin_color: Color,
+    pub shirt_color: Color,
+    pub pants_color: Color,
+    pub shoes_color: Color,
+    pub camera_mode: CameraMode,
 }
 
 impl Default for PlayerProps {
@@ -134,7 +194,13 @@ impl Default for PlayerProps {
             health: 100.0,
             max_health: 100.0,
             walk_speed: 16.0,
-            jump_power: 30.0,
+            jump_power: 22.0,
+            face: Face::Smile,
+            skin_color: Color::new(242, 194, 123),
+            shirt_color: Color::new(47, 158, 143),
+            pants_color: Color::new(74, 85, 120),
+            shoes_color: Color::new(43, 43, 51),
+            camera_mode: CameraMode::Default,
         }
     }
 }
@@ -722,6 +788,17 @@ mod tests {
         dm.body_mut(player).unwrap().position.y = 7.0;
         assert_eq!(dm.player(player).unwrap().body.position.y, 7.0);
         assert!(dm.body(spawn).is_some());
+    }
+
+    #[test]
+    fn faces_and_camera_modes_have_script_names() {
+        for f in Face::ALL {
+            assert_eq!(Face::from_name(f.name()), Some(f));
+        }
+        for m in CameraMode::ALL {
+            assert_eq!(CameraMode::from_name(m.name()), Some(m));
+        }
+        assert_eq!(Face::from_name("grumpy"), None);
     }
 
     #[test]

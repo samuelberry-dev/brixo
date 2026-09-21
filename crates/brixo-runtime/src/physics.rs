@@ -40,6 +40,16 @@ pub struct PlayerInput {
 /// The character's capsule: 5 studs tall, 2 wide (radius 1).
 const CHARACTER_RADIUS: f32 = 1.0;
 const CHARACTER_HALF_HEIGHT: f32 = 2.5 - CHARACTER_RADIUS;
+/// How long after walking off a ledge you can still jump.
+pub const COYOTE_TIME: f32 = 0.12;
+/// How long a jump press is remembered before landing.
+pub const JUMP_BUFFER: f32 = 0.12;
+/// Gravity is multiplied by this while rising with jump held, so holding
+/// jumps higher than tapping: the floaty, forgiving feel.
+pub const JUMP_HOLD_GRAVITY: f32 = 0.6;
+/// Fastest the character falls, studs per second.
+pub const MAX_FALL_SPEED: f32 = 70.0;
+
 /// How hard the character shoves loose parts it walks into.
 const CHARACTER_MASS: f32 = 60.0;
 
@@ -50,6 +60,11 @@ struct Character {
     controller: KinematicCharacterController,
     vertical_speed: f32,
     grounded: bool,
+    /// Time left to jump after leaving the ground.
+    coyote: f32,
+    /// Time left on a remembered jump press.
+    jump_buffer: f32,
+    jump_was_held: bool,
     /// Facing direction, radians around Y.
     yaw: f32,
     /// Where we last put the character, to spot scripts teleporting it.
@@ -246,6 +261,9 @@ impl Physics {
             controller,
             vertical_speed: 0.0,
             grounded: false,
+            coyote: 0.0,
+            jump_buffer: 0.0,
+            jump_was_held: false,
             yaw: 0.0,
             synced_position: position,
             touching: Default::default(),
@@ -266,17 +284,38 @@ impl Physics {
             c.yaw = dir.x.atan2(dir.z);
         }
 
-        if c.grounded && input.jump {
+        // A fresh press is remembered briefly, so pressing just before
+        // landing still jumps.
+        if input.jump && !c.jump_was_held {
+            c.jump_buffer = JUMP_BUFFER;
+        }
+        c.jump_was_held = input.jump;
+        // Coyote time: a moment after leaving a ledge where jumping still works.
+        if c.grounded {
+            c.coyote = COYOTE_TIME;
+        }
+        // Holding jump keeps hopping on landing, like Roblox.
+        let wants_jump = c.jump_buffer > 0.0 || (input.jump && c.grounded);
+        if wants_jump && c.coyote > 0.0 && c.vertical_speed <= 0.0 {
             c.vertical_speed = player.jump_power;
             c.grounded = false;
+            c.coyote = 0.0;
+            c.jump_buffer = 0.0;
         }
+        c.jump_buffer = (c.jump_buffer - dt).max(0.0);
+        if !c.grounded {
+            c.coyote = (c.coyote - dt).max(0.0);
+        }
+
         // No gravity while standing: pushing down into the ground makes the
         // controller snag on it instead of sliding along. Snap-to-ground
         // keeps the character on slopes and small drops instead.
         if c.grounded {
             c.vertical_speed = c.vertical_speed.max(0.0);
         } else {
-            c.vertical_speed -= GRAVITY * dt;
+            let rising_and_held = c.vertical_speed > 0.0 && input.jump;
+            let g = if rising_and_held { GRAVITY * JUMP_HOLD_GRAVITY } else { GRAVITY };
+            c.vertical_speed = (c.vertical_speed - g * dt).max(-MAX_FALL_SPEED);
         }
 
         let desired = dir * player.walk_speed * dt + Vec3::Y * c.vertical_speed * dt;

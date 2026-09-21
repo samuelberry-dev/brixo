@@ -30,6 +30,54 @@ const TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
 /// The error a paused wait() gets when the game stops. Never shown.
 const STOPPED: &str = "the game was stopped";
 
+// --- random avatar colours ---
+
+/// Colours picked for each slot so any combination looks good together:
+/// a range of skin tones, bright shirts, darker pants, neutral shoes.
+pub const SKIN_TONES: [(u8, u8, u8); 7] = [
+    (255, 219, 172), (241, 194, 125), (224, 172, 105), (198, 134, 66),
+    (141, 85, 36), (101, 67, 45), (244, 193, 93),
+];
+pub const SHIRT_COLORS: [(u8, u8, u8); 8] = [
+    (47, 158, 143), (232, 112, 74), (127, 119, 221), (242, 183, 5),
+    (216, 90, 48), (55, 138, 221), (212, 83, 126), (99, 153, 34),
+];
+pub const PANTS_COLORS: [(u8, u8, u8); 6] = [
+    (74, 85, 120), (47, 58, 79), (59, 109, 17), (31, 78, 121), (68, 68, 65), (114, 36, 62),
+];
+pub const SHOES_COLORS: [(u8, u8, u8); 5] = [
+    (43, 43, 51), (95, 94, 90), (153, 60, 29), (230, 228, 220), (60, 40, 30),
+];
+
+/// A tiny xorshift generator; the avatar doesn't need anything fancier.
+struct Rng(u64);
+
+impl Rng {
+    fn seeded() -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1);
+        Rng(nanos | 1)
+    }
+
+    fn pick<T: Copy>(&mut self, items: &[T]) -> T {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        items[(self.0 % items.len() as u64) as usize]
+    }
+}
+
+fn random_colors(p: &mut brixo_core::PlayerProps, rng: &mut Rng) {
+    let c = |(r, g, b): (u8, u8, u8)| brixo_core::Color::new(r, g, b);
+    p.skin_color = c(rng.pick(&SKIN_TONES));
+    p.shirt_color = c(rng.pick(&SHIRT_COLORS));
+    p.pants_color = c(rng.pick(&PANTS_COLORS));
+    p.shoes_color = c(rng.pick(&SHOES_COLORS));
+    p.body.color = p.shirt_color;
+}
+
 /// Players below this height have fallen off the world and respawn.
 pub const FALL_LIMIT: f32 = -60.0;
 
@@ -160,6 +208,7 @@ impl Game {
         if let Some(id) = world.create(Class::Player, "Player", root) {
             if let Some(p) = world.player_mut(id) {
                 p.body.position = self.spawn_point;
+                random_colors(p, &mut Rng::seeded());
             }
             self.player = Some(id);
         }
@@ -281,6 +330,9 @@ impl Game {
         }));
         if let Some(p) = parent {
             base.define_global("self", object(p));
+        }
+        if let Some(player) = self.player {
+            base.define_global("camera", crate::host::facet_object(player, crate::host::FACET_CAMERA));
         }
 
         self.scripts.push(ScriptInfo {

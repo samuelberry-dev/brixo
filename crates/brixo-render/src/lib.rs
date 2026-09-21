@@ -1,5 +1,7 @@
 //! Draws a Brixo DataModel: every Part becomes an instanced cube.
 
+mod avatar;
+
 use brixo_core::{DataModel, Vec3 as BVec3};
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
@@ -223,11 +225,14 @@ fn to_glam(v: BVec3) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
 }
 
+/// Instances for every part, plus the players (drawn separately, as
+/// avatars) with their highlight values.
 fn build_instances(
     model: &DataModel,
     selected: Option<brixo_core::InstanceId>,
-) -> Vec<InstanceRaw> {
+) -> (Vec<InstanceRaw>, Vec<(brixo_core::InstanceId, brixo_core::PlayerProps, f32)>) {
     let mut out = Vec::new();
+    let mut players = Vec::new();
     let mut stack = vec![model.root()];
     while let Some(id) = stack.pop() {
         let Some(inst) = model.get(id) else { continue };
@@ -235,7 +240,7 @@ fn build_instances(
 
         let highlight = if selected == Some(id) { 1.0 } else { 0.0 };
         if let Some(player) = model.player(id) {
-            push_player(&mut out, &player.body, highlight);
+            players.push((id, *player, highlight));
             continue;
         }
         // Parts and SpawnLocations.
@@ -260,37 +265,37 @@ fn build_instances(
             highlight,
         });
     }
-    out
+    (out, players)
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> [f32; 3] {
     [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
 }
 
-/// A blocky figure, built from six boxes around the character's centre
-/// (which is 2.5 studs above its feet).
-fn push_player(out: &mut Vec<InstanceRaw>, body: &brixo_core::PartProps, highlight: f32) {
-    let skin = rgb(245, 205, 70);
-    let shirt = rgb(body.color.r, body.color.g, body.color.b);
-    let pants = rgb(80, 160, 70);
-    let pieces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
-        ([-0.5, -1.5, 0.0], [0.95, 2.0, 1.0], pants), // left leg
-        ([0.5, -1.5, 0.0], [0.95, 2.0, 1.0], pants),  // right leg
-        ([0.0, 0.5, 0.0], [2.0, 2.0, 1.0], shirt),    // torso
-        ([-1.5, 0.5, 0.0], [0.95, 2.0, 1.0], skin),   // left arm
-        ([1.5, 0.5, 0.0], [0.95, 2.0, 1.0], skin),    // right arm
-        ([0.0, 2.0, 0.0], [1.2, 1.0, 1.2], skin),     // head
-    ];
-    let base = Mat4::from_translation(to_glam(body.position))
-        * Mat4::from_rotation_y(body.rotation.y.to_radians());
-    for (offset, size, color) in pieces {
-        let m = base * Mat4::from_translation(Vec3::from(offset)) * Mat4::from_scale(Vec3::from(size));
-        out.push(InstanceRaw {
-            model: m.to_cols_array_2d(),
-            color,
-            highlight,
-        });
+/// One avatar mesh for one player: they all share the player's transform
+/// and take their colour from the mesh's slot.
+fn avatar_instance(p: &brixo_core::PlayerProps, slot: avatar::Slot, highlight: f32) -> InstanceRaw {
+    let c = |c: brixo_core::Color| rgb(c.r, c.g, c.b);
+    let color = match slot {
+        avatar::Slot::Skin => c(p.skin_color),
+        avatar::Slot::Shirt => c(p.shirt_color),
+        avatar::Slot::Pants => c(p.pants_color),
+        avatar::Slot::Shoes => c(p.shoes_color),
+        avatar::Slot::Ink => rgb(35, 35, 43),
+        avatar::Slot::Shine => rgb(255, 255, 255),
+    };
+    let m = Mat4::from_translation(to_glam(p.body.position)) * Mat4::from_rotation_y(p.body.rotation.y.to_radians());
+    InstanceRaw {
+        model: m.to_cols_array_2d(),
+        color,
+        highlight,
     }
+}
+
+struct AvatarDraw {
+    slot: avatar::Slot,
+    face: Option<brixo_core::Face>,
+    vertices: std::ops::Range<u32>,
 }
 
 // --- renderer --------------------------------------------------------------
@@ -300,6 +305,11 @@ pub struct SceneRenderer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    /// All the avatar meshes, one after another.
+    avatar_buffer: wgpu::Buffer,
+    avatar_draws: Vec<AvatarDraw>,
+    /// A player not to draw: your own character, in first person.
+    pub hidden_player: Option<brixo_core::InstanceId>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     depth_view: wgpu::TextureView,
@@ -322,6 +332,23 @@ impl SceneRenderer {
             label: Some("cube indices"),
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let mut avatar_vertices: Vec<Vertex> = Vec::new();
+        let mut avatar_draws = Vec::new();
+        for mesh in avatar::meshes() {
+            let start = avatar_vertices.len() as u32;
+            avatar_vertices.extend(mesh.vertices);
+            avatar_draws.push(AvatarDraw {
+                slot: mesh.slot,
+                face: mesh.face,
+                vertices: start..avatar_vertices.len() as u32,
+            });
+        }
+        let avatar_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("avatar vertices"),
+            contents: bytemuck::cast_slice(&avatar_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
         });
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -408,6 +435,9 @@ impl SceneRenderer {
             vertex_buffer,
             index_buffer,
             index_count: indices.len() as u32,
+            avatar_buffer,
+            avatar_draws,
+            hidden_player: None,
             camera_buffer,
             camera_bind_group,
             depth_view,
@@ -438,7 +468,23 @@ impl SceneRenderer {
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
 
-        let instances = build_instances(model, selected);
+        let (mut instances, players) = build_instances(model, selected);
+        let part_count = instances.len() as u32;
+        // Avatar instances go after the parts, grouped by mesh.
+        let mut avatar_batches = Vec::new();
+        for (i, draw) in self.avatar_draws.iter().enumerate() {
+            let start = instances.len() as u32;
+            for (id, p, highlight) in &players {
+                if draw.face.is_some_and(|f| f != p.face) || self.hidden_player == Some(*id) {
+                    continue;
+                }
+                instances.push(avatar_instance(p, draw.slot, *highlight));
+            }
+            let end = instances.len() as u32;
+            if end > start {
+                avatar_batches.push((i, start..end));
+            }
+        }
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("part instances"),
             contents: bytemuck::cast_slice(&instances),
@@ -478,7 +524,13 @@ impl SceneRenderer {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_vertex_buffer(1, instance_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(0..self.index_count, 0, 0..instances.len() as u32);
+            if part_count > 0 {
+                pass.draw_indexed(0..self.index_count, 0, 0..part_count);
+            }
+            pass.set_vertex_buffer(0, self.avatar_buffer.slice(..));
+            for (i, batch) in avatar_batches {
+                pass.draw(self.avatar_draws[i].vertices.clone(), batch);
+            }
         }
     }
 }

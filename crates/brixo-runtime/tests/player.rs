@@ -88,21 +88,130 @@ fn walking_moves_at_walk_speed() {
     assert!((z - 16.0).abs() < 1.5, "walked {z} studs in a second at speed 16");
 }
 
-#[test]
-fn jumping_goes_up_and_comes_back_down() {
+/// Highest point reached after pressing jump for `hold` seconds.
+fn jump_height(hold: f64) -> f32 {
     let mut game = Game::start(arena());
     idle(&mut game, 0.5);
     let start = pos(&game).y;
-    run(&mut game, 0.05, PlayerInput { jump: true, ..Default::default() });
     let mut peak = start;
-    for _ in 0..60 {
+    let frames = (hold / FRAME).round() as usize;
+    for i in 0..120 {
+        let input = PlayerInput { jump: i < frames, ..Default::default() };
+        run(&mut game, FRAME, input);
+        peak = peak.max(pos(&game).y);
+    }
+    idle(&mut game, 1.0);
+    assert!((pos(&game).y - start).abs() < 0.2, "landed back");
+    peak - start
+}
+
+#[test]
+fn a_tapped_jump_is_a_short_hop() {
+    // v^2 / 2g = 22^2 / 70, about 6.9 studs.
+    let h = jump_height(0.05);
+    assert!((h - 7.0).abs() < 0.8, "tapped jump went {h}");
+}
+
+#[test]
+fn holding_jump_goes_higher() {
+    let tap = jump_height(0.05);
+    let hold = jump_height(1.5);
+    // 22^2 / (2 * 35 * 0.6), about 11.5 studs.
+    assert!(hold > tap + 3.0 && (hold - 11.5).abs() < 1.0, "tap {tap}, hold {hold}");
+}
+
+/// A 6-stud-high ledge ending at z = 6, the player standing on it.
+fn ledge() -> DataModel {
+    let mut dm = arena();
+    let spawn = dm.find_first("Spawn").unwrap();
+    dm.part_mut(spawn).unwrap().position = Vec3::new(0.0, 6.5, 0.0);
+    block(&mut dm, "Ledge", Vec3::new(0.0, 3.0, 0.0), Vec3::new(12.0, 6.0, 12.0));
+    dm
+}
+
+#[test]
+fn you_can_still_jump_just_after_walking_off_a_ledge() {
+    let mut game = Game::start(ledge());
+    idle(&mut game, 0.5);
+    let top = pos(&game).y;
+    // Walk until we've just left the edge.
+    while game.player_grounded() {
+        run(&mut game, FRAME, forward());
+    }
+    run(&mut game, 0.05, forward()); // a moment of falling
+    run(&mut game, 0.05, PlayerInput { jump: true, move_z: 1.0, ..Default::default() });
+    idle(&mut game, 0.2);
+    assert!(pos(&game).y > top + 2.0, "coyote jump should rise above the ledge: {}", pos(&game).y);
+}
+
+#[test]
+fn a_jump_pressed_just_before_landing_still_happens() {
+    let mut game = Game::start(ledge());
+    idle(&mut game, 0.5);
+    // Walk off the ledge and fall, with no coyote jump.
+    run(&mut game, 0.8, forward());
+    while !game.player_grounded() {
+        let y = pos(&game).y;
+        // About 0.07s above the floor: press jump once, then let go.
+        if y < 3.4 {
+            run(&mut game, FRAME, PlayerInput { jump: true, ..Default::default() });
+            break;
+        }
+        idle(&mut game, FRAME);
+    }
+    let mut peak: f32 = 0.0;
+    for _ in 0..40 {
         idle(&mut game, FRAME);
         peak = peak.max(pos(&game).y);
     }
-    // v^2 / 2g = 30^2 / 70, about 12.9 studs.
-    assert!((peak - start - 12.9).abs() < 1.5, "jumped {}", peak - start);
-    idle(&mut game, 1.5);
-    assert!((pos(&game).y - start).abs() < 0.2, "landed back");
+    assert!(peak > 6.0, "buffered jump should bounce back up, peaked at {peak}");
+}
+
+#[test]
+fn walking_off_a_ledge_without_jumping_just_falls() {
+    let mut game = Game::start(ledge());
+    idle(&mut game, 0.5);
+    run(&mut game, 1.0, forward());
+    idle(&mut game, 1.0);
+    assert!((pos(&game).y - 2.5).abs() < 0.2, "on the floor below: {}", pos(&game).y);
+}
+
+#[test]
+fn scripts_set_the_face_colors_and_camera() {
+    let mut dm = arena();
+    let root = dm.root();
+    let ctl = dm.create(Class::Folder, "Control", root).unwrap();
+    script(&mut dm, ctl, r#"
+p = find("Player")
+p.face = "surprised"
+p.shirt_color = {r = 200, g = 50, b = 50}
+p.pants_color.g = 99
+camera.mode = "first_person"
+print(p.face + " " + p.shirt_color.r + " " + p.pants_color.g + " " + camera.mode)
+p.face = "grumpy"
+"#);
+    let game = Game::start(dm);
+    let log = game.take_log();
+    assert_eq!(log[0].text, "surprised 200 99 first_person");
+    assert!(log[1].is_error && log[1].text.contains("no face called 'grumpy'"), "{:?}", log[1]);
+    let world = game.world();
+    let p = world.player(world.find_first("Player").unwrap()).unwrap();
+    assert_eq!(p.face, brixo_core::Face::Surprised);
+    assert_eq!(p.camera_mode, brixo_core::CameraMode::FirstPerson);
+    assert_eq!((p.shirt_color.r, p.shirt_color.g, p.shirt_color.b), (200, 50, 50));
+}
+
+#[test]
+fn players_get_colors_from_the_palettes() {
+    use brixo_runtime::{PANTS_COLORS, SHIRT_COLORS, SHOES_COLORS, SKIN_TONES};
+    let game = Game::start(arena());
+    let world = game.world();
+    let p = world.player(world.find_first("Player").unwrap()).unwrap();
+    let rgb = |c: brixo_core::Color| (c.r, c.g, c.b);
+    assert!(SKIN_TONES.contains(&rgb(p.skin_color)));
+    assert!(SHIRT_COLORS.contains(&rgb(p.shirt_color)));
+    assert!(PANTS_COLORS.contains(&rgb(p.pants_color)));
+    assert!(SHOES_COLORS.contains(&rgb(p.shoes_color)));
 }
 
 #[test]

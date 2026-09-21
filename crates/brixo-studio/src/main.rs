@@ -5,7 +5,11 @@ use std::time::Instant;
 
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
+use brixo_core::CameraMode;
 use brixo_runtime::{Game, LogLine, PlayerInput};
+
+/// Closest the third-person camera gets before switching to first person.
+const MIN_FOLLOW_DISTANCE: f32 = 6.0;
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -311,15 +315,33 @@ impl Studio {
     fn frame(&mut self, dt: f32) {
         // Advance the running game before drawing it.
         let input = self.player_input();
+        let mut first_person_player = None;
         if let Some(game) = self.game.as_mut() {
             game.set_input(input);
             game.step(dt as f64);
             self.output.extend(game.take_log());
             trim_output(&mut self.output);
-            // Third-person camera: orbit with right-drag, zoom with the wheel.
-            if let Some(target) = game.player_position() {
-                let target = target + Vec3::Y * 1.5;
-                self.camera.position = target - self.camera.forward() * self.editor.follow_distance;
+            // The game picks the camera mode; by default the wheel zooms
+            // between third person and (all the way in) first person.
+            if let Some(center) = game.player_position() {
+                let mode = game
+                    .player_id()
+                    .and_then(|id| game.world().player(id).map(|p| p.camera_mode))
+                    .unwrap_or_default();
+                let first_person = match mode {
+                    CameraMode::FirstPerson => true,
+                    CameraMode::ThirdPerson => false,
+                    CameraMode::Default => self.editor.follow_distance == 0.0,
+                };
+                first_person_player = if first_person { game.player_id() } else { None };
+                if first_person {
+                    // At eye level. Your own character is hidden, like in
+                    // Roblox, so it doesn't block the view.
+                    self.camera.position = center + Vec3::Y * 1.9;
+                } else {
+                    let distance = self.editor.follow_distance.max(MIN_FOLLOW_DISTANCE);
+                    self.camera.position = center + Vec3::Y * 1.5 - self.camera.forward() * distance;
+                }
             }
         }
 
@@ -381,6 +403,7 @@ impl Studio {
                     label: Some("frame encoder"),
                 });
 
+            gpu.scene.hidden_player = first_person_player;
             gpu.scene.render(
                 &gpu.device,
                 &gpu.queue,
@@ -947,10 +970,19 @@ fn viewport(
     let screen = ui.ctx().screen_rect();
     let aspect = screen.width() / screen.height().max(1.0);
 
-    // Scroll wheel: zoom the follow camera during Play.
+    // Scroll wheel: zoom the follow camera during Play. Zooming in past
+    // the closest distance switches to first person; zooming out leaves it.
     if playing && response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        editor.follow_distance = (editor.follow_distance - scroll * 0.05).clamp(6.0, 60.0);
+        if scroll != 0.0 {
+            let d = editor.follow_distance;
+            editor.follow_distance = if d == 0.0 {
+                if scroll < 0.0 { MIN_FOLLOW_DISTANCE } else { 0.0 }
+            } else {
+                let next = d - scroll * 0.05;
+                if next < MIN_FOLLOW_DISTANCE - 1.0 { 0.0 } else { next.clamp(MIN_FOLLOW_DISTANCE, 60.0) }
+            };
+        }
     }
 
     // Right-drag: look around (during Play, orbit the player).
@@ -1488,7 +1520,7 @@ fn demo_scene() -> DataModel {
         p.can_collide = false;
     }
     let s = dm.create(Class::Script, "Collect", coin).unwrap();
-    dm.script_mut(s).unwrap().source = "-- Walk into me! Can collide is off, so you pass through.\non touched(other)\n    if other.class == \"player\" then\n        print(other.name + \" grabbed a coin!\")\n        destroy(self)\n    end\nend\n\nevery 0.03 seconds\n    self.rotation.y += 5\nend\n".to_string();
+    dm.script_mut(s).unwrap().source = "-- Walk into me! Can collide is off, so you pass through.\non touched(other)\n    if other.class == \"player\" then\n        print(other.name + \" grabbed a coin!\")\n        other.face = \"happy\"\n        destroy(self)\n    end\nend\n\nevery 0.03 seconds\n    self.rotation.y += 5\nend\n".to_string();
 
     let lava = dm.create(Class::Part, "Lava", root).unwrap();
     {
