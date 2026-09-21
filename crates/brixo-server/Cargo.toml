@@ -1,0 +1,10 @@
+[package]
+name = "brixo-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brixo-core = { path = "../brixo-core" }
+brixo-runtime = { path = "../brixo-runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

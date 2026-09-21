@@ -198,6 +198,9 @@ struct Editor {
     follow: FollowCamera,
     /// What the game is called when published to the player.
     publish_name: String,
+    /// How many players Play starts. More than one hosts a local server
+    /// and opens a Brixo Player window for each.
+    players: u32,
 }
 
 impl Default for Editor {
@@ -210,11 +213,45 @@ impl Default for Editor {
             prop_session: false,
             follow: FollowCamera::default(),
             publish_name: "My Game".to_string(),
+            players: 1,
         }
     }
 }
 
 // --- app -------------------------------------------------------------------
+
+/// A multiplayer test running from the studio.
+struct Hosted {
+    server: brixo_server::ServerHandle,
+    windows: Vec<std::process::Child>,
+}
+
+impl Drop for Hosted {
+    fn drop(&mut self) {
+        for w in &mut self.windows {
+            let _ = w.kill();
+        }
+    }
+}
+
+/// Starts a server on the scene and opens `players` player windows on it.
+fn host(model: &DataModel, players: u32) -> Result<Hosted, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let player = exe.with_file_name(format!("brixo-player{}", std::env::consts::EXE_SUFFIX));
+    if !player.exists() {
+        return Err("Brixo Player isn't built yet. Run: cargo build -p brixo-player".to_string());
+    }
+    let server = brixo_server::start(model.clone(), 0).map_err(|e| format!("couldn't start a server: {e}"))?;
+    let mut hosted = Hosted { server, windows: Vec::new() };
+    for _ in 0..players {
+        let child = std::process::Command::new(&player)
+            .args(["--join", &hosted.server.local_addr(), "--name", "Player"])
+            .spawn()
+            .map_err(|e| format!("couldn't open a player window: {e}"))?;
+        hosted.windows.push(child);
+    }
+    Ok(hosted)
+}
 
 struct Studio {
     gpu: Option<Gpu>,
@@ -225,6 +262,8 @@ struct Studio {
     editor: Editor,
     /// The running game, while Play is on. It works on a copy of `model`.
     game: Option<Game>,
+    /// A local multiplayer test: a server plus a player window per player.
+    hosted: Option<Hosted>,
     output: Vec<LogLine>,
     /// The studio camera, put back when Play stops.
     saved_camera: Option<(Vec3, f32, f32)>,
@@ -242,6 +281,7 @@ impl Studio {
             status: "Ready".to_string(),
             editor: Editor::default(),
             game: None,
+            hosted: None,
             output: Vec::new(),
             saved_camera: None,
             keys: HashSet::new(),
@@ -310,7 +350,7 @@ impl Studio {
             game.step(dt as f64);
             self.output.extend(game.take_log());
             trim_output(&mut self.output);
-            first_person_player = self.editor.follow.update(&mut self.camera, game);
+            first_person_player = self.editor.follow.update(&mut self.camera, &game.world(), game.player_id());
         }
 
         let Studio {
@@ -321,21 +361,32 @@ impl Studio {
             status,
             editor,
             game,
+            hosted,
             output,
             saved_camera,
             ..
         } = self;
         let Some(gpu) = gpu.as_mut() else { return };
-        let playing = game.is_some();
+        let playing = game.is_some() || hosted.is_some();
         let play_time = game.as_ref().map(|g| g.time());
+        if let Some(h) = hosted.as_ref() {
+            output.extend(h.server.take_log());
+            trim_output(output);
+            *status = format!("Hosting on port {}: {} player(s) connected", h.server.port(), h.server.player_count());
+        }
         let mut toggle_play = false;
 
         {
             // While playing, show and click the live game world, not the scene.
+            // With a local server, that's the server's world: fly around and
+            // watch everyone. We draw a copy, taken in one quick lock: holding
+            // the server's world for a whole frame would stall its ticks.
+            let mut server_view = hosted.as_ref().map(|h| h.server.world().clone());
             let mut world_guard = game.as_ref().map(|g| g.world());
-            let scene: &mut DataModel = match world_guard.as_mut() {
-                Some(world) => world,
-                None => model,
+            let scene: &mut DataModel = match (world_guard.as_mut(), server_view.as_mut()) {
+                (Some(world), _) => world,
+                (None, Some(view)) => view,
+                (None, None) => model,
             };
 
             // --- build the UI (this also handles viewport mouse input) ---
@@ -431,7 +482,26 @@ impl Studio {
         if toggle_play {
             editor.drag = None;
             editor.prop_session = false;
-            if game.take().is_some() {
+            if let Some(h) = hosted.take() {
+                drop(h); // closes the player windows, then stops the server
+                output.push(system_line("Stopped the server"));
+                *status = "Stopped".to_string();
+                if selection.and_then(|id| model.get(id)).is_none() {
+                    *selection = None;
+                }
+            } else if editor.players > 1 {
+                match host(model, editor.players) {
+                    Ok(h) => {
+                        output.push(system_line(&format!(
+                            "Hosting on port {} with {} player windows",
+                            h.server.port(),
+                            editor.players
+                        )));
+                        *hosted = Some(h);
+                    }
+                    Err(e) => *status = e,
+                }
+            } else if game.take().is_some() {
                 // Stop: the copy is thrown away, so the scene is exactly as before.
                 if let Some((position, yaw, pitch)) = saved_camera.take() {
                     camera.position = position;
@@ -555,6 +625,8 @@ fn build_ui(
             {
                 toggle_play = true;
             }
+            ui.add_enabled(!playing, egui::DragValue::new(&mut editor.players).range(1..=8).prefix("Players: "))
+                .on_hover_text("2 or more: test multiplayer with a local server and a window per player");
             ui.separator();
 
             ui.add_enabled_ui(!playing, |ui| {
@@ -1476,6 +1548,10 @@ fn demo_scene() -> DataModel {
         p.color = Color::new(220, 190, 80);
         p.anchored = false;
     }
+
+    // Greets players as they join a (multiplayer) game.
+    let greeter = dm.create(Class::Script, "Greeter", root).unwrap();
+    dm.script_mut(greeter).unwrap().source = "-- Runs on the server: everyone hears about joins and leaves.\non player_joined(p)\n    print(\"Welcome, \" + p.name + \"! \" + len(players()) + \" playing\")\nend\n\non player_left(p)\n    print(p.name + \" left\")\nend\n".to_string();
 
     // --- a little course for the player ---
     let spawn = dm.create(Class::SpawnLocation, "SpawnLocation", root).unwrap();

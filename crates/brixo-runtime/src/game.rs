@@ -9,7 +9,7 @@
 //! Stopping the game drops the channels, so every paused wait() returns an
 //! error and its thread unwinds on its own.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -81,7 +81,7 @@ fn random_colors(p: &mut brixo_core::PlayerProps, rng: &mut Rng) {
 pub const FALL_LIMIT: f32 = -60.0;
 
 /// Events scripts can use with `on`.
-pub const EVENTS: &[&str] = &["touched"];
+pub const EVENTS: &[&str] = &["touched", "player_joined", "player_left"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LogLine {
@@ -128,6 +128,8 @@ struct ScriptInfo {
     base: Interpreter,
     handlers_seen: usize,
     touch_handlers: Vec<Value>,
+    joined_handlers: Vec<Value>,
+    left_handlers: Vec<Value>,
     timers: Vec<Timer>,
 }
 
@@ -140,8 +142,15 @@ pub struct Game {
     tasks: Vec<Task>,
     next_task: u64,
     physics: Physics,
-    input: PlayerInput,
-    player: Option<InstanceId>,
+    /// What each player is pressing.
+    inputs: HashMap<InstanceId, PlayerInput>,
+    /// The player on this machine, in single-player games.
+    local_player: Option<InstanceId>,
+    /// Everyone playing, in the order they joined.
+    players: Vec<InstanceId>,
+    /// Players whose `player_joined` hasn't fired yet (scripts weren't
+    /// running when they arrived).
+    unannounced: Vec<InstanceId>,
     /// Where the player appears, on top of the first SpawnLocation.
     spawn_point: BVec3,
     time: f64,
@@ -150,8 +159,26 @@ pub struct Game {
 impl Game {
     /// Starts a game on a copy of the scene. Every enabled script runs its
     /// body until it first waits or finishes.
+    /// Starts a single-player game: you're the one player, named "Player".
     pub fn start(model: DataModel) -> Game {
-        let mut game = Game {
+        let mut game = Game::new(model);
+        // The player exists before scripts start, so they can find it.
+        let id = game.spawn_player("Player");
+        game.local_player = Some(id);
+        game.discover_scripts();
+        game.announce_players();
+        game
+    }
+
+    /// Starts a game for a server: no players until they join.
+    pub fn start_server(model: DataModel) -> Game {
+        let mut game = Game::new(model);
+        game.discover_scripts();
+        game
+    }
+
+    fn new(model: DataModel) -> Game {
+        let game = Game {
             world: Arc::new(Mutex::new(model)),
             clock: Arc::new(Mutex::new(0.0)),
             log: Arc::new(Mutex::new(Vec::new())),
@@ -160,36 +187,103 @@ impl Game {
             tasks: Vec::new(),
             next_task: 0,
             physics: Physics::new(),
-            input: PlayerInput::default(),
-            player: None,
+            inputs: HashMap::new(),
+            local_player: None,
+            players: Vec::new(),
+            unannounced: Vec::new(),
             spawn_point: BVec3::new(0.0, 10.0, 0.0),
             time: 0.0,
         };
-        // The player exists before scripts start, so they can find it.
-        game.spawn_player();
-        game.discover_scripts();
         game
     }
 
-    /// What the player is pressing. Call before each step().
+    /// What the local player is pressing. Call before each step().
     pub fn set_input(&mut self, input: PlayerInput) {
-        self.input = input;
+        if let Some(id) = self.local_player {
+            self.inputs.insert(id, input);
+        }
     }
 
+    /// What one player is pressing (servers: one per connected player).
+    pub fn set_input_for(&mut self, player: InstanceId, input: PlayerInput) {
+        self.inputs.insert(player, input);
+    }
+
+    /// The local player, in single-player games.
     pub fn player_id(&self) -> Option<InstanceId> {
-        self.player
+        self.local_player
     }
 
-    /// The player's character position, for the camera to follow.
+    /// Everyone playing, in the order they joined.
+    pub fn players(&self) -> &[InstanceId] {
+        &self.players
+    }
+
+    /// The local player's character position, for the camera to follow.
     pub fn player_position(&self) -> Option<glam::Vec3> {
-        self.physics.character_position()
+        self.physics.character_position(self.local_player?)
     }
 
     pub fn player_grounded(&self) -> bool {
-        self.physics.character_grounded()
+        self.local_player.is_some_and(|id| self.physics.character_grounded(id))
     }
 
-    fn spawn_player(&mut self) {
+    /// Where a player's character is.
+    pub fn position_of(&self, player: InstanceId) -> Option<glam::Vec3> {
+        self.physics.character_position(player)
+    }
+
+    /// The world, shared: servers hand this to whatever wants to watch.
+    pub fn shared_world(&self) -> Arc<Mutex<DataModel>> {
+        self.world.clone()
+    }
+
+    /// A new player joins: they appear at the spawn and scripts hear
+    /// `on player_joined(player)`.
+    pub fn add_player(&mut self, name: &str) -> InstanceId {
+        let id = self.spawn_player(name);
+        self.announce_players();
+        id
+    }
+
+    /// A player leaves. Scripts hear `on player_left(player)` while the
+    /// player still exists, then they're removed from the world.
+    pub fn remove_player(&mut self, player: InstanceId) {
+        if !self.players.contains(&player) {
+            return;
+        }
+        self.fire_everywhere(|s| &s.left_handlers, player);
+        self.players.retain(|p| *p != player);
+        self.unannounced.retain(|p| *p != player);
+        self.inputs.remove(&player);
+        if self.local_player == Some(player) {
+            self.local_player = None;
+        }
+        self.world.lock().unwrap().remove(player);
+    }
+
+    fn announce_players(&mut self) {
+        for player in std::mem::take(&mut self.unannounced) {
+            self.fire_everywhere(|s| &s.joined_handlers, player);
+        }
+    }
+
+    /// Runs a player event in every script that listens for it.
+    fn fire_everywhere(&mut self, handlers: fn(&ScriptInfo) -> &Vec<Value>, player: InstanceId) {
+        let mut calls = Vec::new();
+        for (s, script) in self.scripts.iter().enumerate() {
+            for handler in handlers(script) {
+                calls.push((s, handler.clone()));
+            }
+        }
+        for (s, handler) in calls {
+            let wanted = handler.param_count().unwrap_or(1);
+            let args = if wanted >= 1 { vec![object(player)] } else { Vec::new() };
+            self.spawn(s, Job::Call(handler, args));
+        }
+    }
+
+    fn spawn_player(&mut self, name: &str) -> InstanceId {
         let mut world = self.world.lock().unwrap();
         let spawn = world
             .walk()
@@ -204,37 +298,49 @@ impl Game {
             );
         }
         let root = world.root();
-        if let Some(id) = world.create(Class::Player, "Player", root) {
-            if let Some(p) = world.player_mut(id) {
-                p.body.position = self.spawn_point;
-                random_colors(p, &mut Rng::seeded());
-            }
-            self.player = Some(id);
+        let id = world.create(Class::Player, name, root).expect("the workspace holds players");
+        let spot = self.spawn_spot(self.players.len());
+        if let Some(p) = world.player_mut(id) {
+            p.body.position = spot;
+            random_colors(p, &mut Rng::seeded());
         }
+        self.players.push(id);
+        self.unannounced.push(id);
+        id
+    }
+
+    /// Where the n-th player to join stands: spread over the spawn pad in a
+    /// 3x3 pattern (centre first), so players don't start inside each other.
+    fn spawn_spot(&self, n: usize) -> BVec3 {
+        const OFFSETS: [(f32, f32); 9] =
+            [(0.0, 0.0), (2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5), (2.5, 2.5), (-2.5, -2.5), (2.5, -2.5), (-2.5, 2.5)];
+        let (dx, dz) = OFFSETS[n % OFFSETS.len()];
+        BVec3::new(self.spawn_point.x + dx, self.spawn_point.y, self.spawn_point.z + dz)
     }
 
     /// Dead or fallen players go back to the spawn point with full health.
     fn check_respawn(&mut self) {
-        let Some(id) = self.player else { return };
-        let reason = {
+        let mut respawned = Vec::new();
+        let spots: HashMap<InstanceId, BVec3> =
+            self.players.iter().enumerate().map(|(i, id)| (*id, self.spawn_spot(i))).collect();
+        {
             let mut world = self.world.lock().unwrap();
-            let spawn = self.spawn_point;
-            let Some(p) = world.player_mut(id) else { return };
-            let reason = if p.health <= 0.0 {
-                Some("died")
-            } else if p.body.position.y < FALL_LIMIT {
-                Some("fell off the world")
-            } else {
-                None
-            };
-            if reason.is_some() {
+            for &id in &self.players {
+                let Some(p) = world.player_mut(id) else { continue };
+                let reason = if p.health <= 0.0 {
+                    "died"
+                } else if p.body.position.y < FALL_LIMIT {
+                    "fell off the world"
+                } else {
+                    continue;
+                };
                 p.health = p.max_health;
-                p.body.position = spawn;
+                p.body.position = spots[&id];
+                respawned.push((world.get(id).map(|i| i.name.clone()).unwrap_or_default(), reason));
             }
-            reason
-        };
-        if let Some(reason) = reason {
-            self.push_log("Brixo", format!("Player {reason} and respawned"), false);
+        }
+        for (name, reason) in respawned {
+            self.push_log("Brixo", format!("{name} {reason} and respawned"), false);
         }
     }
 
@@ -330,7 +436,7 @@ impl Game {
         if let Some(p) = parent {
             base.define_global("self", object(p));
         }
-        if let Some(player) = self.player {
+        if let Some(player) = self.local_player {
             base.define_global("camera", crate::host::facet_object(player, crate::host::FACET_CAMERA));
         }
 
@@ -341,6 +447,8 @@ impl Game {
             base,
             handlers_seen: 0,
             touch_handlers: Vec::new(),
+            joined_handlers: Vec::new(),
+            left_handlers: Vec::new(),
             timers: Vec::new(),
         });
         let index = self.scripts.len() - 1;
@@ -358,6 +466,8 @@ impl Game {
         for (script, is_alive) in self.scripts.iter_mut().zip(&alive) {
             if !is_alive {
                 script.touch_handlers.clear();
+                script.joined_handlers.clear();
+                script.left_handlers.clear();
                 script.timers.clear();
             }
         }
@@ -372,6 +482,12 @@ impl Game {
             match &handler.trigger {
                 Trigger::Event(name) if name == "touched" => {
                     self.scripts[index].touch_handlers.push(handler.function.clone());
+                }
+                Trigger::Event(name) if name == "player_joined" => {
+                    self.scripts[index].joined_handlers.push(handler.function.clone());
+                }
+                Trigger::Event(name) if name == "player_left" => {
+                    self.scripts[index].left_handlers.push(handler.function.clone());
                 }
                 Trigger::Event(name) => {
                     self.push_log(
@@ -534,7 +650,7 @@ impl Game {
             .collect();
         let touches = {
             let mut world = self.world.lock().unwrap();
-            self.physics.step(&mut world, dt as f32, &listeners, self.input)
+            self.physics.step(&mut world, dt as f32, &listeners, &self.inputs)
         };
         for (a, b) in touches {
             self.fire_touched(a, b);

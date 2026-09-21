@@ -17,3 +17,4 @@ winit = "0.30"
 brixo-runtime = { path = "../brixo-runtime" }
 rovik = { path = "../rovik" }
 brixo-client = { path = "../brixo-client" }
+brixo-server = { path = "../brixo-server" }

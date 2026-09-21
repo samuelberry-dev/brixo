@@ -215,6 +215,10 @@ impl Host for WorldHost {
                 "class" => Ok(Value::str(class_name(inst.class))),
                 "parent" => Ok(inst.parent.map(object).unwrap_or(Value::Nil)),
                 "children" => Ok(Value::list(inst.children.iter().map(|c| object(*c)).collect())),
+                "camera_mode" => match world.player(id) {
+                    Some(p) => Ok(Value::str(p.camera_mode.name())),
+                    None => Err(format!("a {} doesn't have a camera_mode. Only players do", class_name(inst.class))),
+                },
                 "face" => match world.player(id) {
                     Some(p) => Ok(Value::str(p.face.name())),
                     None => Err(format!("a {} doesn't have a face. Only players do", class_name(inst.class))),
@@ -302,6 +306,19 @@ impl Host for WorldHost {
                     other => Err(format!("name has to be text, not a {}", other.type_name())),
                 },
                 "class" => Err("class can't be changed".to_string()),
+                "camera_mode" => {
+                    let names = CameraMode::ALL.iter().map(|m| m.name()).collect::<Vec<_>>().join(", ");
+                    let Value::Str(text) = &value else {
+                        return Err(format!("camera_mode should be text, one of: {names}"));
+                    };
+                    let mode = CameraMode::from_name(text)
+                        .ok_or_else(|| format!("there's no camera mode called '{text}'. Try one of: {names}"))?;
+                    let p = world
+                        .player_mut(id)
+                        .ok_or_else(|| format!("a {} doesn't have a camera_mode. Only players do", class_name(class)))?;
+                    p.camera_mode = mode;
+                    Ok(())
+                }
                 "face" => {
                     let Value::Str(text) = &value else {
                         return Err(format!("face should be text, one of: {}", face_names()));
@@ -481,7 +498,7 @@ impl Host for WorldHost {
     }
 
     fn function_names(&self) -> Vec<&'static str> {
-        vec!["find", "destroy", "clone", "time"]
+        vec!["find", "destroy", "clone", "time", "players"]
     }
 
     fn call(&self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -534,6 +551,12 @@ impl Host for WorldHost {
             "time" => {
                 need(0)?;
                 Ok(Value::Num(*self.clock.lock().unwrap()))
+            }
+            "players" => {
+                need(0)?;
+                let world = self.world.lock().unwrap();
+                let players = world.walk().into_iter().filter(|id| world.player(*id).is_some()).map(object);
+                Ok(Value::list(players.collect()))
             }
             other => Err(format!("unknown function '{other}'")),
         }

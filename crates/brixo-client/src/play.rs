@@ -1,8 +1,8 @@
 //! Controls and camera while playing.
 
-use brixo_core::{CameraMode, InstanceId};
+use brixo_core::{CameraMode, DataModel, InstanceId};
 use brixo_render::Camera;
-use brixo_runtime::{Game, PlayerInput};
+use brixo_runtime::PlayerInput;
 use glam::Vec3;
 
 /// Closest the third-person camera gets before switching to first person.
@@ -73,12 +73,14 @@ impl FollowCamera {
         };
     }
 
-    /// Puts the camera where it should be this frame. Returns the player to
-    /// hide (your own character, in first person).
-    pub fn update(&self, camera: &mut Camera, game: &Game) -> Option<InstanceId> {
-        let center = game.player_position()?;
-        let id = game.player_id()?;
-        let mode = game.world().player(id).map(|p| p.camera_mode).unwrap_or_default();
+    /// Puts the camera behind (or inside) your character `me` in `world`,
+    /// a local game's world or a server's copy. Returns the player to hide
+    /// (your own character, in first person).
+    pub fn update(&self, camera: &mut Camera, world: &DataModel, me: Option<InstanceId>) -> Option<InstanceId> {
+        let id = me?;
+        let player = world.player(id)?;
+        let center = Vec3::new(player.body.position.x, player.body.position.y, player.body.position.z);
+        let mode = player.camera_mode;
         let first_person = match mode {
             CameraMode::FirstPerson => true,
             CameraMode::ThirdPerson => false,
@@ -137,19 +139,20 @@ mod tests {
         let root = dm.root();
         let floor = dm.create(brixo_core::Class::Part, "Floor", root).unwrap();
         dm.part_mut(floor).unwrap().size = brixo_core::Vec3::new(50.0, 1.0, 50.0);
-        let mut game = Game::start(dm);
+        let mut game = brixo_runtime::Game::start(dm);
         for _ in 0..30 {
             game.step(1.0 / 60.0);
         }
         let mut cam = Camera::new();
         let follow = FollowCamera::default();
-        assert_eq!(follow.update(&mut cam, &game), None);
+        let me = game.player_id();
+        assert_eq!(follow.update(&mut cam, &game.world(), me), None);
         let player = game.player_position().unwrap();
         assert!((cam.position.distance(player + Vec3::Y * LOOK_HEIGHT) - 16.0).abs() < 1e-3);
 
         let id = game.player_id().unwrap();
         game.world().player_mut(id).unwrap().camera_mode = CameraMode::FirstPerson;
-        assert_eq!(follow.update(&mut cam, &game), Some(id), "own avatar hidden");
+        assert_eq!(follow.update(&mut cam, &game.world(), me), Some(id), "own avatar hidden");
         assert!((cam.position - (player + Vec3::Y * EYE_HEIGHT)).length() < 1e-3);
     }
 }

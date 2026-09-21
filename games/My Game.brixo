@@ -11,9 +11,10 @@
         4,
         10,
         11,
-        13,
-        15,
-        16
+        12,
+        14,
+        16,
+        17
       ],
       "props": "Workspace"
     },
@@ -279,6 +280,19 @@
     },
     {
       "id": 10,
+      "class": "Script",
+      "name": "Greeter",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- Runs on the server: everyone hears about joins and leaves.\non player_joined(p)\n    print(\"Welcome, \" + p.name + \"! \" + len(players()) + \" playing\")\nend\n\non player_left(p)\n    print(p.name + \" left\")\nend\n",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 11,
       "class": "SpawnLocation",
       "name": "SpawnLocation",
       "parent": 0,
@@ -311,12 +325,12 @@
       }
     },
     {
-      "id": 11,
+      "id": 12,
       "class": "Part",
       "name": "Coin",
       "parent": 0,
       "children": [
-        12
+        13
       ],
       "props": {
         "Part": {
@@ -346,10 +360,10 @@
       }
     },
     {
-      "id": 12,
+      "id": 13,
       "class": "Script",
       "name": "Collect",
-      "parent": 11,
+      "parent": 12,
       "children": [],
       "props": {
         "Script": {
@@ -359,12 +373,12 @@
       }
     },
     {
-      "id": 13,
+      "id": 14,
       "class": "Part",
       "name": "Lava",
       "parent": 0,
       "children": [
-        14
+        15
       ],
       "props": {
         "Part": {
@@ -394,10 +408,10 @@
       }
     },
     {
-      "id": 14,
+      "id": 15,
       "class": "Script",
       "name": "Burn",
-      "parent": 13,
+      "parent": 14,
       "children": [],
       "props": {
         "Script": {
@@ -407,7 +421,7 @@
       }
     },
     {
-      "id": 15,
+      "id": 16,
       "class": "Part",
       "name": "Platform",
       "parent": 0,
@@ -440,7 +454,7 @@
       }
     },
     {
-      "id": 16,
+      "id": 17,
       "class": "Part",
       "name": "Wrecker",
       "parent": 0,
@@ -473,6 +487,6 @@
       }
     }
   ],
-  "next_id": 17,
+  "next_id": 18,
   "root": 0
 }

@@ -102,7 +102,8 @@ pub struct Physics {
     owners: HashMap<ColliderHandle, InstanceId>,
     accumulator: f32,
     steps_taken: u64,
-    character: Option<Character>,
+    /// One character per player, by the player's id.
+    characters: HashMap<InstanceId, Character>,
 }
 
 impl Default for Physics {
@@ -135,7 +136,7 @@ impl Physics {
             owners: HashMap::new(),
             accumulator: 0.0,
             steps_taken: 0,
-            character: None,
+            characters: HashMap::new(),
         }
     }
 
@@ -147,16 +148,20 @@ impl Physics {
         world: &mut DataModel,
         dt: f32,
         listeners: &HashSet<InstanceId>,
-        input: PlayerInput,
+        inputs: &HashMap<InstanceId, PlayerInput>,
     ) -> Vec<(InstanceId, InstanceId)> {
         self.pull_from_world(world, listeners);
-        self.sync_character(world);
+        self.sync_characters(world);
 
         self.accumulator = (self.accumulator + dt.max(0.0)).min(MAX_CATCH_UP);
         let mut touches = Vec::new();
         while self.accumulator >= PHYSICS_DT {
             self.accumulator -= PHYSICS_DT;
-            self.move_character(world, input);
+            let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
+            for id in ids {
+                let input = inputs.get(&id).copied().unwrap_or_default();
+                self.move_character(world, id, input);
+            }
             self.pipeline.step(
                 Vec3::new(0.0, -GRAVITY, 0.0),
                 &self.params,
@@ -188,45 +193,50 @@ impl Physics {
         }
 
         self.push_to_world(world);
-        touches.extend(self.character_touches(world));
+        let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
+        for id in ids {
+            touches.extend(self.character_touches(world, id));
+        }
         touches
     }
 
     // --- the player's character ---
 
-    /// Creates, removes or teleports the character to match the world.
-    fn sync_character(&mut self, world: &DataModel) {
-        let player = world
-            .walk()
-            .into_iter()
-            .find(|id| world.player(*id).is_some());
+    /// Creates, removes or teleports characters to match the world's players.
+    fn sync_characters(&mut self, world: &DataModel) {
+        let players: HashSet<InstanceId> =
+            world.walk().into_iter().filter(|id| world.player(*id).is_some()).collect();
 
-        let same = matches!((&self.character, player), (Some(c), Some(p)) if c.id == p);
-        if !same {
-            if let Some(old) = self.character.take() {
-                self.bodies.remove(
-                    old.body,
-                    &mut self.islands,
-                    &mut self.colliders,
-                    &mut self.impulse_joints,
-                    &mut self.multibody_joints,
-                    true,
-                );
-            }
-            if let Some(id) = player {
-                self.character = Some(self.new_character(id, world.player(id).unwrap().body.position));
-            }
-            return;
+        // Players who left (or were destroyed) lose their capsule.
+        let gone: Vec<InstanceId> = self.characters.keys().filter(|id| !players.contains(id)).copied().collect();
+        for id in gone {
+            let c = self.characters.remove(&id).unwrap();
+            self.bodies.remove(
+                c.body,
+                &mut self.islands,
+                &mut self.colliders,
+                &mut self.impulse_joints,
+                &mut self.multibody_joints,
+                true,
+            );
         }
 
-        // A script (or a respawn) moved the player: teleport the capsule.
-        let Some(c) = self.character.as_mut() else { return };
-        let Some(p) = world.player(c.id) else { return };
-        if p.body.position != c.synced_position {
-            c.synced_position = p.body.position;
-            c.vertical_speed = 0.0;
-            if let Some(body) = self.bodies.get_mut(c.body) {
-                body.set_translation(to_glam(p.body.position), true);
+        for id in players {
+            let position = world.player(id).unwrap().body.position;
+            match self.characters.get_mut(&id) {
+                None => {
+                    let c = self.new_character(id, position);
+                    self.characters.insert(id, c);
+                }
+                // A script (or a respawn) moved the player: teleport the capsule.
+                Some(c) if position != c.synced_position => {
+                    c.synced_position = position;
+                    c.vertical_speed = 0.0;
+                    if let Some(body) = self.bodies.get_mut(c.body) {
+                        body.set_translation(to_glam(position), true);
+                    }
+                }
+                Some(_) => {}
             }
         }
     }
@@ -271,8 +281,8 @@ impl Physics {
     }
 
     /// One physics step of walking, jumping and falling.
-    fn move_character(&mut self, world: &DataModel, input: PlayerInput) {
-        let Some(c) = self.character.as_mut() else { return };
+    fn move_character(&mut self, world: &DataModel, id: InstanceId, input: PlayerInput) {
+        let Some(c) = self.characters.get_mut(&id) else { return };
         let Some(player) = world.player(c.id) else { return };
         let dt = PHYSICS_DT;
 
@@ -371,8 +381,8 @@ impl Physics {
 
     /// Parts the character just started touching, including ones it can
     /// pass through (like coins), as (part, player) pairs.
-    fn character_touches(&mut self, world: &mut DataModel) -> Vec<(InstanceId, InstanceId)> {
-        let Some(c) = self.character.as_mut() else { return Vec::new() };
+    fn character_touches(&mut self, world: &mut DataModel, id: InstanceId) -> Vec<(InstanceId, InstanceId)> {
+        let Some(c) = self.characters.get_mut(&id) else { return Vec::new() };
         let Some(body) = self.bodies.get(c.body) else { return Vec::new() };
 
         // Write the character back so scripts and the renderer see it.
@@ -405,13 +415,13 @@ impl Physics {
     }
 
     /// Where the player's character is, if there is one.
-    pub fn character_position(&self) -> Option<Vec3> {
-        let c = self.character.as_ref()?;
+    pub fn character_position(&self, id: InstanceId) -> Option<Vec3> {
+        let c = self.characters.get(&id)?;
         self.bodies.get(c.body).map(|b| b.translation())
     }
 
-    pub fn character_grounded(&self) -> bool {
-        self.character.as_ref().map(|c| c.grounded).unwrap_or(false)
+    pub fn character_grounded(&self, id: InstanceId) -> bool {
+        self.characters.get(&id).map(|c| c.grounded).unwrap_or(false)
     }
 
     /// How many parts physics is tracking.

@@ -1,7 +1,9 @@
 //! Brixo Player: pick a game and play it. No editor, just the game.
 //!
-//! Usage: `brixo-player` opens the games library; `brixo-player game.brixo`
-//! plays that file straight away (so "Open with" works too).
+//! Usage:
+//!   brixo-player                              the games library
+//!   brixo-player game.brixo                   play that file (so "Open with" works)
+//!   brixo-player --join 127.0.0.1:4570 [--name Ann]   join a server
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -12,6 +14,7 @@ use brixo_client::{list_games, movement_input, FollowCamera, GameEntry, Held};
 use brixo_core::DataModel;
 use brixo_render::{Camera, SceneRenderer};
 use brixo_runtime::{Game, LogLine, PlayerInput};
+use brixo_server::NetClient;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -94,10 +97,18 @@ impl Gpu {
 
 // --- screens ---------------------------------------------------------------
 
+/// Where the game runs: here, or on a server you've joined.
+enum Backend {
+    Local(Game),
+    Online(NetClient),
+}
+
 /// A game being played.
 struct Session {
     name: String,
-    game: Game,
+    backend: Backend,
+    /// The server went away.
+    lost: bool,
     paused: bool,
     console: bool,
     output: Vec<LogLine>,
@@ -112,6 +123,7 @@ enum Screen {
 /// What the UI asked for this frame, applied once it's done.
 enum Action {
     Play(GameEntry),
+    Join,
     Leave,
     Refresh,
 }
@@ -124,6 +136,9 @@ struct Player {
     last_frame: Instant,
     /// Drawn behind the library: just the sky.
     empty: DataModel,
+    /// The "Join a server" boxes.
+    join_addr: String,
+    join_name: String,
 }
 
 impl Player {
@@ -135,6 +150,39 @@ impl Player {
             camera: Camera::new(),
             last_frame: Instant::now(),
             empty: DataModel::new(),
+            join_addr: format!("127.0.0.1:{}", brixo_server::DEFAULT_PORT),
+            join_name: "Player".to_string(),
+        }
+    }
+
+    fn start_session(&mut self, name: String, backend: Backend, output: Vec<LogLine>) {
+        self.camera = Camera::new();
+        self.camera.pitch = -0.35;
+        self.keys.clear();
+        if let Some(gpu) = &self.gpu {
+            gpu.window.set_title(&format!("Brixo - {name}"));
+        }
+        self.screen = Screen::Playing(Box::new(Session {
+            name,
+            backend,
+            lost: false,
+            paused: false,
+            console: false,
+            output,
+            follow: FollowCamera::default(),
+        }));
+    }
+
+    /// Joins a server as `name`.
+    fn join(&mut self, addr: String, name: String) {
+        match NetClient::connect(&addr, &name) {
+            Ok(client) => self.start_session(format!("{addr} (online)"), Backend::Online(client), Vec::new()),
+            Err(e) => {
+                self.screen = Screen::Library {
+                    games: list_games(),
+                    message: Some(format!("Couldn't join {addr}: {e}")),
+                };
+            }
         }
     }
 
@@ -143,20 +191,7 @@ impl Player {
             Ok(model) => {
                 let game = Game::start(model);
                 let output = game.take_log();
-                self.camera = Camera::new();
-                self.camera.pitch = -0.35;
-                self.keys.clear();
-                if let Some(gpu) = &self.gpu {
-                    gpu.window.set_title(&format!("Brixo - {}", entry.name));
-                }
-                self.screen = Screen::Playing(Box::new(Session {
-                    name: entry.name,
-                    game,
-                    paused: false,
-                    console: false,
-                    output,
-                    follow: FollowCamera::default(),
-                }));
+                self.start_session(entry.name, Backend::Local(game), output);
             }
             Err(e) => {
                 self.screen = Screen::Library {
@@ -200,21 +235,35 @@ impl Player {
         // world won't wait for you), but your character stands still.
         let mut hidden = None;
         if let Screen::Playing(s) = &mut self.screen {
-            let input = if s.paused { PlayerInput::default() } else { movement_input(&self.camera, held) };
-            s.game.set_input(input);
-            s.game.step(dt as f64);
-            s.output.extend(s.game.take_log());
+            let input = if s.paused || s.lost { PlayerInput::default() } else { movement_input(&self.camera, held) };
+            match &mut s.backend {
+                Backend::Local(game) => {
+                    game.set_input(input);
+                    game.step(dt as f64);
+                    s.output.extend(game.take_log());
+                    hidden = s.follow.update(&mut self.camera, &game.world(), game.player_id());
+                }
+                Backend::Online(net) => {
+                    // The server runs the game; we send keys and draw its world.
+                    net.send_input(input);
+                    net.poll();
+                    s.lost |= !net.connected;
+                    hidden = s.follow.update(&mut self.camera, &net.world, net.me);
+                }
+            }
             let extra = s.output.len().saturating_sub(CONSOLE_LIMIT);
             s.output.drain(..extra);
-            hidden = s.follow.update(&mut self.camera, &s.game);
         }
 
         let Some(gpu) = self.gpu.as_mut() else { return };
         let raw_input = gpu.egui_state.take_egui_input(&gpu.window);
         let mut action = None;
         let camera = &mut self.camera;
+        let (join_addr, join_name) = (&mut self.join_addr, &mut self.join_name);
         let full_output = gpu.egui_ctx.run(raw_input, |ctx| match &mut self.screen {
-            Screen::Library { games, message } => library_ui(ctx, games, message.as_deref(), &mut action),
+            Screen::Library { games, message } => {
+                library_ui(ctx, games, message.as_deref(), join_addr, join_name, &mut action)
+            }
             Screen::Playing(s) => {
                 game_ui(ctx, s, &mut action);
                 if !s.paused && !ctx.wants_pointer_input() {
@@ -240,10 +289,13 @@ impl Player {
         {
             let world;
             let model = match &self.screen {
-                Screen::Playing(s) => {
-                    world = s.game.world();
-                    &*world
-                }
+                Screen::Playing(s) => match &s.backend {
+                    Backend::Local(game) => {
+                        world = game.world();
+                        &*world
+                    }
+                    Backend::Online(net) => &net.world,
+                },
                 Screen::Library { .. } => &self.empty,
             };
             gpu.scene.render(
@@ -290,6 +342,7 @@ impl Player {
 
         match action {
             Some(Action::Play(entry)) => self.play(entry),
+            Some(Action::Join) => self.join(self.join_addr.clone(), self.join_name.clone()),
             Some(Action::Leave) => self.leave(),
             Some(Action::Refresh) => {
                 self.screen = Screen::Library { games: list_games(), message: None };
@@ -301,7 +354,14 @@ impl Player {
 
 // --- ui --------------------------------------------------------------------
 
-fn library_ui(ctx: &egui::Context, games: &[GameEntry], message: Option<&str>, action: &mut Option<Action>) {
+fn library_ui(
+    ctx: &egui::Context,
+    games: &[GameEntry],
+    message: Option<&str>,
+    join_addr: &mut String,
+    join_name: &mut String,
+    action: &mut Option<Action>,
+) {
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.12);
@@ -339,6 +399,18 @@ fn library_ui(ctx: &egui::Context, games: &[GameEntry], message: Option<&str>, a
             if ui.button("Refresh").clicked() {
                 *action = Some(Action::Refresh);
             }
+
+            ui.add_space(28.0);
+            ui.label(egui::RichText::new("Join a server").size(18.0).color(egui::Color32::WHITE));
+            ui.horizontal(|ui| {
+                // Centre the row by hand: address, name, button.
+                ui.add_space((ui.available_width() - 470.0).max(0.0) / 2.0);
+                ui.add(egui::TextEdit::singleline(join_addr).desired_width(180.0).hint_text("address:port"));
+                ui.add(egui::TextEdit::singleline(join_name).desired_width(140.0).hint_text("your name"));
+                if ui.button(egui::RichText::new("Join").size(16.0)).clicked() {
+                    *action = Some(Action::Join);
+                }
+            });
         });
     });
 }
@@ -354,7 +426,10 @@ fn game_ui(ctx: &egui::Context, s: &mut Session, action: &mut Option<Action>) {
         });
 
     // Health, bottom left.
-    let health = s.game.player_id().and_then(|id| s.game.world().player(id).map(|p| (p.health, p.max_health)));
+    let health = match &s.backend {
+        Backend::Local(game) => game.player_id().and_then(|id| game.world().player(id).map(|p| (p.health, p.max_health))),
+        Backend::Online(net) => net.me.and_then(|id| net.world.player(id).map(|p| (p.health, p.max_health))),
+    };
     if let Some((hp, max)) = health {
         egui::Area::new(egui::Id::new("health"))
             .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -12.0])
@@ -384,6 +459,21 @@ fn game_ui(ctx: &egui::Context, s: &mut Session, action: &mut Option<Action>) {
                     }
                 });
             });
+    }
+
+    if s.lost {
+        egui::Window::new("Disconnected")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("The server closed, or the connection was lost.");
+                ui.add_space(6.0);
+                if ui.button(egui::RichText::new("Back to games").size(16.0)).clicked() {
+                    *action = Some(Action::Leave);
+                }
+            });
+        return;
     }
 
     if s.paused {
@@ -440,6 +530,14 @@ impl ApplicationHandler for Player {
         let window = Arc::new(event_loop.create_window(attrs).expect("failed to create window"));
         self.gpu = Some(Gpu::new(window));
 
+        // `--join ADDR [--name NAME]` joins a server straight away.
+        let args: Vec<String> = std::env::args().collect();
+        let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+        if let Some(addr) = flag("--join") {
+            let name = flag("--name").unwrap_or_else(|| "Player".to_string());
+            self.join(addr, name);
+            return;
+        }
         // `brixo-player path/to/game.brixo` plays that game straight away.
         if let Some(path) = std::env::args().nth(1) {
             let path = Path::new(&path).to_path_buf();
