@@ -517,3 +517,89 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(rgb, 1.0);
 }
 "#;
+
+// --- picking ---------------------------------------------------------------
+
+/// Returns the nearest Part under the cursor.
+/// `ndc_x`/`ndc_y` are normalised device coordinates: -1..1, y pointing up.
+pub fn pick(
+    model: &DataModel,
+    camera: &Camera,
+    aspect: f32,
+    ndc_x: f32,
+    ndc_y: f32,
+) -> Option<brixo_core::InstanceId> {
+    // Unproject two points to get a world-space ray through the cursor.
+    let inv = camera.view_proj(aspect).inverse();
+    let near = inv * glam::Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+    let far = inv * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+    let near = near.truncate() / near.w;
+    let far = far.truncate() / far.w;
+    let dir = (far - near).normalize();
+
+    let mut best: Option<(f32, brixo_core::InstanceId)> = None;
+    let mut stack = vec![model.root()];
+    while let Some(id) = stack.pop() {
+        let Some(inst) = model.get(id) else { continue };
+        stack.extend(inst.children.iter().copied());
+
+        if inst.class != Class::Part {
+            continue;
+        }
+        let Some(p) = model.part(id) else { continue };
+
+        let rotation = Quat::from_euler(
+            glam::EulerRot::YXZ,
+            p.rotation.y.to_radians(),
+            p.rotation.x.to_radians(),
+            p.rotation.z.to_radians(),
+        );
+        let m =
+            Mat4::from_scale_rotation_translation(to_glam(p.size), rotation, to_glam(p.position));
+        let inv_m = m.inverse();
+
+        // Test in the part's own space, where every box is a unit cube.
+        let local_origin = inv_m.transform_point3(near);
+        let local_dir = inv_m.transform_vector3(dir);
+
+        if let Some(t) = ray_unit_cube(local_origin, local_dir) {
+            if best.map_or(true, |(bt, _)| t < bt) {
+                best = Some((t, id));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+/// Slab test against the cube spanning -0.5..0.5 on each axis.
+fn ray_unit_cube(origin: Vec3, dir: Vec3) -> Option<f32> {
+    let o = origin.to_array();
+    let d = dir.to_array();
+    let mut tmin = f32::NEG_INFINITY;
+    let mut tmax = f32::INFINITY;
+
+    for i in 0..3 {
+        if d[i].abs() < 1e-8 {
+            // Ray runs parallel to this pair of faces.
+            if o[i] < -0.5 || o[i] > 0.5 {
+                return None;
+            }
+        } else {
+            let mut t1 = (-0.5 - o[i]) / d[i];
+            let mut t2 = (0.5 - o[i]) / d[i];
+            if t1 > t2 {
+                std::mem::swap(&mut t1, &mut t2);
+            }
+            tmin = tmin.max(t1);
+            tmax = tmax.min(t2);
+            if tmin > tmax {
+                return None;
+            }
+        }
+    }
+
+    if tmax < 0.0 {
+        return None; // box is behind the camera
+    }
+    Some(if tmin >= 0.0 { tmin } else { tmax })
+}

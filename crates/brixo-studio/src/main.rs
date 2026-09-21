@@ -121,6 +121,7 @@ struct Studio {
     status: String,
     keys: HashSet<KeyCode>,
     looking: bool,
+    cursor: (f32, f32),
     last_frame: Instant,
 }
 
@@ -134,6 +135,7 @@ impl Studio {
             status: "Ready".to_string(),
             keys: HashSet::new(),
             looking: false,
+            cursor: (0.0, 0.0),
             last_frame: Instant::now(),
         }
     }
@@ -509,12 +511,39 @@ impl ApplicationHandler for Studio {
                 }
             }
 
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x as f32, position.y as f32);
+            }
+
             WindowEvent::MouseInput { button, state, .. } => {
-                if button == MouseButton::Right && !consumed {
-                    self.looking = state == ElementState::Pressed;
-                }
-                if state == ElementState::Released && button == MouseButton::Right {
+                // Always let go of mouse-look, even if the release lands on a panel.
+                if button == MouseButton::Right && state == ElementState::Released {
                     self.looking = false;
+                }
+                if consumed {
+                    return;
+                }
+                if button == MouseButton::Right && state == ElementState::Pressed {
+                    self.looking = true;
+                }
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    let dims = self.gpu.as_ref().map(|g| (g.config.width, g.config.height));
+                    if let Some((w, h)) = dims {
+                        let ndc_x = 2.0 * self.cursor.0 / w as f32 - 1.0;
+                        let ndc_y = 1.0 - 2.0 * self.cursor.1 / h as f32;
+                        let hit = brixo_render::pick(
+                            &self.model,
+                            &self.camera,
+                            w as f32 / h as f32,
+                            ndc_x,
+                            ndc_y,
+                        );
+                        self.status = match hit.and_then(|id| self.model.get(id)) {
+                            Some(inst) => format!("Selected {}", inst.name),
+                            None => "Nothing there".to_string(),
+                        };
+                        self.selection = hit;
+                    }
                 }
             }
 

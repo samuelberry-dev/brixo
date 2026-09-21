@@ -1,0 +1,79 @@
+{
+  "instances": [
+    {
+      "id": 0,
+      "class": "Workspace",
+      "name": "Workspace",
+      "parent": null,
+      "children": [
+        1,
+        9
+      ],
+      "props": "Workspace"
+    },
+    {
+      "id": 1,
+      "class": "Part",
+      "name": "Baseplate",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": -0.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 60.0,
+            "y": 1.0,
+            "z": 60.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 90,
+            "g": 110,
+            "b": 90
+          }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "class": "Part",
+      "name": "block",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -0.5,
+            "y": 2.7,
+            "z": 0.0
+          },
+          "size": {
+            "x": 1.2,
+            "y": 0.8,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -26.0,
+            "y": -95.0,
+            "z": 45.0
+          },
+          "color": {
+            "r": 151,
+            "g": 150,
+            "b": 210
+          }
+        }
+      }
+    }
+  ],
+  "next_id": 10,
+  "root": 0
+}
