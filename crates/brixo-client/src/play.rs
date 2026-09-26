@@ -45,6 +45,47 @@ pub struct Held {
     pub jump: bool,
 }
 
+/// Keys that steer the camera, for anyone without a mouse to right-drag
+/// (trackpads): the same keys as Roblox. Left/Right turn, Page Up/Page
+/// Down tilt (fn + Up/Down on a Mac), I/O zoom in and out.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CameraKeys {
+    pub turn_left: bool,
+    pub turn_right: bool,
+    pub tilt_up: bool,
+    pub tilt_down: bool,
+    pub zoom_in: bool,
+    pub zoom_out: bool,
+}
+
+/// How fast the keys turn and tilt the camera (radians a second).
+pub const KEY_TURN_SPEED: f32 = 2.4;
+pub const KEY_TILT_SPEED: f32 = 1.5;
+/// How fast I and O zoom (studs a second).
+pub const KEY_ZOOM_SPEED: f32 = 22.0;
+
+/// Turns, tilts and zooms the follow camera from held keys, `dt` seconds' worth.
+pub fn keyboard_look(camera: &mut Camera, follow: &mut FollowCamera, keys: CameraKeys, dt: f32) {
+    let axis = |plus: bool, minus: bool| (plus as i8 - minus as i8) as f32;
+    camera.yaw += axis(keys.turn_right, keys.turn_left) * KEY_TURN_SPEED * dt;
+    camera.pitch = (camera.pitch + axis(keys.tilt_up, keys.tilt_down) * KEY_TILT_SPEED * dt).clamp(-1.5, 1.5);
+    // zoom() counts in scroll units: 20 of them move the camera a stud.
+    let zoom = axis(keys.zoom_in, keys.zoom_out);
+    if zoom != 0.0 {
+        follow.zoom(zoom * KEY_ZOOM_SPEED * 20.0 * dt);
+    }
+}
+
+/// Trackpad gestures for the follow camera: pinch zooms, and a two-finger
+/// swipe sideways turns (up/down stays zoom, like a mouse wheel).
+pub fn trackpad_look(camera: &mut Camera, follow: &mut FollowCamera, scroll: egui::Vec2, pinch: f32) {
+    camera.yaw -= scroll.x * 0.004;
+    if pinch != 1.0 {
+        // egui reports a pinch as a zoom factor: 1.1 is 10% closer.
+        follow.zoom((pinch - 1.0) * 400.0);
+    }
+}
+
 /// WASD relative to where the camera faces, flattened onto the ground.
 pub fn movement_input(camera: &Camera, held: Held) -> PlayerInput {
     let forward = Vec3::new(camera.yaw.cos(), 0.0, camera.yaw.sin());
@@ -231,6 +272,45 @@ mod tests {
         assert!((hit - 4.5).abs() < 1e-4, "hit the near face: {hit}");
         dm.part_mut(wall).unwrap().transparency = 1.0;
         assert_eq!(first_hit(&dm, Vec3::ZERO, -Vec3::Z, 20.0), None);
+    }
+
+    #[test]
+    fn camera_keys_turn_tilt_and_zoom() {
+        let mut cam = Camera::new();
+        let mut follow = FollowCamera::default();
+        let (yaw, pitch, dist) = (cam.yaw, cam.pitch, follow.distance);
+        let keys = CameraKeys { turn_right: true, tilt_up: true, zoom_in: true, ..Default::default() };
+        keyboard_look(&mut cam, &mut follow, keys, 0.2);
+        assert!((cam.yaw - (yaw + KEY_TURN_SPEED * 0.2)).abs() < 1e-4, "right turns right");
+        assert!(cam.pitch > pitch);
+        assert!((follow.distance - (dist - KEY_ZOOM_SPEED * 0.2)).abs() < 1e-3, "I zooms in {} studs a second", KEY_ZOOM_SPEED);
+        // Opposite keys cancel; nothing held does nothing.
+        let (yaw, dist) = (cam.yaw, follow.distance);
+        keyboard_look(&mut cam, &mut follow, CameraKeys { turn_left: true, turn_right: true, ..Default::default() }, 0.5);
+        keyboard_look(&mut cam, &mut follow, CameraKeys::default(), 0.5);
+        assert_eq!((cam.yaw, follow.distance), (yaw, dist));
+        // Tilting stops at straight up.
+        for _ in 0..100 {
+            keyboard_look(&mut cam, &mut follow, CameraKeys { tilt_up: true, ..Default::default() }, 0.1);
+        }
+        assert!(cam.pitch <= 1.5);
+        // Holding I all the way in reaches first person, O comes back out.
+        for _ in 0..200 {
+            keyboard_look(&mut cam, &mut follow, CameraKeys { zoom_in: true, ..Default::default() }, 0.05);
+        }
+        assert_eq!(follow.distance, 0.0);
+        keyboard_look(&mut cam, &mut follow, CameraKeys { zoom_out: true, ..Default::default() }, 0.05);
+        assert!(follow.distance >= MIN_FOLLOW_DISTANCE);
+    }
+
+    #[test]
+    fn pinching_zooms_and_swiping_turns() {
+        let mut cam = Camera::new();
+        let mut follow = FollowCamera::default();
+        let (yaw, dist) = (cam.yaw, follow.distance);
+        trackpad_look(&mut cam, &mut follow, egui::vec2(-50.0, 0.0), 1.1);
+        assert!(cam.yaw > yaw, "swipe turns");
+        assert!(follow.distance < dist, "pinching out zooms in");
     }
 
     #[test]

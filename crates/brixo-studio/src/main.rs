@@ -9,6 +9,7 @@ mod editing;
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Shape, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
 use brixo_client::install::{self, App};
+use brixo_client::{keyboard_look, trackpad_look, CameraKeys};
 use brixo_client::{draw_beacons, projector, Audio, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GuiEvents, Held};
 use brixo_runtime::{Game, LogLine, PlayerInput};
 use glam::{EulerRot, Mat4, Quat, Vec3};
@@ -486,8 +487,9 @@ impl Studio {
         movement_input(
             &self.camera,
             Held {
-                forward: held(KeyCode::KeyW),
-                back: held(KeyCode::KeyS),
+                // Up/Down walk too, like Roblox (Left/Right turn the camera).
+                forward: held(KeyCode::KeyW) || held(KeyCode::ArrowUp),
+                back: held(KeyCode::KeyS) || held(KeyCode::ArrowDown),
                 left: held(KeyCode::KeyA),
                 right: held(KeyCode::KeyD),
                 jump: held(KeyCode::Space),
@@ -496,10 +498,27 @@ impl Studio {
     }
 
     fn move_camera(&mut self, dt: f32) {
-        // During Play the keys drive the player and the camera follows it.
+        let held = |k| self.keys.contains(&k);
+        let camera_keys = CameraKeys {
+            turn_left: held(KeyCode::ArrowLeft),
+            turn_right: held(KeyCode::ArrowRight),
+            tilt_up: held(KeyCode::PageUp),
+            tilt_down: held(KeyCode::PageDown),
+            zoom_in: held(KeyCode::KeyI),
+            zoom_out: held(KeyCode::KeyO),
+        };
+        // During Play the keys drive the player and the camera follows it;
+        // the camera keys turn and zoom it, as in Brixo Player.
         if self.game.is_some() {
+            keyboard_look(&mut self.camera, &mut self.editor.follow, camera_keys, dt);
             return;
         }
+        // Building: Left/Right turn and Page Up/Down tilt here too, for
+        // trackpads; Up/Down fly forward and back like W/S.
+        let axis = |plus: bool, minus: bool| (plus as i8 - minus as i8) as f32;
+        self.camera.yaw += axis(camera_keys.turn_right, camera_keys.turn_left) * brixo_client::play::KEY_TURN_SPEED * dt;
+        self.camera.pitch = (self.camera.pitch + axis(camera_keys.tilt_up, camera_keys.tilt_down) * brixo_client::play::KEY_TILT_SPEED * dt)
+            .clamp(-1.55, 1.55);
         let speed = if self.keys.contains(&KeyCode::ControlLeft) {
             40.0
         } else {
@@ -510,10 +529,10 @@ impl Studio {
         let right = self.camera.right();
         let mut delta = Vec3::ZERO;
 
-        if self.keys.contains(&KeyCode::KeyW) {
+        if self.keys.contains(&KeyCode::KeyW) || self.keys.contains(&KeyCode::ArrowUp) {
             delta += forward;
         }
-        if self.keys.contains(&KeyCode::KeyS) {
+        if self.keys.contains(&KeyCode::KeyS) || self.keys.contains(&KeyCode::ArrowDown) {
             delta -= forward;
         }
         if self.keys.contains(&KeyCode::KeyD) {
@@ -1998,8 +2017,18 @@ fn viewport(
 
     // Scroll wheel: zoom the follow camera during Play. Zooming in past
     // the closest distance switches to first person; zooming out leaves it.
-    if playing && response.hovered() {
-        editor.follow.zoom(ui.input(|i| i.smooth_scroll_delta.y));
+    // Trackpads: pinch zooms, a two-finger swipe sideways turns. While
+    // building, scrolling and pinching fly the camera forward and back.
+    if response.hovered() {
+        let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
+        if playing {
+            editor.follow.zoom(scroll.y);
+            trackpad_look(camera, &mut editor.follow, scroll, pinch);
+        } else {
+            let fly = scroll.y * 0.05 + (pinch - 1.0) * 20.0;
+            camera.position += camera.forward() * fly;
+            camera.yaw -= scroll.x * 0.004;
+        }
     }
 
     // Right-drag: look around (during Play, orbit the player).

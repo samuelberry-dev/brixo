@@ -430,6 +430,13 @@ a `Sound` (the file stored base64 in the game). World updates leave the audio
 out; the server sends each player each Sound's file once (`ToClient::Asset`).
 Playback uses rodio's decoders; decoded files are cached.
 
+**Camera controls (Player and Studio's Play):** right-drag or Left/Right
+arrows turn, Page Up/Down tilt (fn+Up/Down on a Mac), scroll or I/O zoom,
+Up/Down walk like W/S (Roblox's keys; `brixo_client::keyboard_look`).
+Trackpads: pinch zooms and a two-finger sideways swipe turns
+(`trackpad_look`); many trackpad users can't right-drag at all. Building in
+Studio: arrows and Page Up/Down steer the fly camera, scroll/pinch fly it.
+
 **Sky:** a per-pixel shader sky (gradient, sun disc, flat two-tone clouds) and
 distance haze toward the horizon colour.
 

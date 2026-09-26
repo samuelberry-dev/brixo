@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use brixo_client::{draw_beacons, projector, Audio, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GameEntry, GuiEvents, Held};
+use brixo_client::{draw_beacons, keyboard_look, projector, trackpad_look, Audio, CameraKeys, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GameEntry, GuiEvents, Held};
 use brixo_client::install::{self, App};
 
 mod mac_links;
@@ -284,13 +284,28 @@ impl Player {
     fn frame(&mut self, dt: f32) {
         let chatting = self.chat_open;
         let held = |k| !chatting && self.keys.contains(&k);
+        let cam_keys = CameraKeys {
+            turn_left: held(KeyCode::ArrowLeft),
+            turn_right: held(KeyCode::ArrowRight),
+            tilt_up: held(KeyCode::PageUp),
+            tilt_down: held(KeyCode::PageDown),
+            zoom_in: held(KeyCode::KeyI),
+            zoom_out: held(KeyCode::KeyO),
+        };
         let held = Held {
-            forward: held(KeyCode::KeyW),
-            back: held(KeyCode::KeyS),
+            // Up/Down walk too, like Roblox (Left/Right turn the camera).
+            forward: held(KeyCode::KeyW) || held(KeyCode::ArrowUp),
+            back: held(KeyCode::KeyS) || held(KeyCode::ArrowDown),
             left: held(KeyCode::KeyA),
             right: held(KeyCode::KeyD),
             jump: held(KeyCode::Space),
         };
+        // The camera keys, for trackpads (see brixo_client::CameraKeys).
+        if let Screen::Playing(s) = &mut self.screen {
+            if !s.paused && !s.lost {
+                keyboard_look(&mut self.camera, &mut s.follow, cam_keys, dt);
+            }
+        }
 
         // Run the game. It keeps running while paused (in multiplayer the
         // world won't wait for you), but your character stands still.
@@ -876,24 +891,29 @@ fn game_ui(ctx: &egui::Context, s: &mut Session, action: &mut Option<Action>) {
                     }
                 });
                 ui.add_space(8.0);
-                ui.label("WASD move, Space jump");
+                ui.label("WASD or Up/Down to move, Space to jump");
                 ui.label("1-9 hold a tool, click to use it");
                 ui.label("/ or Enter to chat");
-                ui.label("Right-drag to look, scroll to zoom");
+                ui.label("Turn: right-drag, Left/Right, or swipe sideways");
+                ui.label("Tilt: Page Up/Down (fn + Up/Down on a Mac)");
+                ui.label("Zoom: scroll, pinch, or I / O");
                 ui.label("F9 console, Esc to close this menu");
             });
     }
 }
 
-/// Right-drag turns the camera; the wheel zooms.
+/// Right-drag turns the camera; the wheel zooms. (Keys and trackpads: see
+/// brixo_client::keyboard_look and trackpad_look.)
 fn look_around(ctx: &egui::Context, camera: &mut Camera, follow: &mut FollowCamera) {
-    let (dragging, delta, scroll) =
-        ctx.input(|i| (i.pointer.secondary_down(), i.pointer.delta(), i.smooth_scroll_delta.y));
+    let (dragging, delta, scroll, pinch) =
+        ctx.input(|i| (i.pointer.secondary_down(), i.pointer.delta(), i.smooth_scroll_delta, i.zoom_delta()));
     if dragging {
         camera.yaw += delta.x * LOOK_SPEED;
         camera.pitch = (camera.pitch - delta.y * LOOK_SPEED).clamp(-1.5, 1.5);
     }
-    follow.zoom(scroll);
+    follow.zoom(scroll.y);
+    // Trackpads: pinch zooms, a two-finger swipe sideways turns.
+    trackpad_look(camera, follow, scroll, pinch);
 }
 
 // --- window ----------------------------------------------------------------
