@@ -54,7 +54,9 @@ struct Progress {
 /// Shows the window, runs `steps` in order on a background thread, and
 /// returns once it has closed. `subtitle` goes under the logo ("Brixo
 /// Player"); `done_text` replaces the status at the end ("Ready!").
-pub fn run(subtitle: &str, steps: Vec<Step>, done_text: &str) -> Outcome {
+/// `stay_open`: when it's done, wait with Open playbrixo.com / Close
+/// buttons instead of closing by itself.
+pub fn run(subtitle: &str, steps: Vec<Step>, done_text: &str, stay_open: bool) -> Outcome {
     let total = steps.len().max(1);
     let progress = Arc::new(Mutex::new(Progress::default()));
     let Ok(event_loop) = EventLoop::new() else {
@@ -82,6 +84,7 @@ pub fn run(subtitle: &str, steps: Vec<Step>, done_text: &str) -> Outcome {
         started: Instant::now(),
         outcome: None,
         pointer_on_button: false,
+        stay_open,
     };
     let _ = event_loop.run_app(&mut ui);
     ui.outcome.unwrap_or(Outcome::Failed("the installer window was closed".into()))
@@ -124,6 +127,7 @@ struct InstallerUi {
     started: Instant,
     outcome: Option<Outcome>,
     pointer_on_button: bool,
+    stay_open: bool,
 }
 
 impl ApplicationHandler for InstallerUi {
@@ -224,7 +228,9 @@ impl InstallerUi {
             self.landed.push(Instant::now());
         }
         let all_landed = self.landed.len() >= SLOTS && self.landed.last().is_some_and(|t| t.elapsed() > Duration::from_millis(250));
-        let close_now = matches!(result, Some(Ok(()))) && all_landed && finished_at.is_some_and(|t| t.elapsed() >= HOLD_DONE);
+        let close_now =
+            !self.stay_open && matches!(result, Some(Ok(()))) && all_landed && finished_at.is_some_and(|t| t.elapsed() >= HOLD_DONE);
+        let show_done_buttons = self.stay_open && matches!(result, Some(Ok(()))) && all_landed;
 
         let Some(gpu) = self.gpu.as_mut() else { return close_now };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
@@ -262,6 +268,25 @@ impl InstallerUi {
                     let button = ui.put(r, egui::Button::new("Close"));
                     on_button = button.hovered();
                     close_clicked = button.clicked();
+                }
+                if show_done_buttons {
+                    let y = rect.bottom() - 26.0;
+                    let site = crate::install::site();
+                    let label = format!("Open {}", site.trim_start_matches("https://").trim_start_matches("http://"));
+                    let open = ui.put(
+                        egui::Rect::from_center_size(egui::pos2(rect.center().x - 64.0, y), egui::vec2(170.0, 30.0)),
+                        egui::Button::new(egui::RichText::new(label).size(14.0)).fill(egui::Color32::from_rgb(75, 151, 75)),
+                    );
+                    let close = ui.put(
+                        egui::Rect::from_center_size(egui::pos2(rect.center().x + 84.0, y), egui::vec2(90.0, 30.0)),
+                        egui::Button::new(egui::RichText::new("Close").size(14.0)),
+                    );
+                    on_button = open.hovered() || close.hovered();
+                    if open.clicked() {
+                        crate::install::open_url(&site);
+                        close_clicked = true;
+                    }
+                    close_clicked |= close.clicked();
                 }
                 p.text(
                     egui::pos2(rect.right() - 10.0, rect.bottom() - 8.0),

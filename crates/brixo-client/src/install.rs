@@ -120,7 +120,7 @@ pub fn on_startup(app: App, after_install: impl FnOnce(&Path) -> Result<(), Stri
     }
     if args.first().map(String::as_str) == Some("--uninstall") {
         // The window shows how it went (and any problem) itself.
-        let _ = crate::installer::run(app.title(), uninstall_steps(app), &format!("{} is uninstalled. Your games are kept.", app.title()));
+        let _ = crate::installer::run(app.title(), uninstall_steps(app), &format!("{} is uninstalled. Your games are kept.", app.title()), false);
         return Startup::Exit;
     }
     let Ok(me) = std::env::current_exe() else { return Startup::Run };
@@ -128,7 +128,12 @@ pub fn on_startup(app: App, after_install: impl FnOnce(&Path) -> Result<(), Stri
     if !is_download(app, &me) || same_path(&me, &target) {
         return Startup::Run;
     }
-    match crate::installer::run(app.title(), install_steps(app, me.clone(), target.clone(), after_install), "Ready!") {
+    // Like Roblox: installing Player just says so and waits (games open from
+    // Play on the website); Studio opens once it's in, ready to build.
+    let just_player = app == App::Player && args.is_empty();
+    let done_text = if just_player { format!("{} is installed! Press Play on any game.", app.title()) } else { "Ready!".to_string() };
+    match crate::installer::run(app.title(), install_steps(app, me.clone(), target.clone(), after_install), &done_text, just_player) {
+        crate::installer::Outcome::Done if just_player => {}
         crate::installer::Outcome::Done => {
             let args = if args.is_empty() { vec!["--installed".to_string()] } else { args };
             if let Err(e) = std::process::Command::new(&target).args(&args).spawn() {
