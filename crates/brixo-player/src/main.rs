@@ -740,7 +740,9 @@ fn home_ui(ctx: &egui::Context, message: Option<&str>) {
             ui.label(egui::RichText::new("BRIXO").size(64.0).strong().color(egui::Color32::WHITE));
             ui.add_space(8.0);
             let text = message.unwrap_or("Games open from the Brixo website: find one you like and press Play.");
-            ui.label(egui::RichText::new(text).size(20.0).color(egui::Color32::WHITE));
+            // Long messages wrap instead of running off the window.
+            ui.set_max_width((ui.available_width() - 40.0).min(760.0));
+            ui.add(egui::Label::new(egui::RichText::new(text).size(20.0).color(egui::Color32::WHITE)).wrap());
             ui.add_space(16.0);
             let site = install::site();
             let label = format!("Open {}", site.trim_start_matches("https://").trim_start_matches("http://"));
@@ -920,7 +922,9 @@ impl ApplicationHandler for Player {
         }
         // Just installed from the website's download.
         if args.iter().any(|a| a == "--installed") {
-            self.screen = Screen::Home { message: Some(format!("{} is installed! Pick a game on {} and press Play.", App::Player.title(), install::site())) };
+            let site = install::site();
+            let site = site.trim_start_matches("https://").trim_start_matches("http://");
+            self.screen = Screen::Home { message: Some(format!("{} is installed!\nPick a game on {site} and press Play.", App::Player.title())) };
             return;
         }
         // `brixo-player path/to/game.brixo` plays that game straight away.
@@ -1010,7 +1014,8 @@ impl ApplicationHandler for Player {
 fn main() {
     // The downloaded BrixoPlayer.exe installs itself, then hands over to the
     // installed copy; `--uninstall` is what Windows' Uninstall runs.
-    let startup = install::on_startup(App::Player, |exe| protocol::register_exe(exe).map(|_| ()));
+    // (Only the Windows download is offered; elsewhere there's nothing to set up.)
+    let startup = install::on_startup(App::Player, |exe| if cfg!(windows) { protocol::register_exe(exe).map(|_| ()) } else { Ok(()) });
     if startup == install::Startup::Exit {
         return;
     }

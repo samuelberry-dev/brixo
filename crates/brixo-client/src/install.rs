@@ -109,16 +109,18 @@ pub enum Startup {
 }
 
 /// Call first thing in `main`. Handles `--uninstall`, and installs the
-/// downloaded file then starts the installed copy (with the same
-/// arguments, plus `--installed` if there were none). `after_install` does
-/// app-specific setup with the installed exe's path (Player: brixo:// links).
-pub fn on_startup(app: App, after_install: impl FnOnce(&Path) -> Result<(), String>) -> Startup {
+/// downloaded file (in the installer window) then starts the installed copy
+/// with the same arguments (`--installed` if there were none).
+/// `after_install` does app-specific setup with the installed exe's path
+/// (Player: makes Play on the website open it).
+pub fn on_startup(app: App, after_install: impl FnOnce(&Path) -> Result<(), String> + Send + 'static) -> Startup {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if std::env::var_os("BRIXO_SKIP_INSTALL").is_some() {
+        return Startup::Run;
+    }
     if args.first().map(String::as_str) == Some("--uninstall") {
-        match uninstall(app) {
-            Ok(()) => message(app.title(), &format!("{} was uninstalled. Your games and saves in your Brixo folder were kept.", app.title())),
-            Err(e) => message(app.title(), &format!("Couldn't uninstall {}: {e}", app.title())),
-        }
+        // The window shows how it went (and any problem) itself.
+        let _ = crate::installer::run(app.title(), uninstall_steps(app), &format!("{} is uninstalled. Your games are kept.", app.title()));
         return Startup::Exit;
     }
     let Ok(me) = std::env::current_exe() else { return Startup::Run };
@@ -126,29 +128,54 @@ pub fn on_startup(app: App, after_install: impl FnOnce(&Path) -> Result<(), Stri
     if !is_download(app, &me) || same_path(&me, &target) {
         return Startup::Run;
     }
-    let installed = install(app, &me, &target).and_then(|()| after_install(&target));
-    match installed {
-        Ok(()) => {
+    match crate::installer::run(app.title(), install_steps(app, me.clone(), target.clone(), after_install), "Ready!") {
+        crate::installer::Outcome::Done => {
             let args = if args.is_empty() { vec!["--installed".to_string()] } else { args };
-            match std::process::Command::new(&target).args(&args).spawn() {
-                Ok(_) => Startup::Exit,
-                Err(e) => {
-                    message(app.title(), &format!("{} installed, but didn't start: {e}", app.title()));
-                    Startup::Exit
-                }
+            if let Err(e) = std::process::Command::new(&target).args(&args).spawn() {
+                message(app.title(), &format!("{} installed, but didn't start: {e}", app.title()));
             }
         }
-        Err(e) => {
-            message(app.title(), &format!("Couldn't install {}: {e}\n\nIt will run from where it is this time.", app.title()));
-            Startup::Run
+        crate::installer::Outcome::Failed(_) => {
+            // The window said what went wrong. Run from where it is, in a
+            // fresh process: this one has used up its one window loop.
+            let _ = std::process::Command::new(&me).args(&args).env("BRIXO_SKIP_INSTALL", "1").spawn();
         }
     }
+    Startup::Exit
+}
+
+fn install_steps(
+    app: App,
+    me: PathBuf,
+    target: PathBuf,
+    after_install: impl FnOnce(&Path) -> Result<(), String> + Send + 'static,
+) -> Vec<crate::installer::Step> {
+    use crate::installer::Step;
+    let mut steps = vec![
+        Step::new(format!("Copying {}...", app.title()), {
+            let target = target.clone();
+            move || copy_in(&me, &target)
+        }),
+        Step::new("Adding shortcuts...", {
+            let target = target.clone();
+            move || add_shortcuts(app, &target)
+        }),
+    ];
+    match app {
+        App::Player => steps.push(Step::new("Setting up Play buttons...", move || after_install(&target))),
+        // Where Studio saves your scenes and games.
+        App::Studio => steps.push(Step::new("Making your Brixo folder...", || {
+            let dir = crate::library::games_dir();
+            std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't make {}: {e}", dir.display()))
+        })),
+    }
+    steps
 }
 
 /// Copies `me` over the installed copy. The installed one may be running
 /// (a game open): Windows won't overwrite a running program but will
 /// rename it, so the old one steps aside first.
-fn install(app: App, me: &Path, target: &Path) -> Result<(), String> {
+fn copy_in(me: &Path, target: &Path) -> Result<(), String> {
     let dir = target.parent().ok_or("no install folder")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("couldn't make {}: {e}", dir.display()))?;
     let old = target.with_extension("old.exe");
@@ -160,7 +187,7 @@ fn install(app: App, me: &Path, target: &Path) -> Result<(), String> {
     // The download is marked as "from the internet"; the installed copy
     // doesn't need Windows asking about it again every time it starts.
     let _ = std::fs::remove_file(format!("{}:Zone.Identifier", target.display()));
-    add_shortcuts(app, target)
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -195,25 +222,39 @@ Set-ItemProperty -Path $key -Name NoRepair -Value 1 -Type DWord
 }
 
 #[cfg(windows)]
-fn uninstall(app: App) -> Result<(), String> {
-    let target = installed_exe(app).ok_or("no install folder")?;
-    let script = r#"
-$ErrorActionPreference = 'Continue'
+fn uninstall_steps(app: App) -> Vec<crate::installer::Step> {
+    use crate::installer::Step;
+    let Some(target) = installed_exe(app) else {
+        return vec![Step::new("Uninstalling...", || Err("no install folder".to_string()))];
+    };
+    let mut steps = vec![Step::new("Removing shortcuts...", {
+        let target = target.clone();
+        move || {
+            powershell(app, &target, r#"
 foreach ($dir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {
     if ($dir) { Remove-Item -LiteralPath (Join-Path $dir ($env:BRIXO_TITLE + '.lnk')) -ErrorAction SilentlyContinue }
 }
 Remove-Item -LiteralPath ('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\' + $env:BRIXO_KEY) -Recurse -ErrorAction SilentlyContinue
-if ($env:BRIXO_KEY -eq 'BrixoPlayer') {
-    Remove-Item -LiteralPath 'HKCU:\Software\Classes\brixo' -Recurse -ErrorAction SilentlyContinue
-}
-# The program can't delete itself while it runs (its "uninstalled" message
-# is still open): a hidden window keeps trying for two minutes, and stops
-# as soon as the folder is gone.
+exit 0
+"#)
+        }
+    })];
+    if app == App::Player {
+        steps.push(Step::new("Removing Play buttons...", {
+            let target = target.clone();
+            move || powershell(app, &target, "Remove-Item -LiteralPath 'HKCU:\\Software\\Classes\\brixo' -Recurse -ErrorAction SilentlyContinue; exit 0")
+        }));
+    }
+    steps.push(Step::new("Cleaning up...", move || {
+        // The program can't delete itself while it runs: once this window
+        // closes, a hidden one removes the folder (trying for two minutes).
+        powershell(app, &target, r#"
 $folder = Split-Path $env:BRIXO_TARGET
 $retry = 'for /l %i in (1,1,120) do (ping -n 2 127.0.0.1 >nul & rmdir /s /q "' + $folder + '" 2>nul & if not exist "' + $folder + '" exit)'
 Start-Process -WindowStyle Hidden -FilePath cmd.exe -ArgumentList ('/c ' + $retry)
-"#;
-    powershell(app, &target, script)
+"#)
+    }));
+    steps
 }
 
 #[cfg(windows)]
@@ -246,8 +287,8 @@ fn add_shortcuts(_app: App, _target: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn uninstall(_app: App) -> Result<(), String> {
-    Err("uninstalling is only for the Windows download".into())
+fn uninstall_steps(_app: App) -> Vec<crate::installer::Step> {
+    vec![crate::installer::Step::new("Uninstalling...", || Err("uninstalling is only for the Windows download".to_string()))]
 }
 
 /// A message box (Windows), or a line on the console elsewhere.

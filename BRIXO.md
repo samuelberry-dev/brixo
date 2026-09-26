@@ -63,6 +63,17 @@ cargo build; it copies to `%LOCALAPPDATA%\Brixo\Player`, renaming a running
 old copy aside, strips Zone.Identifier, adds Start Menu + desktop shortcuts and
 an Apps entry (`--uninstall`) via PowerShell with paths in env vars, registers
 brixo:// (Player), then starts the installed copy (`--installed` if no args).
+Installing and uninstalling show a window (`brixo-client/src/installer.rs`):
+the website's navy stud banner, the B R I X O brick logo, and ten bricks that
+drop into sockets as each step finishes (steps run on a thread, each shown at
+least 0.45 s, starting only once the window has drawn; "Ready!" holds 1.1 s).
+It has its own winit loop, and a process only gets one, so it runs only when
+the process then hands over or quits; if install fails it relaunches itself
+with BRIXO_SKIP_INSTALL=1 to run from where it is. The icon
+(`brixo-client/assets/icon.ico`, red brick with a white B) is embedded by
+player/studio `build.rs` via winresource (needs rc.exe from the Build Tools;
+without it the build warns and carries on), with ProductName/FileDescription
+so Task Manager says "Brixo Player"; windows use `filming::brixo_icon()`.
 Release builds hide the console (`windows_subsystem`). Player and Studio check
 `/api/version` in the background and show "A new ... is out" (never for "dev"
 builds). Installed Studio saves `scene.brixo` in `~/Brixo`, finds Player next
