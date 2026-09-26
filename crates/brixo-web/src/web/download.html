@@ -2,27 +2,15 @@
 <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
 <body><div id="page"><div id="banner"></div><div id="nav"></div>
 <div id="content">
-<div class="cols"><div class="main">
-  <div class="box"><h2>Get Brixo</h2><div class="inner" id="downloads"><p class="hint">Loading...</p></div></div>
-  <div class="box"><h2>Installing on Windows</h2><div class="inner">
-    <ol class="steps">
-      <li>Download <b>Brixo Player</b> and open the file.</li>
-      <li>Windows may say <b>"Windows protected your PC"</b>. Brixo is new and doesn't have a paid
-          publisher certificate yet, so Windows doesn't recognise it. Click <b>More info</b>, then <b>Run anyway</b>.</li>
-      <li>That's it: Brixo Player installs itself (no admin needed) and adds a Start Menu shortcut.
-          Now press <b>Play</b> on any game.</li>
-    </ol>
-    <p class="hint">To uninstall, go to Windows <b>Settings &rarr; Apps</b> and uninstall <b>Brixo Player</b>
-      or <b>Brixo Studio</b> like any other app. Your saved games stay in your Brixo folder.</p>
-  </div></div>
-</div><div class="side">
+<div class="cols"><div class="main" id="main"><div class="box"><h2>Get Brixo</h2><div class="inner"><p class="hint">Loading...</p></div></div></div>
+<div class="side">
   <div class="box gold"><h2>What you need</h2><div class="inner">
     <table class="stats">
-      <tr><td>System</td><td>Windows 10 or 11</td></tr>
-      <tr><td>Graphics</td><td>DirectX 12 or Vulkan</td></tr>
+      <tr><td>Windows</td><td>10 or 11</td></tr>
+      <tr><td>Mac</td><td>macOS 11 or newer</td></tr>
       <tr><td>Account</td><td>Free</td></tr>
     </table>
-    <p class="hint" style="margin-top:6px">Mac and Linux: not yet.</p>
+    <p class="hint" style="margin-top:6px">Works on Apple Silicon and Intel Macs. Linux: not yet.</p>
   </div></div>
   <div class="box navy"><h2>New to Brixo?</h2><div class="inner soft">
     <p>Make an account so you can play, save your character and publish games.</p>
@@ -35,20 +23,41 @@
 (async () => {
   shell("download");
   const v = await api("/api/version").catch(() => ({}));
-  const box = document.getElementById("downloads");
-  const row = (d, title, what, cls) => `<div class="dl">
+  const onMac = /Mac/.test(navigator.platform || navigator.userAgent);
+  const row = (d, title, what, cls) => d ? `<div class="dl">
       <div class="brick-icon" style="background:${cls === "green" ? "#4b974b" : "#0d69ac"}"></div>
       <div class="what"><b>${title}</b><br>${what}
         <div class="hint">Version ${esc(d.version)} &middot; ${size(d.bytes)}</div></div>
       <a class="btn ${cls} big" href="/files/${encodeURIComponent(d.file)}" download>Download</a>
-    </div>`;
-  if (!v.player && !v.studio) {
-    box.innerHTML = `<p><b>Downloads are on their way.</b> Check back soon.</p>`;
-    return;
-  }
-  box.innerHTML =
-    (v.player ? row(v.player, "Brixo Player", "Plays every game on the site. Press <b>Play</b> on a game page and it opens right into it.", "green") : "") +
-    (v.studio ? row(v.studio, "Brixo Studio", "For making games: bricks, Rovik scripts, sounds, teams and tools. <b>Publish</b> puts your game on this site.", "") : "") +
-    `<div class="smartscreen"><b>Heads up:</b> Windows will probably warn you the first time. Click <b>More info &rarr; Run anyway</b> (see below).</div>`;
+    </div>` : "";
+  const PLAYER = "Plays every game on the site. Press <b>Play</b> on a game page and it opens right into it.";
+  const STUDIO = "For making games: bricks, Rovik scripts, sounds, teams and tools. <b>Publish</b> puts your game on this site.";
+
+  const windows = v.player || v.studio ? `<div class="box"><h2>Brixo for Windows</h2><div class="inner">
+      ${row(v.player, "Brixo Player", PLAYER, "green")}${row(v.studio, "Brixo Studio", STUDIO, "")}
+      <div class="smartscreen"><b>Installing:</b> open the file. If Windows says <b>"Windows protected your PC"</b>,
+        click <b>More info</b>, then <b>Run anyway</b>. (Brixo is new and doesn't have a paid publisher certificate yet.)
+        It installs itself, no admin needed, and adds a Start Menu shortcut.</div>
+      <p class="hint">To uninstall: Windows <b>Settings &rarr; Apps</b>, then uninstall <b>Brixo Player</b> or
+        <b>Brixo Studio</b> like any other app. Your saved games stay in your Brixo folder.</p>
+    </div></div>` : "";
+
+  const mac = v.player_mac || v.studio_mac ? `<div class="box"><h2>Brixo for Mac</h2><div class="inner">
+      ${row(v.player_mac, "Brixo Player", PLAYER, "green")}${row(v.studio_mac, "Brixo Studio", STUDIO, "")}
+      <div class="smartscreen"><b>Installing:</b>
+        <ol class="steps" style="margin-top:4px">
+          <li>Open the <b>.dmg</b> file and drag <b>Brixo Player</b> onto <b>Applications</b>.</li>
+          <li>Open it from Applications. The first time, your Mac says it can't check the app
+              (Brixo isn't in Apple's paid developer program yet): click <b>Done</b>.</li>
+          <li>Go to <b>System Settings &rarr; Privacy &amp; Security</b>, scroll down, and click
+              <b>Open Anyway</b> next to Brixo Player. After that it opens normally, and <b>Play</b> on the site opens it.</li>
+        </ol></div>
+      <p class="hint">To uninstall: drag it from Applications to the Trash. Your saved games stay in your Brixo folder.</p>
+    </div></div>` : "";
+
+  const none = !windows && !mac ? `<div class="box"><h2>Get Brixo</h2><div class="inner">
+      <p><b>Downloads are on their way.</b> Check back soon.</p></div></div>` : "";
+  // Your own computer's downloads first.
+  document.getElementById("main").innerHTML = none + (onMac ? mac + windows : windows + mac);
 })();
 </script></body></html>

@@ -1,0 +1,44 @@
+# Builds Brixo Player and Studio for Mac on one of GitHub's Macs, and packs
+# them as .dmg files. tools/release.ps1 starts this, waits for it, and
+# uploads the results with the Windows downloads. You can also start it by
+# hand: Actions -> Mac build -> Run workflow.
+name: Mac build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version stamp (release.ps1 fills this in), like 2026.09.26.0100"
+        required: true
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      # Keeps compiled libraries between runs: later builds take minutes, not most of an hour.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build for Apple Silicon and Intel Macs
+        env:
+          BRIXO_BUILD: ${{ inputs.version }}
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build --release --target aarch64-apple-darwin -p brixo-player -p brixo-studio
+          cargo build --release --target x86_64-apple-darwin -p brixo-player -p brixo-studio
+
+      - name: Make the .dmg files
+        run: bash tools/package-mac.sh "${{ inputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brixo-mac
+          path: dist-mac/*.dmg
+          if-no-files-found: error
+          retention-days: 7

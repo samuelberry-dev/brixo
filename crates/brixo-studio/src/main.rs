@@ -19,10 +19,11 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 /// Where Save and Load keep the scene: next to you when you run your own
-/// build, and in your Brixo folder (C:\Users\<you>\Brixo) for the
-/// installed Studio, which may not be allowed to write where it starts.
+/// build, and in your Brixo folder (C:\Users\<you>\Brixo, or ~/Brixo on
+/// a Mac) for the downloaded Studio, which may not be allowed to write
+/// where it starts (a Mac app starts in /).
 fn scene_path() -> String {
-    if install::is_installed_copy(App::Studio) {
+    if install::is_packaged(App::Studio) {
         if let Some(brixo) = brixo_client::games_dir().parent() {
             let _ = std::fs::create_dir_all(brixo);
             return brixo.join("scene.brixo").to_string_lossy().into_owned();
@@ -389,10 +390,10 @@ fn find_player() -> Result<std::path::PathBuf, String> {
     if built.exists() {
         return Ok(built);
     }
-    match install::installed_exe(App::Player) {
-        Some(p) if p.exists() => Ok(p),
-        _ => Err(format!("Testing with players needs Brixo Player: get it at {}/download", install::site())),
-    }
+    install::installed_places(App::Player)
+        .into_iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| format!("Testing with players needs Brixo Player: get it at {}/download", install::site()))
 }
 
 /// Starts a server on the scene and opens `players` player windows on it.

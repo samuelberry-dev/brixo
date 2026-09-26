@@ -63,6 +63,24 @@ cargo build; it copies to `%LOCALAPPDATA%\Brixo\Player`, renaming a running
 old copy aside, strips Zone.Identifier, adds Start Menu + desktop shortcuts and
 an Apps entry (`--uninstall`) via PowerShell with paths in env vars, registers
 brixo:// (Player), then starts the installed copy (`--installed` if no args).
+Mac: GitHub builds it (`.github/workflows/mac.yml`, macos-14, both
+aarch64 and x86_64, `tools/package-mac.sh` joins them with lipo into
+"Brixo Player.app" / "Brixo Studio.app" with an .icns from
+`assets/icon-1024.png`, an Info.plist (Player declares the `brixo` URL
+scheme), an ad-hoc codesign, and a .dmg with an Applications link).
+`release.ps1` starts it with `gh workflow run` (needs the GitHub CLI and
+everything pushed), builds Windows meanwhile, waits, downloads the dmgs and
+uploads all together; without gh it keeps the site's existing Mac entries.
+versions.json keys: player/studio (Windows), player_mac/studio_mac. macOS
+sends brixo:// links as an Apple Event, not argv: `brixo-player/src/mac_links.m`
+(compiled by build.rs with cc on macOS) catches kAEGetURL and queues links
+for Rust; Player checks the queue every frame, so Play also switches games
+while it's open. macOS may pass `-psn_...`: flags are never game files.
+Packaged-app paths use `install::is_packaged` (installed copy or inside a
+.app) and `install::installed_places` (Studio finds Player.app). Not
+notarized: first open needs System Settings -> Privacy & Security -> Open
+Anyway. None of the Mac code has run on a real Mac yet.
+
 Installing and uninstalling show a window (`brixo-client/src/installer.rs`):
 the website's navy stud banner, the B R I X O brick logo, and ten bricks that
 drop into sockets as each step finishes (steps run on a thread, each shown at

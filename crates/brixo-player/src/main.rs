@@ -16,6 +16,7 @@ use std::time::Instant;
 use brixo_client::{draw_beacons, projector, Audio, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GameEntry, GuiEvents, Held};
 use brixo_client::install::{self, App};
 
+mod mac_links;
 mod protocol;
 use brixo_core::DataModel;
 use brixo_render::{Camera, SceneRenderer};
@@ -928,7 +929,7 @@ impl ApplicationHandler for Player {
             return;
         }
         // `brixo-player path/to/game.brixo` plays that game straight away.
-        if let Some(path) = std::env::args().nth(1).filter(|a| !a.starts_with("--")) {
+        if let Some(path) = std::env::args().nth(1).filter(|a| !a.starts_with('-')) {
             let path = Path::new(&path).to_path_buf();
             let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
             self.play(GameEntry { name, path });
@@ -994,6 +995,11 @@ impl ApplicationHandler for Player {
             }
             WindowEvent::Focused(false) => self.keys.clear(),
             WindowEvent::RedrawRequested => {
+                // macOS: Play on the website (see mac_links); joining
+                // replaces whatever game is open.
+                if let Some(link) = mac_links::take().as_deref().and_then(protocol::parse) {
+                    self.join_with_ticket(link);
+                }
                 let now = Instant::now();
                 let dt = (now - self.last_frame).as_secs_f32().min(0.1);
                 self.last_frame = now;
@@ -1019,6 +1025,9 @@ fn main() {
     if startup == install::Startup::Exit {
         return;
     }
+    // macOS delivers Play links as Apple Events: start catching them now,
+    // so one that launched us isn't missed.
+    mac_links::listen();
     // `brixo-player --register-protocol`: make Play on the website open us.
     if std::env::args().nth(1).as_deref() == Some("--register-protocol") {
         match protocol::register() {

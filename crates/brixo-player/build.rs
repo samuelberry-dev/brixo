@@ -1,8 +1,15 @@
 //! On Windows, puts the Brixo icon and name into the program itself: the
 //! icon shows on the file, its shortcuts and the taskbar, and Task Manager
-//! says "Brixo Player". Other systems skip this.
+//! says "Brixo Player". On macOS it builds the link catcher instead.
 fn main() {
     println!("cargo:rerun-if-changed=../brixo-client/assets/icon.ico");
+    println!("cargo:rerun-if-changed=src/mac_links.m");
+    // On macOS, the little Objective-C file that catches brixo:// links.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        cc::Build::new().file("src/mac_links.m").flag("-fobjc-arc").compile("brixo_mac_links");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        return;
+    }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }

@@ -55,12 +55,19 @@ impl App {
         }
     }
 
-    /// Its name in the website's versions.json.
+    /// Its name in the website's versions.json (the Mac builds have their own).
     pub fn key(self) -> &'static str {
-        match self {
-            App::Player => "player",
-            App::Studio => "studio",
+        match (self, cfg!(target_os = "macos")) {
+            (App::Player, false) => "player",
+            (App::Studio, false) => "studio",
+            (App::Player, true) => "player_mac",
+            (App::Studio, true) => "studio_mac",
         }
+    }
+
+    /// The app's name on a Mac ("Brixo Player.app").
+    pub fn mac_bundle(self) -> String {
+        format!("{}.app", self.title())
     }
 }
 
@@ -90,6 +97,30 @@ pub fn is_download(app: App, exe: &Path) -> bool {
 pub fn is_installed_copy(app: App) -> bool {
     let (Ok(me), Some(target)) = (std::env::current_exe(), installed_exe(app)) else { return false };
     same_path(&me, &target)
+}
+
+/// True when running as the finished app people download: the installed
+/// Windows copy, or from inside a Mac `.app`. Not your own cargo builds.
+pub fn is_packaged(app: App) -> bool {
+    is_installed_copy(app) || std::env::current_exe().is_ok_and(|e| in_mac_bundle(&e))
+}
+
+fn in_mac_bundle(exe: &Path) -> bool {
+    exe.to_string_lossy().contains(".app/Contents/MacOS/")
+}
+
+/// Where the downloaded app could be: the Windows install, or the Mac app in
+/// Applications (yours or everyone's).
+pub fn installed_places(app: App) -> Vec<PathBuf> {
+    let mut places: Vec<PathBuf> = installed_exe(app).into_iter().collect();
+    if cfg!(target_os = "macos") {
+        let inner = Path::new("Contents/MacOS").join(app.exe_name().trim_end_matches(".exe"));
+        if let Some(home) = std::env::var_os("HOME") {
+            places.push(Path::new(&home).join("Applications").join(app.mac_bundle()).join(&inner));
+        }
+        places.push(Path::new("/Applications").join(app.mac_bundle()).join(&inner));
+    }
+    places
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -362,6 +393,13 @@ mod tests {
         assert!(is_download(App::Player, Path::new("Downloads/BrixoPlayer (1).exe")), "a second download");
         assert!(!is_download(App::Player, Path::new("BrixoPlayerCheat.exe")));
         assert!(!is_download(App::Studio, Path::new("BrixoPlayer.exe")));
+    }
+
+    #[test]
+    fn mac_apps_count_as_packaged() {
+        assert!(in_mac_bundle(Path::new("/Applications/Brixo Player.app/Contents/MacOS/BrixoPlayer")));
+        assert!(!in_mac_bundle(Path::new("/Users/sam/brixo/target/release/brixo-player")));
+        assert_eq!(App::Studio.mac_bundle(), "Brixo Studio.app");
     }
 
     #[test]

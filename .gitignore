@@ -1,5 +1,6 @@
 target/
 dist/
+dist-mac/
 
 # Local databases: real accounts and password hashes, never commit
 *.sqlite
