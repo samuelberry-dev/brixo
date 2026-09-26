@@ -6,10 +6,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source "$HOME/.cargo/env"
 
-echo "== Getting the latest code"
-# A build can touch Cargo.lock here; the copy in git always wins.
-git checkout -- Cargo.lock 2>/dev/null || true
-git pull --ff-only
+if [ -z "${BRIXO_DEPLOY_FRESH:-}" ]; then
+    echo "== Getting the latest code"
+    # A build can touch Cargo.lock here; the copy in git always wins.
+    git checkout -- Cargo.lock 2>/dev/null || true
+    git pull --ff-only
+    # The pull may have changed this very script, and bash would carry on
+    # running the old one it already started reading: start over with the new.
+    BRIXO_DEPLOY_FRESH=1 exec bash "$0" "$@"
+fi
 
 echo "== Building (a few minutes; longer the first time)"
 cargo build --release -p brixo-web
