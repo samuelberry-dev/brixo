@@ -5,7 +5,8 @@
 <div class="box gold" style="width:340px;margin:30px auto"><h2>Sign up and play!</h2><div class="inner">
   <form id="form">
     <div class="field"><label for="username">Username</label><input id="username" autocomplete="username" required maxlength="20"></div>
-    <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="new-password" required></div>
+    <div class="field"><label for="password">Password (8+ characters)</label><input id="password" type="password" autocomplete="new-password" required></div>
+    <div class="field" id="invite-row" style="display:none"><label for="invite">Invite code</label><input id="invite" placeholder="XXXX-XXXX-XXXX" autocomplete="off"></div>
     <div class="error" id="error"></div>
     <button class="btn gold big" type="submit" style="width:100%">Sign Up</button>
     <p class="hint" style="margin-top:8px;text-align:center">Already have an account? <a href="/login">Log in</a></p>
@@ -17,10 +18,17 @@
 (async () => {
   if (await shell(null)) { location.href = "/"; return; }
   const f = document.getElementById("form");
+  const stats = await api("/api/stats").catch(() => ({}));
+  if (stats.invite_only) {
+    document.getElementById("invite-row").style.display = "";
+    f.invite.required = true;
+    const code = new URLSearchParams(location.search).get("invite");
+    if (code) f.invite.value = code;
+  }
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api("/api/signup", "POST", { username: f.username.value, password: f.password.value });
+      await api("/api/signup", "POST", { username: f.username.value, password: f.password.value, invite: f.invite.value });
       location.href = "/avatar";
     } catch (err) { document.getElementById("error").textContent = err.message; }
   };

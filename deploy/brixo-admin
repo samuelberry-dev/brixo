@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Admin commands on the live database, run as the brixo user. Examples:
+#   brixo-admin set-password Brixo
+#   brixo-admin invite 5
+#   brixo-admin invites
+set -euo pipefail
+exec sudo -u brixo env BRIXO_WEB_DB=/var/lib/brixo/brixo-web.sqlite /usr/local/bin/brixo-web "$@"

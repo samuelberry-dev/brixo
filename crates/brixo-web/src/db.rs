@@ -68,6 +68,26 @@ fn game_from_row(r: &rusqlite::Row) -> rusqlite::Result<GameRow> {
     })
 }
 
+/// How long a login lasts before you have to log in again.
+pub const SESSION_DAYS: i64 = 30;
+
+/// Invite codes use letters and digits that can't be mixed up (no O/0,
+/// I/1/L), shown as XXXX-XXXX-XXXX.
+const INVITE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+fn new_invite_code() -> String {
+    let mut bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let chars: String = bytes.iter().map(|b| INVITE_ALPHABET[*b as usize % INVITE_ALPHABET.len()] as char).collect();
+    format!("{}-{}-{}", &chars[0..4], &chars[4..8], &chars[8..12])
+}
+
+/// "brix-4f9k 2qxm" and "BRIX4F9K2QXM" are the same code as "BRIX-4F9K-2QXM".
+pub fn normalize_invite(code: &str) -> String {
+    let c: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
+    if c.len() == 12 { format!("{}-{}-{}", &c[0..4], &c[4..8], &c[8..12]) } else { c }
+}
+
 /// A random hex token, for sessions and tickets.
 pub fn random_token() -> String {
     let mut bytes = [0u8; 24];
@@ -106,6 +126,10 @@ impl Db {
     /// Opens (or creates) the database. ":memory:" makes a throwaway one.
     pub fn open(path: &str) -> rusqlite::Result<Db> {
         let conn = Connection::open(path)?;
+        // The website and its command-line tools (invites, passwords) can
+        // use the file at the same time: wait for each other, don't fail.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS users (
                  id INTEGER PRIMARY KEY,
@@ -123,8 +147,16 @@ impl Db {
                  owner_id INTEGER NOT NULL REFERENCES users(id),
                  data TEXT NOT NULL,
                  UNIQUE(name, owner_id)
+             );
+             CREATE TABLE IF NOT EXISTS invites (
+                 code TEXT PRIMARY KEY,
+                 created INTEGER NOT NULL,
+                 used_by INTEGER REFERENCES users(id),
+                 used_at INTEGER
              );",
         )?;
+        add_column(&conn, "sessions", "created", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute("DELETE FROM sessions WHERE created < ?1", [now() - SESSION_DAYS * 86400])?;
         add_column(&conn, "users", "blurb", "TEXT NOT NULL DEFAULT ''")?;
         add_column(&conn, "users", "created", "INTEGER NOT NULL DEFAULT 0")?;
         add_column(&conn, "games", "description", "TEXT NOT NULL DEFAULT ''")?;
@@ -146,6 +178,70 @@ impl Db {
         Ok(User { id: conn.last_insert_rowid(), username: username.to_string(), avatar, blurb: String::new(), created })
     }
 
+    /// Makes an account with an invite code, using the code up. Ok(None)
+    /// means the code is wrong or already used; an error means the name
+    /// is taken.
+    pub fn create_user_invited(&self, username: &str, password_hash: &str, code: &str) -> rusqlite::Result<Option<User>> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let code = normalize_invite(code);
+        let unused: bool = tx
+            .query_row("SELECT 1 FROM invites WHERE code = ?1 AND used_by IS NULL", [&code], |_| Ok(true))
+            .optional()?
+            .unwrap_or(false);
+        if !unused {
+            return Ok(None);
+        }
+        let avatar = Avatar::default();
+        let created = now();
+        tx.execute(
+            "INSERT INTO users (username, password_hash, avatar, created) VALUES (?1, ?2, ?3, ?4)",
+            params![username, password_hash, serde_json::to_string(&avatar).unwrap(), created],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute("UPDATE invites SET used_by = ?1, used_at = ?2 WHERE code = ?3", params![id, created, code])?;
+        tx.commit()?;
+        Ok(Some(User { id, username: username.to_string(), avatar, blurb: String::new(), created }))
+    }
+
+    /// Makes `count` new invite codes.
+    pub fn create_invites(&self, count: usize) -> rusqlite::Result<Vec<String>> {
+        let conn = self.0.lock().unwrap();
+        let mut codes = Vec::new();
+        while codes.len() < count {
+            let code = new_invite_code();
+            if conn.execute("INSERT OR IGNORE INTO invites (code, created) VALUES (?1, ?2)", params![code, now()])? == 1 {
+                codes.push(code);
+            }
+        }
+        Ok(codes)
+    }
+
+    /// Every invite code: (code, who used it, if anyone).
+    pub fn invites(&self) -> rusqlite::Result<Vec<(String, Option<String>)>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT i.code, u.username FROM invites i LEFT JOIN users u ON u.id = i.used_by ORDER BY i.created, i.code",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect();
+        rows
+    }
+
+    /// Changes someone's password and logs them out everywhere.
+    /// False if there's no such user.
+    pub fn set_password(&self, username: &str, password_hash: &str) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        let Some(id) = conn
+            .query_row("SELECT id FROM users WHERE username = ?1", [username], |r| r.get::<_, i64>(0))
+            .optional()?
+        else {
+            return Ok(false);
+        };
+        conn.execute("UPDATE users SET password_hash = ?1 WHERE id = ?2", params![password_hash, id])?;
+        conn.execute("DELETE FROM sessions WHERE user_id = ?1", [id])?;
+        Ok(true)
+    }
+
     pub fn login_info(&self, username: &str) -> rusqlite::Result<Option<(i64, String)>> {
         let conn = self.0.lock().unwrap();
         conn.query_row("SELECT id, password_hash FROM users WHERE username = ?1", [username], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -164,15 +260,19 @@ impl Db {
 
     pub fn new_session(&self, user_id: i64) -> rusqlite::Result<String> {
         let token = random_token();
-        self.0.lock().unwrap().execute("INSERT INTO sessions (token, user_id) VALUES (?1, ?2)", params![token, user_id])?;
+        self.0.lock().unwrap().execute(
+            "INSERT INTO sessions (token, user_id, created) VALUES (?1, ?2, ?3)",
+            params![token, user_id, now()],
+        )?;
         Ok(token)
     }
 
     pub fn session_user(&self, token: &str) -> rusqlite::Result<Option<User>> {
         let conn = self.0.lock().unwrap();
         conn.query_row(
-            "SELECT u.id, u.username, u.avatar, u.blurb, u.created FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
-            [token],
+            "SELECT u.id, u.username, u.avatar, u.blurb, u.created FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.token = ?1 AND s.created >= ?2",
+            params![token, now() - SESSION_DAYS * 86400],
             user_from_row,
         )
         .optional()

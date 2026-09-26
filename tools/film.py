@@ -566,7 +566,7 @@ def film_website():
         page.type("#username", "BrixoFan", delay=70)
         page.type("#password", "brixo123", delay=50)
         page.wait_for_timeout(300)
-        page.click("button[type=submit]")
+        page.click("#form button[type=submit]")
         page.wait_for_url("**/avatar")
         page.wait_for_timeout(900)
         for face in [1, 2, 3, 0, 3]:

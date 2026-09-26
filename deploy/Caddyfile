@@ -1,0 +1,9 @@
+# Caddy gets and renews the HTTPS certificate by itself.
+playbrixo.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:7420
+}
+
+www.playbrixo.com {
+	redir https://playbrixo.com{uri} permanent
+}

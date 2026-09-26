@@ -8,17 +8,22 @@ use std::time::{Duration, Instant};
 use brixo_server::NetClient;
 
 fn start_site() -> (String, Arc<brixo_web::api::App>) {
-    start_site_with(brixo_web::servers::Network::default())
+    start_site_with(brixo_web::api::Settings::default())
 }
 
-fn start_site_with(network: brixo_web::servers::Network) -> (String, Arc<brixo_web::api::App>) {
-    let app = Arc::new(brixo_web::api::App::open_with(":memory:", network).unwrap());
+fn with_network(network: brixo_web::servers::Network) -> brixo_web::api::Settings {
+    brixo_web::api::Settings { network, ..Default::default() }
+}
+
+fn start_site_with(settings: brixo_web::api::Settings) -> (String, Arc<brixo_web::api::App>) {
+    let app = Arc::new(brixo_web::api::App::open_with(":memory:", settings).unwrap());
     brixo_web::api::seed_samples(&app);
     let rt = tokio::runtime::Runtime::new().unwrap();
     let listener = rt.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
     let addr = listener.local_addr().unwrap();
     let router = brixo_web::api::router(app.clone());
-    std::thread::spawn(move || rt.block_on(async { axum::serve(listener, router).await.unwrap() }));
+    let service = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
+    std::thread::spawn(move || rt.block_on(async { axum::serve(listener, service).await.unwrap() }));
     (format!("http://{addr}"), app)
 }
 
@@ -118,7 +123,7 @@ fn sign_up_customize_press_play_and_join_as_yourself() {
 fn studio_publishes_games_into_the_catalog() {
     let (site, _app) = start_site();
     let me = browser();
-    me.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Maker", "password": "abcdef"})).unwrap();
+    me.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Maker", "password": "abcdefgh"})).unwrap();
     let game = brixo_core::DataModel::new().to_json().unwrap();
     let r: serde_json::Value = me.post(&format!("{site}/api/games")).send_json(serde_json::json!({"name": "My Obby", "data": game})).unwrap().into_json().unwrap();
     assert!(r["id"].as_i64().is_some());
@@ -190,7 +195,7 @@ fn game_servers_use_the_public_address_and_port_range() {
     // Something else already has the first port of the range: it's skipped.
     let squatter = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
     let first = squatter.local_addr().unwrap().port();
-    let (site, app) = start_site_with(Network { public_host: "localhost".into(), ports: Some((first, first + 2)) });
+    let (site, app) = start_site_with(with_network(Network { public_host: "localhost".into(), ports: Some((first, first + 2)) }));
     let ann = browser();
     ann.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Annie", "password": "pass words"})).unwrap();
     let games: serde_json::Value = ann.get(&format!("{site}/api/games")).call().unwrap().into_json().unwrap();
@@ -220,4 +225,87 @@ fn game_servers_use_the_public_address_and_port_range() {
     let pass3: serde_json::Value = play(ids[2]).unwrap().into_json().unwrap();
     assert!(pass3["server"] == format!("localhost:{}", first + 1) || pass3["server"] == format!("localhost:{}", first + 2));
     drop(squatter);
+}
+
+fn signup_as(site: &str, name: &str, password: &str, invite: &str) -> (ureq::Agent, u16) {
+    let a = browser();
+    let code = status(a.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": name, "password": password, "invite": invite})));
+    (a, code)
+}
+
+#[test]
+fn invite_only_signups() {
+    let (site, app) = start_site_with(brixo_web::api::Settings { invite_only: true, ..Default::default() });
+    let stats: serde_json::Value = browser().get(&format!("{site}/api/stats")).call().unwrap().into_json().unwrap();
+    assert_eq!(stats["invite_only"], true, "the pages know to show the invite box");
+
+    assert_eq!(signup_as(&site, "Cara", "long enough", "").1, 400, "no code, no account");
+    assert_eq!(signup_as(&site, "Cara", "long enough", "AAAA-BBBB-CCCC").1, 400, "made-up codes don't work");
+
+    let codes = app.db.create_invites(2).unwrap();
+    assert_eq!(codes.len(), 2);
+    assert!(codes[0].len() == 14 && codes[0].chars().nth(4) == Some('-'));
+    // Friends type codes however they like.
+    let sloppy = codes[0].to_lowercase().replace('-', " ");
+    let (cara, code) = signup_as(&site, "Cara", "long enough", &sloppy);
+    assert_eq!(code, 200);
+    assert_eq!(status(cara.get(&format!("{site}/api/me")).call()), 200, "signed in right away");
+    assert_eq!(signup_as(&site, "Dev", "long enough", &codes[0]).1, 400, "each code works once");
+    assert_eq!(signup_as(&site, "Cara", "long enough", &codes[1]).1, 400, "name taken");
+    assert_eq!(signup_as(&site, "Dev", "long enough", &codes[1]).1, 200, "a failed signup doesn't use up the code");
+
+    let list = app.db.invites().unwrap();
+    assert!(list.iter().any(|(c, by)| c == &codes[0] && by.as_deref() == Some("Cara")));
+    assert!(list.iter().any(|(c, by)| c == &codes[1] && by.as_deref() == Some("Dev")));
+}
+
+#[test]
+fn passwords_names_and_rate_limits() {
+    let (site, app) = start_site_with(brixo_web::api::Settings { secure_cookies: true, ..Default::default() });
+    // Rules for new accounts.
+    assert_eq!(signup_as(&site, "Evan", "short", "").1, 400, "8+ characters");
+    assert_eq!(signup_as(&site, "Evan", &"x".repeat(129), "").1, 400, "not giant");
+    for name in ["Brixo", "brixo_", "BrixoAdmin", "Official_Mod", "TheStaff"] {
+        assert_eq!(signup_as(&site, name, "long enough", "").1, 400, "{name} looks like staff");
+    }
+    assert_eq!(signup_as(&site, "BrixoFan", "long enough", "").1, 200, "fans are fine");
+
+    // Secure cookies when asked for, lasting 30 days.
+    let res = browser().post(&format!("{site}/api/login")).send_json(serde_json::json!({"username": "BrixoFan", "password": "long enough"})).unwrap();
+    let cookie = res.header("set-cookie").unwrap().to_string();
+    assert!(cookie.contains("; Secure") && cookie.contains("HttpOnly") && cookie.contains("Max-Age=2592000"), "{cookie}");
+    assert_eq!(res.header("x-frame-options"), Some("DENY"));
+
+    // Ten wrong guesses, then even the right password has to wait.
+    let guesser = browser();
+    let guess = |pw: &str| status(guesser.post(&format!("{site}/api/login")).send_json(serde_json::json!({"username": "brixofan", "password": pw})));
+    for _ in 0..10 {
+        assert_eq!(guess("wrong guess"), 400);
+    }
+    assert_eq!(guess("wrong guess"), 429);
+    assert_eq!(guess("long enough"), 429, "locked for a while, even with the right one");
+
+    // Only 5 new accounts an hour from one address.
+    let (fan, _) = signup_as(&site, "Fan0", "long enough", "");
+    for i in 1..4 {
+        assert_eq!(signup_as(&site, &format!("Fan{i}"), "long enough", "").1, 200);
+    }
+    assert_eq!(signup_as(&site, "Fan9", "long enough", "").1, 429);
+
+    // The command-line password change works and signs old logins out.
+    assert_eq!(status(fan.get(&format!("{site}/api/me")).call()), 200);
+    assert!(app.db.set_password("Fan0", &brixo_web::api::hash("a new password")).unwrap());
+    assert_eq!(status(fan.get(&format!("{site}/api/me")).call()), 401, "signed out");
+    assert!(!app.db.set_password("Nobody_Here", "x").unwrap());
+}
+
+#[test]
+fn studio_can_publish_big_games() {
+    let (site, _app) = start_site();
+    let (maker, _) = signup_as(&site, "Maker", "long enough", "");
+    // Flagfall is about 4.5 MB; the old 2 MB limit refused it.
+    let data = brixo_samples::flagfall().to_json().unwrap();
+    assert!(data.len() > 2 * 1024 * 1024, "the test needs a big game ({} bytes)", data.len());
+    let code = status(maker.post(&format!("{site}/api/games")).send_json(serde_json::json!({"name": "My Flagfall", "data": data})));
+    assert_eq!(code, 200);
 }

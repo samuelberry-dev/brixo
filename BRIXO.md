@@ -41,6 +41,24 @@ hands to Brixo Player (a domain or IP players can reach; default 127.0.0.1),
 `BRIXO_GAME_PORTS` (like `7500-7599`) is the only ports game servers use, so
 the firewall opens exactly those (full range = Play answers 503 "busy"), and
 `BRIXO_WEB_BIND` is where the website listens (keep 127.0.0.1 behind Caddy).
+Three switches harden it for the internet: `BRIXO_SECURE_COOKIES=1` (login
+cookie only over HTTPS), `BRIXO_TRUST_PROXY=1` (visitor IPs come from Caddy's
+X-Forwarded-For; only behind a proxy, or anyone could fake theirs) and
+`BRIXO_INVITE_ONLY=1` (signup needs a code; the pages show the box when
+`/api/stats` says `invite_only`, and `/signup?invite=CODE` fills it in).
+
+Admin is the command line, on the same database (safe while the site runs,
+WAL + busy timeout): `brixo-web set-password Brixo` (hidden prompt; signs
+that account out everywhere), `brixo-web invite 5`, `brixo-web invites`.
+
+Built-in protection (`src/limits.rs`, in memory): 10 wrong logins per 15 min
+per IP *and* per username (then 429, even for the right password), 5 signups
+an hour per IP, 10 bad invite codes per 15 min, 30 Plays a minute and 30
+publishes an hour per account. Passwords 8-128 characters, hashed off the async
+threads. Names containing admin/moderator/official/staff, or "Brixo" itself,
+are refused ("BrixoFan" is fine). Sessions last 30 days. Uploads up to 32 MB
+(axum's default 2 MB refused Flagfall). Every response gets nosniff, DENY
+framing and same-origin referrers.
 
 The workspace `Cargo.toml` **must** keep:
 
@@ -294,6 +312,10 @@ wait(0.5)
   - `BRIXO_WEB_DB`, `PORT`: the website's database and port.
   - `BRIXO_PUBLIC_HOST`, `BRIXO_GAME_PORTS`, `BRIXO_WEB_BIND`: where players
     reach game servers, which ports they use, where the site listens.
+  - `BRIXO_SECURE_COOKIES`, `BRIXO_TRUST_PROXY`, `BRIXO_INVITE_ONLY`: the
+    internet switches (see section 1).
+  - Page tests: the banner has its own login form, so click
+    `#form button[type=submit]`, never the first submit button on the page.
 
 ---
 

@@ -31,10 +31,11 @@
       <div class="box gold"><h2>Sign up and play!</h2><div class="inner">
         <form id="signup" autocomplete="on">
           <div class="field"><label for="su-user">Pick a username</label><input id="su-user" autocomplete="username" required maxlength="20"></div>
-          <div class="field"><label for="su-pass">Password (6+ characters)</label><input id="su-pass" type="password" autocomplete="new-password" required></div>
+          <div class="field"><label for="su-pass">Password (8+ characters)</label><input id="su-pass" type="password" autocomplete="new-password" required></div>
+          ${stats.invite_only ? `<div class="field"><label for="su-invite">Invite code</label><input id="su-invite" placeholder="XXXX-XXXX-XXXX" autocomplete="off" required></div>` : ""}
           <div class="error" id="su-error"></div>
           <button class="btn gold big" type="submit">Sign Up</button>
-          <p class="hint" style="margin-top:6px">It's free. Already have an account? Log in at the top.</p>
+          <p class="hint" style="margin-top:6px">${stats.invite_only ? "Brixo is invite-only for now. Got a code from a friend? You're in." : "It's free."} Already have an account? Log in at the top.</p>
         </form>
       </div></div>
       <div class="box"><h2>Right now on Brixo</h2><div class="inner numbers">
@@ -51,7 +52,8 @@
     f.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        await api("/api/signup", "POST", { username: f["su-user"].value, password: f["su-pass"].value });
+        await api("/api/signup", "POST", { username: f["su-user"].value, password: f["su-pass"].value,
+                                           invite: f["su-invite"] ? f["su-invite"].value : "" });
         location.href = "/avatar";
       } catch (err) { document.getElementById("su-error").textContent = err.message; }
     };

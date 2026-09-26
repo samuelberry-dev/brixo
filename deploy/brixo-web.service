@@ -1,0 +1,23 @@
+[Unit]
+Description=Brixo website and game servers
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=brixo
+Group=brixo
+WorkingDirectory=/var/lib/brixo
+EnvironmentFile=/etc/brixo/brixo.env
+ExecStart=/usr/local/bin/brixo-web
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+# It can only write its own folder, and can't gain more power than it starts with.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/brixo
+
+[Install]
+WantedBy=multi-user.target
