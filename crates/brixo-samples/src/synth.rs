@@ -237,6 +237,71 @@ pub fn flagfall_theme(intense: bool) -> Vec<u8> {
     t.wav()
 }
 
+// --- Spire Wars' music -------------------------------------------------------
+
+/// Spire Wars' theme: a steady march in D minor, slower and heavier than
+/// Flagfall's, for building spires and knocking the other team's down.
+/// Dm Bb C Am | Dm Bb Gm A, two bars each: 16 bars, about 35 seconds.
+pub fn spire_wars_theme() -> Vec<u8> {
+    const BEAT: f32 = 60.0 / 110.0;
+    const CHORDS: [(f32, [f32; 3]); 8] = [
+        (38.0, [62.0, 65.0, 69.0]),
+        (34.0, [62.0, 65.0, 70.0]),
+        (36.0, [64.0, 67.0, 72.0]),
+        (33.0, [64.0, 69.0, 72.0]),
+        (38.0, [62.0, 65.0, 69.0]),
+        (34.0, [62.0, 65.0, 70.0]),
+        (31.0, [62.0, 67.0, 70.0]),
+        (33.0, [61.0, 64.0, 69.0]),
+    ];
+    // The tune: (beat, beats long, note), a bold call that climbs, then answers.
+    const TUNE: [&[(f32, f32, f32)]; 8] = [
+        &[(0.0, 1.5, 74.0), (1.5, 0.5, 74.0), (2.0, 1.0, 77.0), (3.0, 1.0, 76.0), (4.0, 3.0, 74.0), (7.0, 1.0, 72.0)],
+        &[(0.0, 1.5, 70.0), (1.5, 0.5, 72.0), (2.0, 1.0, 74.0), (3.0, 1.0, 77.0), (4.0, 4.0, 74.0)],
+        &[(0.0, 1.5, 72.0), (1.5, 0.5, 72.0), (2.0, 1.0, 76.0), (3.0, 1.0, 79.0), (4.0, 2.0, 76.0), (6.0, 2.0, 72.0)],
+        &[(0.0, 3.0, 76.0), (3.0, 1.0, 74.0), (4.0, 4.0, 72.0)],
+        &[(0.0, 1.5, 74.0), (1.5, 0.5, 74.0), (2.0, 1.0, 77.0), (3.0, 1.0, 81.0), (4.0, 3.0, 79.0), (7.0, 1.0, 77.0)],
+        &[(0.0, 1.5, 77.0), (1.5, 0.5, 79.0), (2.0, 1.0, 81.0), (3.0, 1.0, 82.0), (4.0, 4.0, 81.0)],
+        &[(0.0, 1.5, 79.0), (1.5, 0.5, 77.0), (2.0, 1.0, 74.0), (3.0, 1.0, 70.0), (4.0, 2.0, 74.0), (6.0, 2.0, 77.0)],
+        &[(0.0, 2.0, 76.0), (2.0, 1.0, 73.0), (3.0, 1.0, 76.0), (4.0, 4.0, 81.0)],
+    ];
+    let mut t = Track::new(CHORDS.len() as f32 * 8.0 * BEAT);
+    for (c, (bass, triad)) in CHORDS.iter().enumerate() {
+        let bar0 = c as f32 * 8.0;
+        for beat in 0..8 {
+            let at = (bar0 + beat as f32) * BEAT;
+            // Bass: marching quarters, root and fifth.
+            let n = if beat % 2 == 0 { *bass } else { bass + 7.0 };
+            t.note(at, BEAT * 0.7, n, Wave::Triangle, 0.2, 0.85, 0.0);
+            // Chords: short stabs on every beat, like a brass section.
+            for (k, note) in triad.iter().enumerate() {
+                t.note(at, BEAT * 0.3, *note - 12.0, Wave::Pulse(0.125), 0.035, 0.5, 0.0);
+                if beat % 4 == 0 {
+                    t.note(at + k as f32 * 0.02, BEAT * 1.6, *note, Wave::Saw, 0.018, 0.7, 0.003);
+                }
+            }
+            // Drums: a march. Kick on 1 and 3, snare on 2 and 4.
+            let seed = (c * 8 + beat) as u32 * 6151 + 7;
+            if beat % 2 == 0 {
+                t.kick(at, 0.45);
+            } else {
+                t.snare(at, 0.26, seed);
+            }
+            t.hat(at + BEAT / 2.0, 0.07, false, seed + 1);
+        }
+        // A marching roll into each second bar.
+        for k in 0..4 {
+            t.snare((bar0 + 3.0 + k as f32 * 0.25) * BEAT, 0.08 + k as f32 * 0.03, 500 + (c * 4 + k) as u32);
+        }
+        for (beat, len, n) in TUNE[c] {
+            let at = (bar0 + beat) * BEAT;
+            t.note(at, len * BEAT * 0.9, *n, Wave::Pulse(0.5), 0.1, 0.75, 0.005);
+            t.note(at, len * BEAT * 0.9, n - 12.0, Wave::Triangle, 0.06, 0.7, 0.0);
+        }
+    }
+    t.wav()
+}
+
 // --- Flagfall's sound effects --------------------------------------------
 
 /// Your flag's been taken: three urgent rising minor notes.

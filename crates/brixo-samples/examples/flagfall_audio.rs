@@ -1,5 +1,5 @@
 //! `cargo run -p brixo-samples --example flagfall_audio [dir]`: writes
-//! Flagfall's music and sound effects as WAV files (for trailers, or to
+//! Flagfall's (and Spire Wars') music and sound effects as WAV files (for trailers, or to
 //! use in your own game).
 fn main() {
     use brixo_samples::synth;
@@ -13,6 +13,7 @@ fn main() {
         ("capture.wav", synth::capture_fanfare()),
         ("victory.wav", synth::victory()),
         ("horn.wav", synth::horn()),
+        ("spire-wars-theme.wav", synth::spire_wars_theme()),
     ] {
         std::fs::write(dir.join(name), wav).expect("couldn't write");
         println!("wrote {name}");

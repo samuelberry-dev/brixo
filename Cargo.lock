@@ -392,6 +392,7 @@ dependencies = [
  "brixo-render",
  "brixo-runtime",
  "brixo-server",
+ "cc",
  "egui",
  "egui-wgpu",
  "egui-winit",

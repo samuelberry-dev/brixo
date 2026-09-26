@@ -7,3 +7,7 @@ dist-mac/
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
+
+# Trailer music stays on your PC: it isn't ours to publish
+tools/flagfall-music.wav
+tools/trailer-music.mp3

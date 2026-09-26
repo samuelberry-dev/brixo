@@ -18,12 +18,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # GitHub's Macs come with Rust; add the two kinds of Mac to build for.
+      - name: Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       # Keeps compiled libraries between runs: later builds take minutes, not most of an hour.
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: mac-${{ hashFiles('Cargo.lock') }}
+          restore-keys: mac-
 
       - name: Build for Apple Silicon and Intel Macs
         env:

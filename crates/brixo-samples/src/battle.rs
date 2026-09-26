@@ -411,8 +411,6 @@ if self.parent.name != "Storage" then
 end
 "#;
 
-/// Spire Wars' theme song (loops as the background music).
-const THEME_MP3: &[u8] = include_bytes!("../assets/strategy.mp3");
 
 /// A short brass-like fanfare, made here as a real WAV file and stored in
 /// the game as a Sound: the same path an mp3 dropped on the studio takes.
@@ -663,9 +661,10 @@ pub fn spire_wars() -> DataModel {
     b.dm.part_mut(ticking).unwrap().anchored = true;
     b.script(ticking, "Tick", TICKING);
 
-    // The theme song: an mp3 file stored in the game as a Sound.
+    // The theme song: original music made in code (see synth.rs), stored
+    // in the game as a Sound like any .wav dropped on the studio.
     let theme = b.dm.create(Class::Sound, "Theme", root).unwrap();
-    *b.dm.sound_mut(theme).unwrap() = SoundProps::from_bytes("mp3", THEME_MP3);
+    *b.dm.sound_mut(theme).unwrap() = SoundProps::from_bytes("wav", &crate::synth::spire_wars_theme());
     b.dm.sound_mut(theme).unwrap().volume = 0.6;
 
     // A custom sound, made as a real WAV file.

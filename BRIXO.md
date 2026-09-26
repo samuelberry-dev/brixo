@@ -296,7 +296,7 @@ wait(0.5)
   across the map).
 - **The filming kit** (`tools/film.py`, `tools/edit.py`): films every shot of
   the reveal trailer on this computer, hands-off, then cuts it to
-  `tools/trailer-music.mp3`. Needs ffmpeg (and Playwright for the website
+  `tools/trailer-music.mp3` (kept on your PC only, git-ignored: not ours to publish). Needs ffmpeg (and Playwright for the website
   clip). Everything lands in `tools/footage/` (git-ignored). Explosion
   moments come from the player's sound logs, refined by finding the fireball
   in the footage; walks wait for real arrival (BRIXO_POSITION_FILE), so it
@@ -306,7 +306,7 @@ wait(0.5)
   match with a camera that follows the action, logging every pickup, drop,
   return and capture (and whether it was on camera) to
   `footage/ff_events.json`; the editor picks moments from that log and cuts
-  them to `tools/flagfall-music.wav` (Fuzzeke, "Wild Fight"; the beat map is
+  them to `tools/flagfall-music.wav` (git-ignored, on your PC only; Fuzzeke, "Wild Fight"; the beat map is
   in edit_flagfall.py's docstring). A dull match: run the filming again.
 - **The double-lock trap (it cost two turns once):** a `game.world()` guard
   lives until the end of its statement, and an `if let` / `match` /
@@ -436,7 +436,7 @@ distance haze toward the horizon colour.
 **Sample games:** Spire Wars (a Doomspire-style remake: four team towers of
 breakable bricks that collapse, six weapons (sword, rocket launcher,
 superball, slingshot, trowel, timebomb), auto-balanced teams, timed rounds with
-team scores and a map rebuild, a custom horn Sound) and Coin Tycoon (4 plots, droppers, conveyor, furnace, upgrader,
+team scores and a map rebuild, a custom horn Sound, and its own march theme from `synth::spire_wars_theme`: all sample-game music is made in code, nothing licensed) and Coin Tycoon (4 plots, droppers, conveyor, furnace, upgrader,
 6 upgrades, music and sound), with a full headless playthrough test.
 Flagfall (capture the flag, below).
 

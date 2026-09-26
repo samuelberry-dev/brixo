@@ -160,11 +160,11 @@ fn a_round_of_spire_wars() {
 }
 
 #[test]
-fn the_theme_song_is_a_real_mp3_and_loops_as_music() {
+fn the_theme_song_is_real_audio_and_loops_as_music() {
     let model = brixo_samples::spire_wars();
     let theme = model.find_first("Theme").expect("a Theme sound");
     let sound = model.sound(theme).unwrap();
-    assert_eq!(sound.format, "mp3");
+    assert_eq!(sound.format, "wav");
     let bytes = sound.bytes().unwrap();
     assert!(brixo_audio::decodes(&bytes), "it plays");
 
