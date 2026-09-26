@@ -3,9 +3,11 @@ use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod editing;
+
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Shape, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
-use brixo_client::{movement_input, FollowCamera, Held};
+use brixo_client::{draw_beacons, projector, Audio, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GuiEvents, Held};
 use brixo_runtime::{Game, LogLine, PlayerInput};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use winit::application::ApplicationHandler;
@@ -82,6 +84,7 @@ impl Gpu {
         let scene = SceneRenderer::new(&device, format, config.width, config.height);
 
         let egui_ctx = egui::Context::default();
+        brixo_client::theme::apply(&egui_ctx);
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
@@ -186,6 +189,37 @@ impl History {
     }
 }
 
+/// Filming (BRIXO_STUDIO_DEMO=build|code): the studio performs the
+/// trailer's studio shots by itself, notes when each happened and where the
+/// 3D view and code editor are on screen (BRIXO_DEMO_EVENTS), then closes.
+struct Demo {
+    kind: String,
+    /// When the first frame was drawn (the timeline starts there, not at
+    /// launch, which can take a while).
+    start: Option<std::time::Instant>,
+    done: std::collections::HashSet<&'static str>,
+    events: Vec<(String, f64)>,
+    drag_from: Option<V>,
+    finished: bool,
+    /// The code box while typing, and the 3D view mid-shot (the layout
+    /// shifts between Play and Stop, so they're noted when they matter).
+    code_seen: Option<egui::Rect>,
+    view_seen: Option<egui::Rect>,
+}
+
+const DEMO_CODE: &str = r#"-- Rain bouncy neon balls from the sky!
+every 0.1 seconds
+    b = create("Part", self)
+    b.shape = "ball"
+    b.size = {x = 2, y = 2, z = 2}
+    b.material = "neon"
+    b.color = {r = random(40, 255), g = random(40, 255), b = random(40, 255)}
+    b.position = {x = random(-25, 25), y = 45, z = random(-25, 25)}
+    b.bounce = 0.8
+    b.anchored = false
+end
+"#;
+
 struct Editor {
     tool: Tool,
     snap: bool,
@@ -198,6 +232,14 @@ struct Editor {
     follow: FollowCamera,
     /// What the game is called when published to the player.
     publish_name: String,
+    /// Publishing to the Brixo website: where it is, the login form, and
+    /// the logged-in connection once you've signed in.
+    web_site: String,
+    web_user: String,
+    web_pass: String,
+    web_error: String,
+    show_web_login: bool,
+    web: Option<ureq::Agent>,
     /// How many players Play starts. More than one hosts a local server
     /// and opens a Brixo Player window for each.
     players: u32,
@@ -205,8 +247,39 @@ struct Editor {
     also: Vec<InstanceId>,
     /// What Ctrl+C copied.
     clipboard: Vec<InstanceId>,
+    /// What was last copied, as clipboard text (so Paste works in another
+    /// game opened in this studio, not just this one).
+    clip_text: Option<String>,
+    /// The Explorer row being renamed, and the name so far.
+    renaming: Option<(InstanceId, String)>,
+    /// What the Explorer asked for this frame (applied after it's drawn).
+    tree_requests: Vec<TreeRequest>,
+    /// Parts being dragged over surfaces in the 3D view.
+    surface_drag: Option<Vec<InstanceId>>,
+    /// Script autocomplete: where the word starts, the suggestions, which
+    /// one is picked, and whether Escape hid them.
+    completion: Option<(usize, Vec<&'static str>)>,
+    completion_pick: usize,
+    completion_hidden: Option<usize>,
     /// While dragging a group: the group's box and every part's start.
     group_drag: Option<(PartProps, Vec<(InstanceId, PartProps)>)>,
+    /// During Play: GUI clicks, hotbar picks and tool swings from the
+    /// viewport, handed to the game after the UI is built.
+    play_input: Option<(GuiEvents, bool)>,
+    /// A Sound to play once (its Preview button).
+    preview: Option<InstanceId>,
+    /// Filming: an action for build_ui to take this frame, a Play/Stop
+    /// press, and where the 3D view and code editor were drawn.
+    queued_action: Option<Action>,
+    queued_play: bool,
+    view_rect: Option<egui::Rect>,
+    code_rect: Option<egui::Rect>,
+    pixels_per_point: f32,
+    /// The local game's player (None when hosting a server: the studio
+    /// only watches then, so it doesn't show anyone's personal GUI).
+    local_player: Option<InstanceId>,
+    chat: ChatLog,
+    started: std::time::Instant,
 }
 
 impl Default for Editor {
@@ -219,10 +292,33 @@ impl Default for Editor {
             prop_session: false,
             follow: FollowCamera::default(),
             publish_name: "My Game".to_string(),
+            web_site: "http://127.0.0.1:7420".to_string(),
+            web_user: String::new(),
+            web_pass: String::new(),
+            web_error: String::new(),
+            show_web_login: false,
+            web: None,
             players: 1,
             also: Vec::new(),
             clipboard: Vec::new(),
+            clip_text: None,
+            renaming: None,
+            tree_requests: Vec::new(),
+            surface_drag: None,
+            completion: None,
+            completion_pick: 0,
+            completion_hidden: None,
             group_drag: None,
+            play_input: None,
+            preview: None,
+            queued_action: None,
+            queued_play: false,
+            view_rect: None,
+            code_rect: None,
+            pixels_per_point: 1.0,
+            local_player: None,
+            chat: ChatLog::default(),
+            started: std::time::Instant::now(),
         }
     }
 }
@@ -263,6 +359,8 @@ fn host(model: &DataModel, players: u32) -> Result<Hosted, String> {
 }
 
 struct Studio {
+    /// Filming (BRIXO_STUDIO_DEMO), if on.
+    demo: Option<Demo>,
     gpu: Option<Gpu>,
     model: DataModel,
     camera: Camera,
@@ -273,6 +371,13 @@ struct Studio {
     game: Option<Game>,
     /// A local multiplayer test: a server plus a player window per player.
     hosted: Option<Hosted>,
+    audio: Audio,
+    /// Set when Play stops, so the music stops too.
+    audio_stop: bool,
+    /// During local Play: the world as drawn, smoothed between physics
+    /// steps. The live world underneath is what the panels edit.
+    smoother: Smoother,
+    play_view: Option<DataModel>,
     output: Vec<LogLine>,
     /// The studio camera, put back when Play stops.
     saved_camera: Option<(Vec3, f32, f32)>,
@@ -282,20 +387,45 @@ struct Studio {
 
 impl Studio {
     fn new() -> Self {
-        Self {
+        // `brixo-studio game.brixo` opens that game; otherwise the demo.
+        let opened = std::env::args().nth(1).map(|path| (DataModel::load_file(&path), path));
+        let (model, opened_status) = match opened {
+            Some((Ok(model), path)) => (model, Some(format!("Opened {path}"))),
+            Some((Err(e), path)) => (demo_scene(), Some(format!("Couldn't open {path}: {e}"))),
+            None => (demo_scene(), None),
+        };
+        let mut studio = Self {
             gpu: None,
-            model: demo_scene(),
+            model,
             camera: Camera::new(),
             selection: None,
             status: "Ready".to_string(),
             editor: Editor::default(),
             game: None,
             hosted: None,
+            audio: Audio::new(),
+            demo: std::env::var("BRIXO_STUDIO_DEMO").ok().map(|kind| Demo {
+                kind,
+                start: None,
+                done: Default::default(),
+                events: Vec::new(),
+                drag_from: None,
+                finished: false,
+                code_seen: None,
+                view_seen: None,
+            }),
+            audio_stop: false,
+            smoother: Smoother::default(),
+            play_view: None,
             output: Vec::new(),
             saved_camera: None,
             keys: HashSet::new(),
             last_frame: Instant::now(),
+        };
+        if let Some(status) = opened_status {
+            studio.status = status;
         }
+        studio
     }
 
     fn player_input(&self) -> PlayerInput {
@@ -350,16 +480,186 @@ impl Studio {
         }
     }
 
+    /// An audio file dropped on the window: checked, then added as a Sound.
+    fn import_audio(&mut self, path: &std::path::Path) {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if !["mp3", "wav", "ogg"].contains(&ext.as_str()) {
+            self.status = format!("Brixo can add mp3, wav and ogg files as sounds, not .{ext}");
+            return;
+        }
+        if self.game.is_some() || self.hosted.is_some() {
+            self.status = "Stop the game first, then drop the sound in again".into();
+            return;
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("Couldn't read that file: {e}");
+                return;
+            }
+        };
+        if bytes.len() > 10_000_000 {
+            self.status = "That file's over 10 MB: try a shorter clip".into();
+            return;
+        }
+        if !brixo_client::sound::decodes(&bytes) {
+            self.status = format!("That file doesn't play. Is it really a .{ext}?");
+            return;
+        }
+        self.editor.history.checkpoint(&self.model);
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Sound").to_string();
+        let root = self.model.root();
+        if let Some(id) = self.model.create(Class::Sound, &name, root) {
+            *self.model.sound_mut(id).unwrap() = brixo_core::SoundProps::from_bytes(&ext, &bytes);
+            self.selection = Some(id);
+            self.status = format!("Added the sound \"{name}\". Play it from a script: play_sound(find(\"{name}\"))");
+        }
+    }
+
+    /// Steps the filming demo (see Demo): each action happens once, at its
+    /// moment on the timeline.
+    fn run_demo(&mut self) {
+        let Some(demo) = self.demo.as_mut() else { return };
+        let t = demo.start.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f64();
+        let at = |key: &'static str, when: f64, demo: &mut Demo| -> bool {
+            if t >= when && demo.done.insert(key) {
+                demo.events.push((key.to_string(), t));
+                true
+            } else {
+                false
+            }
+        };
+        let model = &mut self.model;
+        let editor = &mut self.editor;
+        let seen_window = if demo.kind == "build" { 3.5..14.0 } else { 13.0..20.0 };
+        if seen_window.contains(&t) {
+            demo.view_seen = editor.view_rect;
+        }
+        if demo.kind != "build" && (6.0..10.2).contains(&t) {
+            demo.code_seen = editor.code_rect;
+        }
+        if demo.kind == "build" {
+            if at("select", 2.0, demo) {
+                self.selection = model.find_first("RedBlock");
+            }
+            if at("drag", 3.5, demo) {
+                editor.history.checkpoint(model);
+                demo.drag_from = self.selection.and_then(|id| model.part(id)).map(|p| p.position);
+            }
+            if (3.5..5.0).contains(&t) {
+                if let (Some(id), Some(from)) = (self.selection, demo.drag_from) {
+                    let u = ((t - 3.5) / 1.5) as f32;
+                    model.part_mut(id).unwrap().position = V::new(from.x + 6.0 * u * u * (3.0 - 2.0 * u), from.y, from.z);
+                }
+            }
+            if at("tools", 6.0, demo) {
+                editor.tool = Tool::Rotate;
+            }
+            if at("scale", 7.3, demo) {
+                editor.tool = Tool::Scale;
+            }
+            if at("move", 8.6, demo) {
+                editor.tool = Tool::Move;
+            }
+            if at("model", 9.0, demo) {
+                self.selection = model.find_first("Tree");
+                editor.queued_action = Some(Action::Focus);
+            }
+            if at("dup", 11.5, demo) {
+                editor.queued_action = Some(Action::Duplicate);
+            }
+            if at("dup2", 12.3, demo) {
+                editor.queued_action = Some(Action::Duplicate);
+            }
+            if at("focus2", 13.1, demo) {
+                editor.queued_action = Some(Action::Focus);
+            }
+            if at("gui", 14.5, demo) {
+                self.selection = model.find_first("SuperJump");
+            }
+            if at("end", 17.0, demo) {
+                demo.finished = true;
+            }
+        } else {
+            if at("select", 1.2, demo) {
+                self.selection = Some(model.root());
+            }
+            if at("addscript", 2.0, demo) {
+                editor.queued_action = Some(Action::AddScript);
+            }
+            // Typed in live, about 55 characters a second.
+            if t >= 3.7 && t < 10.4 {
+                if demo.done.insert("type") {
+                    demo.events.push(("type".into(), t));
+                }
+                if let Some(id) = self.selection.filter(|id| model.script(*id).is_some()) {
+                    let n = (((t - 3.7) * 55.0) as usize).min(DEMO_CODE.len());
+                    let n = (0..=n).rev().find(|i| DEMO_CODE.is_char_boundary(*i)).unwrap_or(0);
+                    model.script_mut(id).unwrap().source = DEMO_CODE[..n].to_string();
+                }
+            }
+            if at("play", 10.4, demo) {
+                editor.queued_play = true;
+            }
+            if at("stop", 21.4, demo) {
+                editor.queued_play = true;
+            }
+            if at("end", 22.9, demo) {
+                demo.finished = true;
+            }
+        }
+        if demo.finished {
+            if let Some(path) = std::env::var_os("BRIXO_DEMO_EVENTS") {
+                let ppp = editor.pixels_per_point;
+                let px = |r: Option<egui::Rect>| r.map(|r| [r.min.x * ppp, r.min.y * ppp, r.width() * ppp, r.height() * ppp]);
+                let out = serde_json::json!({
+                    "events": demo.events.iter().cloned().collect::<std::collections::HashMap<_, _>>(),
+                    "view": px(demo.view_seen.or(editor.view_rect)),
+                    "code": px(demo.code_seen.or(editor.code_rect)),
+                    // When the timeline started, as Unix time (to line the
+                    // events up with a recording started earlier).
+                    "start_epoch": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64() - t)
+                        .unwrap_or(0.0),
+                });
+                let _ = std::fs::write(path, out.to_string());
+            }
+        }
+    }
+
     fn frame(&mut self, dt: f32) {
+        self.run_demo();
+        if let Some(id) = self.editor.preview.take() {
+            if let Some((bytes, volume)) = brixo_client::world_sound(&self.model, id.raw()) {
+                self.audio.play_bytes(bytes, volume);
+            }
+        }
+        if std::mem::take(&mut self.audio_stop) {
+            self.audio.stop_music();
+        }
         // Advance the running game before drawing it.
         let input = self.player_input();
+        self.editor.local_player = self.game.as_ref().and_then(|g| g.player_id());
         let mut first_person_player = None;
         if let Some(game) = self.game.as_mut() {
             game.set_input(input);
             game.step(dt as f64);
             self.output.extend(game.take_log());
+            let me = game.player_id();
+            for cue in game.take_sounds().into_iter().filter_map(|e| e.for_player(me)) {
+                let world = game.world();
+                self.audio.cue_with(&cue, &|id| brixo_client::world_sound(&world, id));
+            }
+            for (from, name, text) in game.take_chat() {
+                self.editor.chat.push(from, name, text);
+            }
             trim_output(&mut self.output);
-            first_person_player = self.editor.follow.update(&mut self.camera, &game.world(), game.player_id());
+            let view = self.smoother.view(&game.world());
+            first_person_player = self.editor.follow.update(&mut self.camera, &view, game.player_id());
+            self.play_view = Some(view);
+        } else if self.play_view.take().is_some() {
+            self.smoother.reset();
         }
 
         let Studio {
@@ -371,6 +671,8 @@ impl Studio {
             editor,
             game,
             hosted,
+            audio_stop,
+            play_view,
             output,
             saved_camera,
             ..
@@ -431,7 +733,15 @@ impl Studio {
                     label: Some("frame encoder"),
                 });
 
+            // Right-drag turned the camera in the interface pass, after the
+            // follow camera was placed: put it back on its orbit for the new
+            // angle, or the player slides on screen as you turn (jitter).
+            if let (Some(view), Some(g)) = (play_view.as_ref(), game.as_ref()) {
+                first_person_player = editor.follow.update(camera, view, g.player_id());
+            }
             gpu.scene.hidden_player = first_person_player;
+            gpu.scene.editing = !playing;
+            gpu.scene.time = editor.started.elapsed().as_secs_f32();
             // Highlight everything selected, and every part inside it.
             let highlight: Vec<InstanceId> = if playing {
                 Vec::new()
@@ -446,7 +756,7 @@ impl Studio {
                 &gpu.queue,
                 &mut encoder,
                 &view,
-                scene,
+                play_view.as_ref().unwrap_or(&*scene),
                 camera,
                 &highlight,
                 gpu.config.width,
@@ -497,6 +807,20 @@ impl Studio {
             }
         } // the game world is unlocked here
 
+        if let (Some((events, swing)), Some(g)) = (editor.play_input.take(), game.as_mut()) {
+            if let Some(me) = g.player_id() {
+                if let Some(b) = events.clicked {
+                    g.click(me, b);
+                }
+                if let Some(slot) = events.hotbar {
+                    g.equip(me, Some(slot));
+                }
+                if swing {
+                    g.activate(me);
+                }
+            }
+        }
+
         if toggle_play {
             editor.drag = None;
             editor.prop_session = false;
@@ -520,6 +844,7 @@ impl Studio {
                     Err(e) => *status = e,
                 }
             } else if game.take().is_some() {
+                *audio_stop = true;
                 // Stop: the copy is thrown away, so the scene is exactly as before.
                 if let Some((position, yaw, pitch)) = saved_camera.take() {
                     camera.position = position;
@@ -579,8 +904,20 @@ fn trim_output(output: &mut Vec<LogLine>) {
 
 // --- ui --------------------------------------------------------------------
 
+/// Something the Explorer asked for.
+enum TreeRequest {
+    Rename(InstanceId, String),
+    /// Move the first into the second.
+    Move(InstanceId, InstanceId),
+    /// Run a command on this (the right-click menu).
+    Menu(InstanceId, Action),
+}
+
 enum Action {
     Publish,
+    WebLogin,
+    AddGui(Class),
+    AddTool,
     AddShape(Shape),
     Copy,
     Paste,
@@ -600,6 +937,37 @@ enum Action {
 
 /// Returns true if Play or Stop was pressed.
 #[allow(clippy::too_many_arguments)]
+/// Uploads the game to the website you're logged in to.
+fn publish_to_web(editor: &mut Editor, model: &DataModel) -> String {
+    let Some(agent) = editor.web.clone() else { return "Log in to publish".to_string() };
+    let data = match model.to_json() {
+        Ok(d) => d,
+        Err(e) => return format!("Publish failed: {e}"),
+    };
+    let url = format!("{}/api/games", editor.web_site.trim_end_matches('/'));
+    match agent.post(&url).send_json(serde_json::json!({ "name": editor.publish_name, "data": data })) {
+        Ok(_) => format!("Published \"{}\" to the Brixo website", editor.publish_name),
+        Err(ureq::Error::Status(401, _)) => {
+            editor.web = None; // logged out on the website: log in again
+            editor.show_web_login = true;
+            "Please log in again to publish".to_string()
+        }
+        Err(e) => format!("Publish failed: {}", web_error(e)),
+    }
+}
+
+/// The website's own error message if it gave one, otherwise what went wrong.
+fn web_error(e: ureq::Error) -> String {
+    match e {
+        ureq::Error::Status(_, r) => r
+            .into_json::<serde_json::Value>()
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_string))
+            .unwrap_or_else(|| "the website said no".to_string()),
+        ureq::Error::Transport(t) => format!("couldn't reach the website ({t})"),
+    }
+}
+
 fn build_ui(
     ctx: &egui::Context,
     model: &mut DataModel,
@@ -611,8 +979,47 @@ fn build_ui(
     playing: bool,
     play_time: Option<f64>,
 ) -> bool {
-    let mut action: Option<Action> = None;
-    let mut toggle_play = ctx.input(|i| i.key_pressed(egui::Key::F5));
+    let mut action: Option<Action> = editor.queued_action.take();
+    let mut toggle_play = ctx.input(|i| i.key_pressed(egui::Key::F5)) || std::mem::take(&mut editor.queued_play);
+    editor.pixels_per_point = ctx.pixels_per_point();
+
+    // Logging in to the Brixo website, the first time you Publish.
+    if editor.show_web_login {
+        let mut open = true;
+        egui::Window::new("Publish to the Brixo website")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                egui::Grid::new("web login").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                    ui.label("Website");
+                    ui.text_edit_singleline(&mut editor.web_site);
+                    ui.end_row();
+                    ui.label("Username");
+                    ui.text_edit_singleline(&mut editor.web_user);
+                    ui.end_row();
+                    ui.label("Password");
+                    let pw = ui.add(egui::TextEdit::singleline(&mut editor.web_pass).password(true));
+                    ui.end_row();
+                    if pw.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        action = Some(Action::WebLogin);
+                    }
+                });
+                if !editor.web_error.is_empty() {
+                    ui.colored_label(egui::Color32::from_rgb(255, 120, 110), &editor.web_error);
+                }
+                ui.add_space(4.0);
+                if ui.button(format!("Log in and publish \"{}\"", editor.publish_name)).clicked() {
+                    action = Some(Action::WebLogin);
+                }
+                ui.small("No account yet? Sign up on the website first.");
+            });
+        if !open {
+            editor.show_web_login = false;
+            editor.web_error.clear();
+        }
+    }
 
     // Keep the extra selection valid after undo, deletes and Stop.
     editor.also.retain(|id| model.get(*id).is_some() && Some(*id) != *selection);
@@ -630,19 +1037,57 @@ fn build_ui(
                 i.key_pressed(egui::Key::Delete),
             )
         });
-        if k1 {
+        // (During Play, 1-9 pick tools from the hotbar instead.)
+        if k1 && !playing {
             editor.tool = Tool::Move;
         }
-        if k2 {
+        if k2 && !playing {
             editor.tool = Tool::Rotate;
         }
-        if k3 {
+        if k3 && !playing {
             editor.tool = Tool::Scale;
         }
         if del && !playing {
             action = Some(Action::Delete);
         }
         if !playing {
+            // Ctrl+C / Ctrl+X / Ctrl+V arrive as clipboard events, not keys.
+            let (copied, cut, pasted) = ctx.input(|i| {
+                let mut out = (false, false, None);
+                for e in &i.events {
+                    match e {
+                        egui::Event::Copy => out.0 = true,
+                        egui::Event::Cut => out.1 = true,
+                        egui::Event::Paste(text) => out.2 = Some(text.clone()),
+                        _ => {}
+                    }
+                }
+                out
+            });
+            if copied || cut {
+                action = Some(Action::Copy);
+                if cut {
+                    editor.queued_action = Some(Action::Delete);
+                }
+            }
+            if let Some(text) = pasted {
+                // Anything copied in Brixo, from any game.
+                let parent = container_for(model, *selection);
+                let before = model.clone();
+                if let Some(items) = model.paste_clipboard(&text, parent) {
+                    editor.history.checkpoint(&before);
+                    stack_if_overlapping(model, &items);
+                    *status = format!("Pasted {}", plural(items.len(), "thing"));
+                    select(items, selection, editor);
+                } else if !text.trim().is_empty() {
+                    *status = "That isn't something copied in Brixo Studio".to_string();
+                }
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
+                if let Some(id) = selection.filter(|id| *id != model.root()) {
+                    editor.renaming = model.get(id).map(|i| (id, i.name.clone()));
+                }
+            }
             let (copy, paste, dup, group, ungroup, focus) = ctx.input_mut(|i| {
                 (
                     i.consume_key(egui::Modifiers::COMMAND, egui::Key::C),
@@ -683,8 +1128,10 @@ fn build_ui(
         }
     }
 
-    egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+    egui::TopBottomPanel::top("toolbar").frame(egui::Frame::side_top_panel(&ctx.style()).fill(brixo_client::theme::NAVY).inner_margin(egui::Margin::symmetric(10, 6))).show(ctx, |ui| {
         ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("BRIXO").strong().size(17.0).color(brixo_client::theme::GOLD));
+            ui.separator();
             let (label, color) = if playing {
                 ("■ Stop (F5)", egui::Color32::from_rgb(200, 70, 70))
             } else {
@@ -723,6 +1170,19 @@ fn build_ui(
                     for shape in Shape::ALL {
                         if ui.button(shape_label(shape)).clicked() {
                             action = Some(Action::AddShape(shape));
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Tool").on_hover_text("Something players hold. Put it inside a player to give it to them").clicked() {
+                        action = Some(Action::AddTool);
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Add GUI", |ui| {
+                    for (label, class) in [("TextLabel", Class::TextLabel), ("TextButton", Class::TextButton), ("Frame", Class::Frame)] {
+                        if ui.button(label).clicked() {
+                            action = Some(Action::AddGui(class));
                             ui.close_menu();
                         }
                     }
@@ -766,8 +1226,8 @@ fn build_ui(
             });
             ui.separator();
             ui.add(egui::TextEdit::singleline(&mut editor.publish_name).desired_width(110.0))
-                .on_hover_text("The name players see in Brixo Player");
-            if ui.button("Publish").on_hover_text("Put this game in Brixo Player's games list").clicked() {
+                .on_hover_text("The name players see on the Brixo website");
+            if ui.button("Publish").on_hover_text("Put this game on the Brixo website").clicked() {
                 action = Some(Action::Publish);
             }
             ui.separator();
@@ -799,9 +1259,44 @@ fn build_ui(
             ui.heading("Explorer");
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
-                tree_node(ui, model, model.root(), selection, &mut editor.also);
+                tree_node(ui, model, model.root(), selection, editor);
+                ui.add_space(24.0);
+                ui.weak("Drag to move things. Double-click or F2 to rename. Right-click for more.");
             });
         });
+
+    // What the Explorer asked for, applied now it's drawn.
+    for request in std::mem::take(&mut editor.tree_requests) {
+        match request {
+            TreeRequest::Rename(id, name) => {
+                let name = name.trim().to_string();
+                if !name.is_empty() && model.get(id).is_some_and(|i| i.name != name) {
+                    editor.history.checkpoint(model);
+                    model.get_mut(id).unwrap().name = name;
+                }
+            }
+            TreeRequest::Move(id, into) => {
+                let (what, place) = (
+                    model.get(id).map(|i| i.name.clone()).unwrap_or_default(),
+                    model.get(into).map(|i| i.name.clone()).unwrap_or_default(),
+                );
+                let before = model.clone();
+                if model.reparent(id, into) {
+                    editor.history.checkpoint(&before);
+                    *status = format!("Moved {what} into {place}");
+                } else {
+                    *status = format!("{what} can't go inside {place}");
+                }
+            }
+            TreeRequest::Menu(id, a) => {
+                if !selected_items(model, *selection, &editor.also).contains(&id) {
+                    *selection = Some(id);
+                    editor.also.clear();
+                }
+                editor.queued_action = Some(a);
+            }
+        }
+    }
 
     egui::SidePanel::right("properties")
         .default_width(260.0)
@@ -878,9 +1373,56 @@ fn build_ui(
                 *status = format!("Deleted {}", plural(items.len(), "thing"));
             }
         }
+        Some(Action::AddGui(class)) => {
+            editor.history.checkpoint(model);
+            let parent = container_for(model, *selection);
+            let name = match class {
+                Class::TextLabel => "TextLabel",
+                Class::TextButton => "TextButton",
+                _ => "Frame",
+            };
+            if let Some(id) = model.create(class, name, parent) {
+                select(vec![id], selection, editor);
+                *status = format!("Added a {name}. Everyone sees it; put it inside a player (from a script) for one player's eyes only");
+            }
+        }
+        Some(Action::AddTool) => {
+            editor.history.checkpoint(model);
+            let parent = container_for(model, *selection);
+            if let Some(tool) = model.create(Class::Tool, "Tool", parent) {
+                let spot = camera.position + camera.forward() * 10.0;
+                if let Some(handle) = model.create(Class::Part, "Handle", tool) {
+                    let p = model.part_mut(handle).unwrap();
+                    p.position = V::new(spot.x.round(), spot.y.round().max(1.0), spot.z.round());
+                    p.size = V::new(0.5, 0.5, 2.0);
+                    p.color = Color::new(105, 64, 40);
+                }
+                select(vec![tool], selection, editor);
+                *status = "Added a Tool. Its first part is the handle; build it pointing along +Z (blue arrow)".to_string();
+            }
+        }
         Some(Action::Copy) => {
             editor.clipboard = selected_items(model, *selection, &editor.also);
+            // Also as text on the system clipboard: pastes into any game.
+            let text = model.to_clipboard(&editor.clipboard);
+            ctx.copy_text(text.clone());
+            editor.clip_text = Some(text);
             *status = format!("Copied {}", plural(editor.clipboard.len(), "thing"));
+        }
+        // Pasting what was copied in another game (opened since).
+        Some(Action::Paste) if editor.clipboard.iter().all(|id| model.get(*id).is_none()) && editor.clip_text.is_some() => {
+            let text = editor.clip_text.clone().unwrap();
+            let parent = container_for(model, *selection);
+            let before = model.clone();
+            match model.paste_clipboard(&text, parent) {
+                Some(items) => {
+                    editor.history.checkpoint(&before);
+                    stack_if_overlapping(model, &items);
+                    *status = format!("Pasted {}", plural(items.len(), "thing"));
+                    select(items, selection, editor);
+                }
+                None => *status = "Nothing to paste".to_string(),
+            }
         }
         Some(a @ (Action::Paste | Action::Duplicate)) => {
             // Paste stacks copies on top; Duplicate puts them beside.
@@ -950,10 +1492,30 @@ fn build_ui(
                 *status = "Focused".to_string();
             }
         }
-        Some(Action::Publish) => match brixo_client::publish(model, &editor.publish_name) {
-            Ok(path) => *status = format!("Published to {}", path.display()),
-            Err(e) => *status = format!("Publish failed: {e}"),
-        },
+        Some(Action::WebLogin) => {
+            // Log in to the website, then publish right away.
+            let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)).build();
+            let login = agent
+                .post(&format!("{}/api/login", editor.web_site.trim_end_matches('/')))
+                .send_json(serde_json::json!({ "username": editor.web_user, "password": editor.web_pass }));
+            match login {
+                Ok(_) => {
+                    editor.web = Some(agent);
+                    editor.web_pass.clear();
+                    editor.web_error.clear();
+                    editor.show_web_login = false;
+                    *status = publish_to_web(editor, model);
+                }
+                Err(e) => editor.web_error = web_error(e),
+            }
+        }
+        Some(Action::Publish) => {
+            if editor.web.is_some() {
+                *status = publish_to_web(editor, model);
+            } else {
+                editor.show_web_login = true;
+            }
+        }
         Some(Action::Save) => match model.save_file(SCENE_PATH) {
             Ok(()) => *status = format!("Saved to {SCENE_PATH}"),
             Err(e) => *status = format!("Save failed: {e}"),
@@ -1036,21 +1598,123 @@ fn script_panel(
     });
     ui.separator();
 
+    // Checked on every frame (parsing is fast): the error's line is shaded.
+    let parsed = rovik::lexer::lex(&source).and_then(rovik::parser::parse);
+    let error_line = parsed.as_ref().err().map(|e| e.line);
+    let edit_id = egui::Id::new(("script-editor", id));
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+
+    // Autocomplete keys, taken before the editor sees them (while the list
+    // from last frame is showing): arrows choose, Tab completes, Escape hides.
+    let mut accept = None;
+    if let Some((start, list)) = editor.completion.clone() {
+        let (tab, up, down, escape) = ui.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+            )
+        });
+        if up {
+            editor.completion_pick = editor.completion_pick.saturating_sub(1);
+        }
+        if down {
+            editor.completion_pick = (editor.completion_pick + 1).min(list.len() - 1);
+        }
+        if escape {
+            editor.completion_hidden = Some(start);
+        }
+        if tab {
+            accept = Some((start, list[editor.completion_pick.min(list.len() - 1)]));
+        }
+    }
+    if let (Some((start, word)), false) = (accept, playing) {
+        // Swap the partly typed word for the whole one; cursor after it.
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
+            let cursor = state.cursor.char_range().map(|r| r.primary.index).unwrap_or(start);
+            let byte = |c: usize| source.char_indices().nth(c).map(|(b, _)| b).unwrap_or(source.len());
+            let (from, to) = (byte(start), byte(cursor));
+            source.replace_range(from..to, word);
+            let after = egui::text::CCursor::new(start + word.chars().count());
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(after)));
+            state.store(ui.ctx(), edit_id);
+            changed = true;
+        }
+        editor.completion = None;
+        editor.completion_pick = 0;
+    }
+
+    let lines = source.split('\n').count();
     let editor_height = (ui.available_height() - 24.0).max(60.0);
+    let mut output = None;
     egui::ScrollArea::vertical()
         .max_height(editor_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let edit = egui::TextEdit::multiline(&mut source)
-                .code_editor()
-                .desired_width(f32::INFINITY)
-                .desired_rows(12)
-                .interactive(!playing);
-            changed |= ui.add(edit).changed();
+            ui.horizontal_top(|ui| {
+                // Line numbers.
+                ui.vertical(|ui| {
+                    ui.add_space(2.0);
+                    let numbers: String = (1..=lines).map(|n| format!("{n:>3}\n")).collect();
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(numbers.trim_end()).font(font.clone()).color(brixo_client::theme::DIM))
+                            .selectable(false),
+                    );
+                });
+                let mut layouter = |ui: &egui::Ui, text: &str, _wrap: f32| {
+                    let job = editing::highlight(text, error_line, font.clone());
+                    ui.fonts(|f| f.layout_job(job))
+                };
+                let out = egui::TextEdit::multiline(&mut source)
+                    .id(edit_id)
+                    .code_editor()
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(12)
+                    .interactive(!playing)
+                    .layouter(&mut layouter)
+                    .show(ui);
+                changed |= out.response.changed();
+                // (Filming: the visible part of the code, for zooming in.)
+                editor.code_rect = Some(out.response.rect.intersect(ui.clip_rect()));
+                output = Some(out);
+            });
         });
 
-    // Parsing is fast, so check on every frame for instant feedback.
-    match rovik::lexer::lex(&source).and_then(rovik::parser::parse) {
+    // Suggestions for the word being typed, under the cursor.
+    editor.completion = None;
+    if let Some(out) = output.filter(|o| o.response.has_focus() && !playing) {
+        if let Some(range) = out.cursor_range.filter(|r| r.is_empty()) {
+            if let Some((start, list)) = editing::completions(&source, range.primary.ccursor.index) {
+                if editor.completion_hidden != Some(start) {
+                    editor.completion_hidden = None;
+                    if editor.completion_pick >= list.len() {
+                        editor.completion_pick = 0;
+                    }
+                    let at = out.galley.pos_from_cursor(&range.primary).translate(out.galley_pos.to_vec2());
+                    egui::Area::new(edit_id.with("complete"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(at.left_bottom() + egui::vec2(0.0, 2.0))
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                for (k, name) in list.iter().enumerate() {
+                                    let _ = ui.selectable_label(
+                                        k == editor.completion_pick,
+                                        egui::RichText::new(*name).font(font.clone()),
+                                    );
+                                }
+                                ui.weak("Tab to complete");
+                            });
+                        });
+                    editor.completion = Some((start, list));
+                }
+            } else {
+                editor.completion_hidden = None;
+            }
+        }
+    }
+
+    match &parsed {
         Ok(_) => {
             ui.weak("No syntax errors");
         }
@@ -1109,6 +1773,7 @@ fn properties_panel(
     let class = inst.class;
     let mut name = inst.name.clone();
     let mut props = model.part(id).copied();
+    let mut gui = model.gui(id).cloned();
     let mut changed = false;
 
     ui.horizontal(|ui| {
@@ -1134,6 +1799,23 @@ fn properties_panel(
             });
 
             ui.horizontal(|ui| {
+                ui.label("Material");
+                egui::ComboBox::from_id_salt("material")
+                    .selected_text(p.material.name())
+                    .show_ui(ui, |ui| {
+                        for m in brixo_core::Material::ALL {
+                            changed |= ui.selectable_value(&mut p.material, m, m.name()).changed();
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Transparency");
+                changed |= ui.add(egui::Slider::new(&mut p.transparency, 0.0..=1.0)).changed();
+            });
+            changed |= vec3_row(ui, "Velocity", &mut p.velocity, 0.1)
+                ;
+            ui.small("Anchored + velocity = a conveyor belt");
+            ui.horizontal(|ui| {
                 ui.label("Shape");
                 egui::ComboBox::from_id_salt("shape")
                     .selected_text(shape_label(p.shape))
@@ -1153,14 +1835,70 @@ fn properties_panel(
                     .on_hover_text("Off: things pass through it, but it still fires 'on touched'.")
                     .changed();
             });
+            ui.horizontal(|ui| {
+                changed |= ui.checkbox(&mut p.floating, "Floating").on_hover_text("Loose, but no gravity: flies straight").changed();
+                ui.label("Bounce");
+                changed |= ui.add(egui::Slider::new(&mut p.bounce, 0.0..=1.0)).changed();
+            });
 
             p.size.x = p.size.x.max(0.01);
             p.size.y = p.size.y.max(0.01);
             p.size.z = p.size.z.max(0.01);
         }
-        None => {
-            ui.label("No editable properties.");
+        None if model.sound(id).is_some() => {
+            let s = model.sound_mut(id).unwrap();
+            let size = s.data.len() * 3 / 4;
+            ui.label(format!("{} file, {:.1} MB", s.format.to_uppercase(), size as f64 / 1_000_000.0));
+            ui.horizontal(|ui| {
+                ui.label("Volume");
+                changed |= ui.add(egui::Slider::new(&mut s.volume, 0.0..=1.0)).changed();
+            });
+            if ui.button("▶ Preview").clicked() {
+                editor.preview = Some(id);
+            }
+            ui.small("Play it from a script: play_sound(find(\"Name\"))");
         }
+        None => match gui.as_mut() {
+            Some(g) => {
+                ui.horizontal(|ui| {
+                    ui.label("Text");
+                    changed |= ui.text_edit_singleline(&mut g.text).changed();
+                });
+                ui.label("Position and size (fractions of the screen)");
+                for (label, a, b) in [("Position", 0usize, 1usize), ("Size", 2, 3)] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        let [x, y, w, h] = [&mut g.x, &mut g.y, &mut g.width, &mut g.height];
+                        let mut pair = [x, y, w, h].into_iter().skip(a).step_by(b - a).take(2);
+                        let first = pair.next().unwrap();
+                        changed |= ui.add(egui::DragValue::new(first).speed(0.005).range(0.0..=1.0).max_decimals(3)).changed();
+                        let second = pair.next().unwrap();
+                        changed |= ui.add(egui::DragValue::new(second).speed(0.005).range(0.0..=1.0).max_decimals(3)).changed();
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Text size");
+                    changed |= ui.add(egui::DragValue::new(&mut g.text_size).speed(0.5).range(4.0..=200.0)).changed();
+                });
+                for (label, c) in [("Text color", &mut g.text_color), ("Background", &mut g.background_color)] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        let mut rgb = [c.r, c.g, c.b];
+                        if ui.color_edit_button_srgb(&mut rgb).changed() {
+                            *c = Color::new(rgb[0], rgb[1], rgb[2]);
+                            changed = true;
+                        }
+                    });
+                }
+                ui.horizontal(|ui| {
+                    changed |= ui.checkbox(&mut g.background, "Show background").changed();
+                    changed |= ui.checkbox(&mut g.visible, "Visible").changed();
+                });
+            }
+            None => {
+                ui.label("No editable properties.");
+            }
+        },
     }
 
     if changed {
@@ -1174,6 +1912,9 @@ fn properties_panel(
         }
         if let (Some(new), Some(p)) = (props, model.part_mut(id)) {
             *p = new;
+        }
+        if let (Some(new), Some(g)) = (gui, model.gui_mut(id)) {
+            *g = new;
         }
     } else {
         // The edit is over once nothing is held and no text field has focus.
@@ -1195,6 +1936,7 @@ fn viewport(
 ) {
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+    editor.view_rect = Some(rect);
 
     // The 3D scene fills the whole window, so projection uses the screen rect.
     let screen = ui.ctx().screen_rect();
@@ -1252,6 +1994,38 @@ fn viewport(
         }
     }
 
+    // Left-drag starting on a selected part (not a handle): slide it over
+    // whatever's under the mouse, resting on it.
+    if response.drag_started_by(egui::PointerButton::Primary) && editor.drag.is_none() && !playing {
+        if let Some(o) = ui.input(|i| i.pointer.press_origin()) {
+            let (nx, ny) = ndc(screen, o);
+            if let Some(hit) = brixo_render::pick(model, camera, aspect, nx, ny) {
+                if items.iter().any(|it| *it == hit || is_inside(model, hit, *it)) {
+                    editor.history.checkpoint(model);
+                    editor.surface_drag = Some(moving_parts(model, &items));
+                }
+            }
+        }
+    }
+    if let (Some(parts), true) = (editor.surface_drag.clone(), response.dragged_by(egui::PointerButton::Primary)) {
+        if let Some(pos) = response.interact_pointer_pos() {
+            let (nx, ny) = ndc(screen, pos);
+            let inv = vp.inverse();
+            let near = inv.project_point3(Vec3::new(nx, ny, 0.0));
+            let far = inv.project_point3(Vec3::new(nx, ny, 1.0));
+            let skip: std::collections::HashSet<InstanceId> = parts.iter().copied().collect();
+            let props: Vec<PartProps> = parts.iter().filter_map(|id| model.part(*id).copied()).collect();
+            if let (Some((point, normal)), Some((center, half))) =
+                (editing::surface_hit(model, near, (far - near).normalize(), &skip), editing::world_box(&props))
+            {
+                let by = editing::rest_on(point, normal, half, snap) - center;
+                if by.length() > 1e-4 {
+                    shift(model, &parts, by);
+                }
+            }
+        }
+    }
+
     // Continue an active drag: move the part, or the whole group.
     if response.dragged_by(egui::PointerButton::Primary) {
         if let (Some(drag), Some(pos)) = (editor.drag.as_mut(), response.interact_pointer_pos()) {
@@ -1273,13 +2047,30 @@ fn viewport(
     if response.drag_stopped() {
         editor.drag = None;
         editor.group_drag = None;
+        editor.surface_drag = None;
+    }
+
+    // The game's GUI over the viewport. While editing it shows shared GUI
+    // so you can see your layout; during Play it's live, with the hotbar.
+    let me = if playing { editor.local_player } else { None };
+    let project = projector(camera, screen);
+    let mut events = draw_gui(ui.ctx(), rect, model, me, playing, &project);
+    if playing {
+        draw_beacons(ui.ctx(), screen, model, me, camera);
+        editor.chat.draw(ui.ctx(), rect, model, &project);
+    }
+    if let Some(me) = me {
+        draw_hotbar(ui.ctx(), rect, model, me, &mut events);
+        events.hotbar = events.hotbar.or_else(|| hotbar_key(ui.ctx()));
+        let swing = response.clicked() && !events.pointer_on_gui;
+        editor.play_input = Some((events, swing));
     }
 
     // Plain left-click (no drag): select whatever is under the cursor,
     // unless the click landed on a gizmo handle. Clicking a part inside a
     // Model selects the Model (Alt-click picks the part itself); Ctrl-click
     // adds to or removes from the selection.
-    if response.clicked() {
+    if response.clicked() && !playing {
         if let Some(pos) = response.interact_pointer_pos() {
             let on_handle = gizmo.as_ref().and_then(|g| g.hit_test(&vp, screen, pos)).is_some();
             if !on_handle {
@@ -1534,6 +2325,26 @@ impl Drag {
 
 // --- math helpers ----------------------------------------------------------
 
+/// A screen point as normalised device coordinates (-1 to 1, y up).
+fn ndc(screen: egui::Rect, p: egui::Pos2) -> (f32, f32) {
+    (
+        (p.x - screen.min.x) / screen.width() * 2.0 - 1.0,
+        1.0 - (p.y - screen.min.y) / screen.height() * 2.0,
+    )
+}
+
+/// True if `node` is `ancestor` or somewhere inside it.
+fn is_inside(model: &DataModel, node: InstanceId, ancestor: InstanceId) -> bool {
+    let mut current = Some(node);
+    while let Some(id) = current {
+        if id == ancestor {
+            return true;
+        }
+        current = model.get(id).and_then(|i| i.parent);
+    }
+    false
+}
+
 fn to_glam(v: V) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
 }
@@ -1699,35 +2510,124 @@ fn tree_node(
     model: &DataModel,
     id: InstanceId,
     selection: &mut Option<InstanceId>,
-    also: &mut Vec<InstanceId>,
+    editor: &mut Editor,
 ) {
     let Some(inst) = model.get(id) else { return };
-    let label = format!("{}  ({:?})", inst.name, inst.class);
     let children = inst.children.clone();
+    let is_root = id == model.root();
 
-    let selected = *selection == Some(id) || also.contains(&id);
-    if ui.selectable_label(selected, label).clicked() {
+    let selected = *selection == Some(id) || editor.also.contains(&id);
+    // A badge for what it is, its name (or a box to rename it), and its
+    // class, dimmed.
+    let row = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            brixo_client::theme::paint_badge(ui, inst.class);
+            let renaming = editor.renaming.as_ref().is_some_and(|(r, _)| *r == id);
+            let row = if renaming {
+                let (_, name) = editor.renaming.as_mut().unwrap();
+                let edit = ui.add(egui::TextEdit::singleline(name).desired_width(140.0));
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                }
+                let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+                if escape {
+                    editor.renaming = None;
+                } else if enter || edit.lost_focus() {
+                    let (_, name) = editor.renaming.take().unwrap();
+                    editor.tree_requests.push(TreeRequest::Rename(id, name));
+                }
+                edit
+            } else {
+                ui.selectable_label(selected, &inst.name).interact(egui::Sense::click_and_drag())
+            };
+            ui.label(egui::RichText::new(format!("{:?}", inst.class)).small().color(brixo_client::theme::DIM));
+            row
+        })
+        .inner;
+
+    // Drag and drop: carry this row onto another to move it inside.
+    if !is_root {
+        row.dnd_set_drag_payload(id);
+    }
+    if row.dnd_hover_payload::<InstanceId>().is_some_and(|p| *p != id) {
+        ui.painter().rect_stroke(
+            row.rect.expand(2.0),
+            4.0,
+            egui::Stroke::new(1.5, brixo_client::theme::GOLD),
+            egui::StrokeKind::Outside,
+        );
+    }
+    if let Some(dragged) = row.dnd_release_payload::<InstanceId>() {
+        if *dragged != id {
+            editor.tree_requests.push(TreeRequest::Move(*dragged, id));
+        }
+    }
+
+    if row.double_clicked() && !is_root {
+        editor.renaming = Some((id, inst.name.clone()));
+    } else if row.clicked() {
         if ui.input(|i| i.modifiers.command) && selection.is_some() {
             // Ctrl-click: add to or remove from the selection.
             if *selection == Some(id) {
-                *selection = if also.is_empty() { None } else { Some(also.remove(0)) };
-            } else if let Some(k) = also.iter().position(|x| *x == id) {
-                also.remove(k);
+                *selection = if editor.also.is_empty() { None } else { Some(editor.also.remove(0)) };
+            } else if let Some(k) = editor.also.iter().position(|x| *x == id) {
+                editor.also.remove(k);
             } else {
-                also.push(id);
+                editor.also.push(id);
             }
         } else {
             *selection = Some(id);
-            also.clear();
+            editor.also.clear();
         }
+    }
+
+    // Right-click: the things you can do to it.
+    if !is_root {
+        row.context_menu(|ui| {
+            let mut pick = |ui: &mut egui::Ui, label: &str, a: Action| {
+                if ui.button(label).clicked() {
+                    editor.tree_requests.push(TreeRequest::Menu(id, a));
+                    ui.close_menu();
+                }
+            };
+            if ui.button("Rename  (F2)").clicked() {
+                editor.renaming = Some((id, inst.name.clone()));
+                ui.close_menu();
+            }
+            pick(ui, "Duplicate  (Ctrl+D)", Action::Duplicate);
+            pick(ui, "Copy  (Ctrl+C)", Action::Copy);
+            pick(ui, "Paste into  (Ctrl+V)", Action::Paste);
+            pick(ui, "Group into a Model  (Ctrl+G)", Action::Group);
+            if inst.class == Class::Model {
+                pick(ui, "Ungroup  (Ctrl+U)", Action::Ungroup);
+            }
+            ui.separator();
+            pick(ui, "Delete  (Del)", Action::Delete);
+        });
     }
 
     if !children.is_empty() {
         ui.indent(id, |ui| {
             for child in children {
-                tree_node(ui, model, child, selection, also);
+                tree_node(ui, model, child, selection, editor);
             }
         });
+    }
+}
+
+/// Things pasted exactly where others already are (pasting in the same
+/// game) go on top of them, like Paste always has.
+fn stack_if_overlapping(model: &mut DataModel, items: &[InstanceId]) {
+    let parts = moving_parts(model, items);
+    let pasted: std::collections::HashSet<InstanceId> = parts.iter().copied().collect();
+    let overlaps = parts.iter().filter_map(|id| model.part(*id).map(|p| p.position)).any(|pos| {
+        model.walk().into_iter().any(|other| !pasted.contains(&other) && model.part(other).is_some_and(|q| q.position == pos))
+    });
+    if overlaps {
+        if let Some(b) = bounds(model, &parts) {
+            shift(model, items, Vec3::Y * b.size.y);
+        }
     }
 }
 
@@ -1750,9 +2650,7 @@ impl ApplicationHandler for Studio {
         if self.gpu.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
-            .with_title("Brixo Studio")
-            .with_inner_size(winit::dpi::LogicalSize::new(1400.0, 860.0));
+        let attrs = brixo_client::filming::window_attributes("Brixo Studio", 1400.0, 860.0);
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
@@ -1773,6 +2671,8 @@ impl ApplicationHandler for Studio {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // An audio file dropped on the window becomes a Sound in the game.
+            WindowEvent::DroppedFile(path) => self.import_audio(&path),
 
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = self.gpu.as_mut() {
@@ -1805,6 +2705,10 @@ impl ApplicationHandler for Studio {
 
                 self.move_camera(dt);
                 self.frame(dt);
+                if self.demo.as_ref().is_some_and(|d| d.finished) {
+                    event_loop.exit();
+                    return;
+                }
 
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
@@ -1878,7 +2782,49 @@ fn demo_scene() -> DataModel {
 
     // Greets players as they join a (multiplayer) game.
     let greeter = dm.create(Class::Script, "Greeter", root).unwrap();
-    dm.script_mut(greeter).unwrap().source = "-- Runs on the server: everyone hears about joins and leaves.\non player_joined(p)\n    print(\"Welcome, \" + p.name + \"! \" + len(players()) + \" playing\")\nend\n\non player_left(p)\n    print(p.name + \" left\")\nend\n".to_string();
+    dm.script_mut(greeter).unwrap().source = "-- Runs on the server: every player gets a coin counter and a Ball Maker.\non player_joined(p)\n    print(\"Welcome, \" + p.name + \"! \" + len(players()) + \" playing\")\n    coins = create(\"TextLabel\", p)\n    coins.name = \"Coins\"\n    coins.text = \"0\"\n    coins.x = 0.02\n    coins.y = 0.1\n    coins.width = 0.1\n    coins.height = 0.07\n    coins.text_size = 30\n    coins.background = true\n    coins.text_color = {r = 245, g = 205, b = 48}\n    tool = clone(find(\"Ball Maker\"))\n    tool.parent = p\nend\n\non player_left(p)\n    print(p.name + \" left\")\nend\n".to_string();
+
+    // On-screen GUI everyone sees: a title and a button.
+    let title = dm.create(Class::TextLabel, "Title", root).unwrap();
+    {
+        let g = dm.gui_mut(title).unwrap();
+        g.text = "BRIXO DEMO: grab the coin, press 1 for the Ball Maker".into();
+        g.x = 0.1;
+        g.y = 0.02;
+        g.width = 0.8;
+        g.text_size = 22.0;
+    }
+    let jump = dm.create(Class::TextButton, "SuperJump", root).unwrap();
+    {
+        let g = dm.gui_mut(jump).unwrap();
+        g.text = "Super jump!".into();
+        g.x = 0.02;
+        g.y = 0.2;
+        g.width = 0.14;
+    }
+    let s = dm.create(Class::Script, "Boost", jump).unwrap();
+    dm.script_mut(s).unwrap().source = "-- Buttons hear who clicked them.\non clicked(p)\n    p.jump_power = 45\n    self.text = p.name + \" is bouncy!\"\nend\n".to_string();
+
+    // A tool, kept out of sight: the Greeter gives each player a copy.
+    let storage = dm.create(Class::Folder, "Storage", root).unwrap();
+    let maker = dm.create(Class::Tool, "Ball Maker", storage).unwrap();
+    let handle = dm.create(Class::Part, "Handle", maker).unwrap();
+    {
+        let p = dm.part_mut(handle).unwrap();
+        p.position = V::new(0.0, -300.0, 0.0);
+        p.size = V::new(0.4, 0.4, 2.0);
+        p.color = Color::new(105, 64, 40);
+    }
+    let tip = dm.create(Class::Part, "Tip", maker).unwrap();
+    {
+        let p = dm.part_mut(tip).unwrap();
+        p.shape = Shape::Ball;
+        p.position = V::new(0.0, -300.0, 1.3);
+        p.size = V::new(0.8, 0.8, 0.8);
+        p.color = Color::new(13, 105, 172);
+    }
+    let s = dm.create(Class::Script, "Make", maker).unwrap();
+    dm.script_mut(s).unwrap().source = "-- Click with the tool in hand: a ball drops on your head.\non activated(p)\n    ball = create(\"Part\", p.parent)\n    ball.shape = \"ball\"\n    ball.size = {x = 2, y = 2, z = 2}\n    ball.color = {r = random(0, 255), g = random(0, 255), b = random(0, 255)}\n    ball.position = {x = p.position.x, y = p.position.y + 7, z = p.position.z}\n    ball.anchored = false\nend\n".to_string();
 
     // --- a little course for the player ---
     let spawn = dm.create(Class::SpawnLocation, "SpawnLocation", root).unwrap();
@@ -1893,7 +2839,7 @@ fn demo_scene() -> DataModel {
         p.can_collide = false;
     }
     let s = dm.create(Class::Script, "Collect", coin).unwrap();
-    dm.script_mut(s).unwrap().source = "-- Walk into me! Can collide is off, so you pass through.\non touched(other)\n    if other.class == \"player\" then\n        print(other.name + \" grabbed a coin!\")\n        other.face = \"happy\"\n        destroy(self)\n    end\nend\n\nevery 0.03 seconds\n    self.rotation.y += 5\nend\n".to_string();
+    dm.script_mut(s).unwrap().source = "-- Walk into me! Can collide is off, so you pass through.\non touched(other)\n    if other.class == \"player\" then\n        print(other.name + \" grabbed a coin!\")\n        other.face = \"happy\"\n        for c in other.children do\n            if c.name == \"Coins\" then\n                c.text = num(c.text) + 1\n            end\n        end\n        destroy(self)\n    end\nend\n\nevery 0.03 seconds\n    self.rotation.y += 5\nend\n".to_string();
 
     let lava = dm.create(Class::Part, "Lava", root).unwrap();
     {

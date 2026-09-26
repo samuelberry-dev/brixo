@@ -1,0 +1,63 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Character &middot; Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content">
+<div class="cols"><div class="side" style="width:260px">
+  <div class="box"><h2>Your Character</h2><div class="inner">
+    <div class="avatar-frame" id="preview"></div>
+    <p class="hint" style="margin-top:6px">This is how you look in every Brixo game.</p>
+  </div></div>
+</div><div class="main">
+  <div class="box gold"><h2>Character Customizer</h2><div class="inner">
+    <div class="label">Face</div><div class="row" id="face"></div>
+    <div class="label">Shirt</div><div class="row" id="shirt"></div>
+    <div class="label">Pants</div><div class="row" id="pants"></div>
+    <div class="label">Shoes</div><div class="row" id="shoes"></div>
+    <div class="label">Skin</div><div class="row" id="skin"></div>
+    <div style="margin-top:12px"><button class="btn green big" id="save">Save</button> <span id="status"></span></div>
+  </div></div>
+</div></div>
+</div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  const me = await shell("avatar");
+  if (!me) { location.href = "/login"; return; }
+  const look = { ...me.avatar };
+  const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+  function draw() {
+    document.getElementById("preview").innerHTML = avatarSvg(look);
+    for (const key of ["shirt", "pants", "shoes", "skin"]) {
+      const row = document.getElementById(key);
+      row.innerHTML = "";
+      for (const c of PALETTES[key]) {
+        const s = document.createElement("div");
+        s.className = "swatch" + (same(c, look[key]) ? " on" : "");
+        s.style.background = rgb(c);
+        s.onclick = () => { look[key] = c; draw(); };
+        row.appendChild(s);
+      }
+    }
+    const faces = document.getElementById("face");
+    faces.innerHTML = "";
+    for (const f of FACES) {
+      const b = document.createElement("div");
+      b.className = "face" + (f === look.face ? " on" : "");
+      b.innerHTML = `<svg viewBox="-20 -20 40 40">${FACE_SVG[f]}</svg>`;
+      b.onclick = () => { look.face = f; draw(); };
+      faces.appendChild(b);
+    }
+    document.getElementById("status").textContent = "";
+  }
+  draw();
+  document.getElementById("save").onclick = async () => {
+    const st = document.getElementById("status");
+    try {
+      await api("/api/avatar", "PUT", look);
+      st.className = "ok"; st.textContent = "Saved!";
+      const mini = document.querySelector("#banner .mini");
+      if (mini) mini.innerHTML = avatarSvg(look, true);
+    } catch (e) { st.className = "error"; st.textContent = e.message; }
+  };
+})();
+</script></body></html>

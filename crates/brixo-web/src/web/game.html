@@ -1,0 +1,78 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Game &middot; Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content"></div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  const me = await shell("games");
+  const content = document.getElementById("content");
+  const id = location.pathname.split("/").pop();
+  let g;
+  try { g = await api(`/api/games/${encodeURIComponent(id)}`); }
+  catch (e) {
+    content.innerHTML = `<div class="box"><h2>Game not found</h2><div class="inner">
+      <p>There's no game here. It might have been taken down.</p><a class="btn" href="/games">Browse games</a></div></div>`;
+    return;
+  }
+  document.title = `${g.name} · Brixo`;
+  const mine = me && me.username === g.owner;
+  const owner = `<a href="/users/${encodeURIComponent(g.owner)}">${esc(g.owner)}</a>`;
+  content.innerHTML = `<div class="cols"><div class="main">
+      <div class="box"><h2>${esc(g.name)}</h2><div class="inner">
+        <div class="bigthumb">${thumb(g)}</div>
+        <p class="hint" style="margin-top:4px">by ${owner}</p>
+      </div></div>
+      <div class="box"><h2>Description ${mine ? `<a href="#" id="edit">Edit</a>` : ""}</h2><div class="inner">
+        <div id="desc"></div>
+      </div></div>
+    </div><div class="side">
+      <div class="box gold"><h2>Play</h2><div class="inner" style="text-align:center">
+        <button class="btn green big" id="play" style="width:100%">&#9654; PLAY</button>
+        ${me ? "" : `<p class="hint" style="margin-top:6px">Log in at the top (or <a href="/signup">sign up</a>) to play.</p>`}
+        <div class="note" id="note" style="text-align:left">Nothing happened? You need <b>Brixo Player</b> installed.
+          <a href="/download">Get it here</a>, then press Play again.</div>
+      </div></div>
+      <div class="box"><h2>Game Info</h2><div class="inner">
+        <table class="stats">
+          <tr><td>Playing now</td><td>${num(g.playing)}</td></tr>
+          <tr><td>Visits</td><td>${num(g.visits)}</td></tr>
+          <tr><td>Created</td><td>${when(g.created) || "a while ago"}</td></tr>
+          <tr><td>Creator</td><td>${owner}</td></tr>
+        </table>
+      </div></div>
+      <div class="box navy"><h2>Made with Brixo Studio</h2><div class="inner soft">
+        <p>Every brick, script and sound in this game was put together in Brixo Studio. You can make one too.</p>
+        <a class="btn" href="/download">Get Brixo &raquo;</a>
+      </div></div>
+    </div></div>`;
+
+  const desc = document.getElementById("desc");
+  const show = () => {
+    desc.innerHTML = g.description
+      ? `<div style="white-space:pre-wrap;word-wrap:break-word">${esc(g.description)}</div>`
+      : `<p class="hint">${mine ? "No description yet. Press Edit to tell players what your game is about." : "No description yet."}</p>`;
+  };
+  show();
+
+  const play = document.getElementById("play");
+  play.onclick = () => me ? playGame(g, play, document.getElementById("note")) : (location.href = "/login");
+
+  const edit = document.getElementById("edit");
+  if (edit) edit.onclick = (e) => {
+    e.preventDefault();
+    desc.innerHTML = `<textarea id="text" rows="7" maxlength="1000" style="width:100%">${esc(g.description)}</textarea>
+      <div class="error" id="err"></div>
+      <button class="btn gold" id="save">Save</button> <button class="btn gray" id="cancel">Cancel</button>`;
+    document.getElementById("cancel").onclick = show;
+    document.getElementById("save").onclick = async () => {
+      const text = document.getElementById("text").value;
+      try {
+        await api(`/api/games/${g.id}`, "PUT", { description: text });
+        g = await api(`/api/games/${g.id}`);
+        show();
+      } catch (err) { document.getElementById("err").textContent = err.message; }
+    };
+  };
+})();
+</script></body></html>

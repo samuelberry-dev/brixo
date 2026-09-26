@@ -97,9 +97,13 @@ fn every_player_respawns_on_their_own() {
     ));
     let _ann = game.add_player("Ann");
     let _bob = game.add_player("Bob");
+    // Bob falls apart, then respawns a few seconds later; Ann's untouched.
     run(&mut game, 0.1);
     let log = texts(&game);
-    assert!(log.contains(&"Bob died and respawned".to_string()), "{log:?}");
+    assert!(log.contains(&"Bob died".to_string()), "{log:?}");
+    run(&mut game, brixo_runtime::RESPAWN_TIME as f64 + 0.2);
+    let log = [log, texts(&game)].concat();
+    assert!(log.contains(&"Bob respawned".to_string()), "{log:?}");
     assert!(!log.iter().any(|t| t.starts_with("Ann")), "{log:?}");
 }
 

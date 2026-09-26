@@ -4,6 +4,7 @@
 //! the same object, so `self.position` is a live view of the real position:
 //! `self.position.y += 1` moves the part, rather than changing a copy.
 
+use parking_lot::Mutex as WorldMutex;
 use std::sync::{Arc, Mutex};
 
 use brixo_core::{CameraMode, Class, Color, DataModel, Face, InstanceId, PartProps, Shape, Vec3};
@@ -22,15 +23,34 @@ pub const FACET_PANTS: u32 = 7;
 pub const FACET_SHOES: u32 = 8;
 /// The `camera` object scripts get; its id is the player's.
 pub const FACET_CAMERA: u32 = 9;
+/// A GUI element's text and background colours.
+pub const FACET_TEXT_COLOR: u32 = 10;
+pub const FACET_BG_COLOR: u32 = 11;
+
+/// What scripts can make with `create`.
+const CREATABLE: [(&str, Class); 8] = [
+    ("Part", Class::Part),
+    ("Model", Class::Model),
+    ("Folder", Class::Folder),
+    ("TextLabel", Class::TextLabel),
+    ("TextButton", Class::TextButton),
+    ("Frame", Class::Frame),
+    ("Tool", Class::Tool),
+    ("SpawnLocation", Class::SpawnLocation),
+];
 
 fn is_color_facet(facet: u32) -> bool {
-    facet == FACET_COLOR || (FACET_SKIN..=FACET_SHOES).contains(&facet)
+    facet == FACET_COLOR || (FACET_SKIN..=FACET_SHOES).contains(&facet) || facet == FACET_TEXT_COLOR || facet == FACET_BG_COLOR
 }
 
 /// Reads whichever colour a colour facet points at.
 fn color_of(world: &DataModel, id: InstanceId, facet: u32) -> Option<Color> {
     if facet == FACET_COLOR {
         return world.body(id).map(|p| p.color);
+    }
+    if facet == FACET_TEXT_COLOR || facet == FACET_BG_COLOR {
+        let g = world.gui(id)?;
+        return Some(if facet == FACET_TEXT_COLOR { g.text_color } else { g.background_color });
     }
     let p = world.player(id)?;
     Some(match facet {
@@ -44,6 +64,10 @@ fn color_of(world: &DataModel, id: InstanceId, facet: u32) -> Option<Color> {
 fn color_mut(world: &mut DataModel, id: InstanceId, facet: u32) -> Option<&mut Color> {
     if facet == FACET_COLOR {
         return world.body_mut(id).map(|p| &mut p.color);
+    }
+    if facet == FACET_TEXT_COLOR || facet == FACET_BG_COLOR {
+        let g = world.gui_mut(id)?;
+        return Some(if facet == FACET_TEXT_COLOR { &mut g.text_color } else { &mut g.background_color });
     }
     let p = world.player_mut(id)?;
     Some(match facet {
@@ -77,9 +101,223 @@ fn face_names() -> String {
 const MIN_SIZE: f32 = 0.05;
 
 pub struct WorldHost {
-    pub world: Arc<Mutex<DataModel>>,
+    pub world: Arc<WorldMutex<DataModel>>,
     /// Seconds since the game started, for time().
     pub clock: Arc<Mutex<f64>>,
+    /// Sounds and music scripts asked for, for the players to hear.
+    pub sounds: Arc<Mutex<Vec<SoundEvent>>>,
+    /// Explosions scripts set off, carried out by the game's next step.
+    pub blasts: Arc<Mutex<Vec<Blast>>>,
+}
+
+/// Breakable parts: anchored parts with a custom field `breakable = true`.
+/// They stay perfectly still (and cost nothing to simulate) until a blast
+/// reaches them: then the ones in range come loose and fly, and any that
+/// are no longer connected to solid ground, through the breakable parts they
+/// touch, fall too. That's how a tower collapses when its base is blown out.
+pub fn break_and_collapse(world: &mut DataModel, center: Vec3, radius: f32, power: f32) {
+    let ids = world.walk();
+    let mut loosened: Vec<InstanceId> = Vec::new();
+    for &id in &ids {
+        if !is_breakable(world, id) {
+            continue;
+        }
+        let p = world.part_mut(id).unwrap();
+        let away = glam::Vec3::new(p.position.x - center.x, p.position.y - center.y, p.position.z - center.z);
+        let d = away.length();
+        if d < radius {
+            let kick = (away.normalize_or(glam::Vec3::Y) + glam::Vec3::Y * 0.35).normalize() * power * (1.0 - d / radius);
+            p.anchored = false;
+            p.velocity = Vec3::new(kick.x, kick.y, kick.z);
+            loosened.push(id);
+        }
+    }
+    if !loosened.is_empty() {
+        collapse(world, &loosened);
+    }
+}
+
+/// An anchored part with `breakable = true` (and not part of a tool).
+fn is_breakable(world: &DataModel, id: InstanceId) -> bool {
+    world.part(id).is_some_and(|p| p.anchored)
+        && world.tool_of(id).is_none()
+        && matches!(world.get(id).and_then(|i| i.attributes.get("breakable")), Some(brixo_core::Attribute::Bool(true)))
+}
+
+type Box3 = (glam::Vec3, glam::Vec3);
+
+fn aabb(p: &brixo_core::PartProps) -> Box3 {
+    let c = glam::Vec3::new(p.position.x, p.position.y, p.position.z);
+    let h = glam::Vec3::new(p.size.x, p.size.y, p.size.z) / 2.0 + glam::Vec3::splat(0.06);
+    (c - h, c + h)
+}
+
+fn touch(a: &Box3, b: &Box3) -> bool {
+    a.0.cmple(b.1).all() && b.0.cmple(a.1).all()
+}
+
+/// After some bricks were knocked loose: each group of breakable bricks
+/// that was touching them is checked as a whole. A group still touching
+/// solid ground (an anchored part that isn't breakable) stays up; a group
+/// that isn't falls. Only groups next to the blast are looked at, so other
+/// structures (like a hidden rebuild copy of the map) are never touched.
+fn collapse(world: &mut DataModel, loosened: &[InstanceId]) {
+    let mut bricks: Vec<(InstanceId, Box3)> = Vec::new();
+    let mut ground: Vec<Box3> = Vec::new();
+    for id in world.walk() {
+        let Some(p) = world.part(id) else { continue };
+        if !p.anchored || world.tool_of(id).is_some() {
+            continue;
+        }
+        if is_breakable(world, id) { bricks.push((id, aabb(p))) } else { ground.push(aabb(p)) }
+    }
+    let gone: Vec<Box3> = loosened.iter().filter_map(|id| world.part(*id)).map(aabb).collect();
+    // A grid of 4-stud cells, so each brick only checks its neighbours.
+    let cell = |v: glam::Vec3| (v / 4.0).floor().as_ivec3();
+    let mut grid: std::collections::HashMap<glam::IVec3, Vec<usize>> = Default::default();
+    for (i, (_, b)) in bricks.iter().enumerate() {
+        let (lo, hi) = (cell(b.0), cell(b.1));
+        for x in lo.x..=hi.x {
+            for y in lo.y..=hi.y {
+                for z in lo.z..=hi.z {
+                    grid.entry(glam::IVec3::new(x, y, z)).or_default().push(i);
+                }
+            }
+        }
+    }
+    let neighbours = |i: usize| -> Vec<usize> {
+        let b = bricks[i].1;
+        let (lo, hi) = (cell(b.0), cell(b.1));
+        let mut out = Vec::new();
+        for x in lo.x..=hi.x {
+            for y in lo.y..=hi.y {
+                for z in lo.z..=hi.z {
+                    for &j in grid.get(&glam::IVec3::new(x, y, z)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if j != i && touch(&b, &bricks[j].1) {
+                            out.push(j);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
+    let mut seen = vec![false; bricks.len()];
+    let seeds: Vec<usize> = (0..bricks.len()).filter(|&i| gone.iter().any(|g| touch(&bricks[i].1, g))).collect();
+    for seed in seeds {
+        if seen[seed] {
+            continue;
+        }
+        // Gather this whole group, noting whether any of it is on the ground.
+        let mut group = vec![seed];
+        seen[seed] = true;
+        let mut k = 0;
+        let mut grounded = false;
+        while k < group.len() {
+            let i = group[k];
+            k += 1;
+            grounded |= ground.iter().any(|g| touch(&bricks[i].1, g));
+            for j in neighbours(i) {
+                if !seen[j] {
+                    seen[j] = true;
+                    group.push(j);
+                }
+            }
+        }
+        if !grounded {
+            for i in group {
+                world.part_mut(bricks[i].0).unwrap().anchored = false;
+            }
+        }
+    }
+}
+
+/// An explosion waiting to happen (see `explode`).
+#[derive(Debug, Clone, Copy)]
+pub struct Blast {
+    pub center: Vec3,
+    pub radius: f32,
+    pub power: f32,
+}
+
+/// Something for players to hear.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SoundEvent {
+    /// A sound effect, for everyone or just one player.
+    Play { name: String, player: Option<InstanceId> },
+    /// Start a music loop (None stops the music), for everyone or one player.
+    Music { name: Option<String>, player: Option<InstanceId> },
+}
+
+/// What one player should hear.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cue {
+    Sound(String),
+    Music(Option<String>),
+}
+
+impl SoundEvent {
+    /// This event as `me` hears it (None if it's for someone else).
+    pub fn for_player(self, me: Option<InstanceId>) -> Option<Cue> {
+        match self {
+            SoundEvent::Play { name, player } if player.is_none() || player == me => Some(Cue::Sound(name)),
+            SoundEvent::Music { name, player } if player.is_none() || player == me => Some(Cue::Music(name)),
+            _ => None,
+        }
+    }
+}
+
+/// The built-in fields each kind of object has, for "did you mean" on
+/// typos. Only fields the class really has count: `pad.next` on a part is a
+/// custom field, not a typo of a label's `text`.
+fn fields_for(class: Class) -> Vec<&'static str> {
+    let mut f = vec!["name", "class", "parent", "children"];
+    match class {
+        Class::Part | Class::SpawnLocation => f.extend([
+            "position", "size", "rotation", "color", "anchored", "can_collide", "shape", "material",
+            "transparency", "velocity", "floating", "bounce",
+        ]),
+        Class::Player => f.extend([
+            "position", "size", "rotation", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look",
+            "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped",
+        ]),
+        Class::TextLabel | Class::TextButton | Class::Frame => f.extend([
+            "text", "text_size", "text_color", "background", "background_color", "visible", "x", "y", "width",
+            "height", "attached_to",
+        ]),
+        Class::Sound => f.push("volume"),
+        _ => {}
+    }
+    f
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur.push((prev[j] + (ca != *cb) as usize).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+/// A real field of `class` that `name` is probably a typo of.
+fn near_miss(class: Class, name: &str) -> Option<&'static str> {
+    fields_for(class)
+        .into_iter()
+        .filter(|f| *f != name)
+        .find(|f| name.len() > 2 && edit_distance(name, f) <= if name.len() <= 4 { 1 } else { 2 })
+}
+
+fn attribute_value(a: &brixo_core::Attribute) -> Value {
+    match a {
+        brixo_core::Attribute::Num(n) => Value::Num(*n),
+        brixo_core::Attribute::Str(t) => Value::str(t.as_str()),
+        brixo_core::Attribute::Bool(b) => Value::Bool(*b),
+    }
 }
 
 /// The script-side handle for an instance.
@@ -98,6 +336,11 @@ fn class_name(class: Class) -> &'static str {
         Class::Script => "script",
         Class::SpawnLocation => "spawnlocation",
         Class::Model => "model",
+        Class::TextLabel => "textlabel",
+        Class::TextButton => "textbutton",
+        Class::Frame => "frame",
+        Class::Tool => "tool",
+        Class::Sound => "sound",
         Class::Player => "player",
     }
 }
@@ -106,8 +349,12 @@ fn gone() -> String {
     "this object was destroyed, so it can't be used any more".to_string()
 }
 
+/// A part's velocity (conveyor speed, for anchored parts).
+pub const FACET_VELOCITY: u32 = 12;
+
 fn vec_facet(name: &str) -> Option<u32> {
     match name {
+        "velocity" => Some(FACET_VELOCITY),
         "position" => Some(FACET_POSITION),
         "size" => Some(FACET_SIZE),
         "rotation" => Some(FACET_ROTATION),
@@ -119,6 +366,7 @@ fn vec_facet(name: &str) -> Option<u32> {
 fn read_vec(p: &PartProps, facet: u32) -> Vec3 {
     match facet {
         FACET_POSITION => p.position,
+        FACET_VELOCITY => p.velocity,
         FACET_SIZE => p.size,
         _ => p.rotation,
     }
@@ -127,6 +375,7 @@ fn read_vec(p: &PartProps, facet: u32) -> Vec3 {
 fn write_vec(p: &mut PartProps, facet: u32, v: Vec3) {
     match facet {
         FACET_POSITION => p.position = v,
+        FACET_VELOCITY => p.velocity = v,
         FACET_SIZE => {
             p.size = Vec3::new(v.x.max(MIN_SIZE), v.y.max(MIN_SIZE), v.z.max(MIN_SIZE))
         }
@@ -145,9 +394,6 @@ fn channel(value: &Value, what: &str) -> Result<u8, String> {
     Ok(number(value, what)?.round().clamp(0.0, 255.0) as u8)
 }
 
-fn part_fields_hint() -> &'static str {
-    "Parts have name, position, size, rotation, color, anchored, can_collide and parent"
-}
 
 impl WorldHost {
     /// Reads a vector from `{x = 1, y = 2}` (missing axes keep `current`)
@@ -167,7 +413,7 @@ impl WorldHost {
                 }
                 Ok(v)
             }
-            Value::Object(o) if matches!(o.facet, FACET_POSITION | FACET_SIZE | FACET_ROTATION) => {
+            Value::Object(o) if matches!(o.facet, FACET_POSITION | FACET_SIZE | FACET_ROTATION | FACET_VELOCITY) => {
                 let p = world.body(InstanceId::from_raw(o.id)).ok_or_else(gone)?;
                 Ok(read_vec(p, o.facet))
             }
@@ -206,7 +452,7 @@ impl WorldHost {
 
 impl Host for WorldHost {
     fn get_field(&self, obj: ObjectRef, name: &str) -> Result<Value, String> {
-        let world = self.world.lock().unwrap();
+        let world = self.world.lock();
         let id = InstanceId::from_raw(obj.id);
         let inst = world.get(id).ok_or_else(gone)?;
 
@@ -237,6 +483,49 @@ impl Host for WorldHost {
                     } as f64)),
                     None => Err(format!("a {} doesn't have {name}. Only players do", class_name(inst.class))),
                 },
+                "x" | "y" | "width" | "height" | "text_size" | "text" | "background" | "visible" | "text_color"
+                | "background_color"
+                    if world.gui(id).is_some() =>
+                {
+                    let g = world.gui(id).unwrap();
+                    Ok(match name {
+                        "x" => Value::Num(g.x as f64),
+                        "y" => Value::Num(g.y as f64),
+                        "width" => Value::Num(g.width as f64),
+                        "height" => Value::Num(g.height as f64),
+                        "text_size" => Value::Num(g.text_size as f64),
+                        "text" => Value::str(g.text.as_str()),
+                        "background" => Value::Bool(g.background),
+                        "visible" => Value::Bool(g.visible),
+                        "text_color" => facet_object(id, FACET_TEXT_COLOR),
+                        _ => facet_object(id, FACET_BG_COLOR),
+                    })
+                }
+                "floating" if world.part(id).is_some() => Ok(Value::Bool(world.part(id).unwrap().floating)),
+                "bounce" if world.part(id).is_some() => Ok(Value::Num(world.part(id).unwrap().bounce as f64)),
+                "material" | "transparency" => match world.part(id) {
+                    Some(p) if name == "material" => Ok(Value::str(p.material.name())),
+                    Some(p) => Ok(Value::Num(p.transparency as f64)),
+                    None => Err(format!("a {} doesn't have {name}. Only parts do", class_name(inst.class))),
+                },
+                "attached_to" if world.gui(id).is_some() => {
+                    Ok(world.gui(id).unwrap().attached_to.filter(|a| world.get(*a).is_some()).map(object).unwrap_or(Value::Nil))
+                }
+                "volume" if world.sound(id).is_some() => Ok(Value::Num(world.sound(id).unwrap().volume as f64)),
+                "swinging" if world.player(id).is_some() => Ok(Value::Bool(world.player(id).unwrap().swing > 0.0)),
+                // Which way the player faces, flat: {x, y = 0, z}, length 1.
+                "look" if world.player(id).is_some() => {
+                    let yaw = world.player(id).unwrap().body.rotation.y.to_radians();
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert("x".to_string(), Value::Num(yaw.sin() as f64));
+                    m.insert("y".to_string(), Value::Num(0.0));
+                    m.insert("z".to_string(), Value::Num(yaw.cos() as f64));
+                    Ok(Value::map(m))
+                }
+                "equipped" => match world.player(id) {
+                    Some(p) => Ok(p.equipped.filter(|t| world.get(*t).is_some()).map(object).unwrap_or(Value::Nil)),
+                    None => Err(format!("a {} doesn't have equipped. Only players do", class_name(inst.class))),
+                },
                 "shape" => match world.part(id) {
                     Some(p) => Ok(Value::str(p.shape.name())),
                     None => Err(format!("a {} doesn't have a shape. Only parts do", class_name(inst.class))),
@@ -254,17 +543,18 @@ impl Host for WorldHost {
                         "a {} doesn't have a {other}. Only parts do",
                         class_name(inst.class)
                     )),
-                    None if inst.class == Class::Part => {
-                        Err(format!("a part doesn't have '{other}'. {}", part_fields_hint()))
-                    }
-                    None => Err(format!(
-                        "a {} doesn't have '{other}'",
-                        class_name(inst.class)
-                    )),
+                    // A custom field a script set earlier.
+                    None if inst.attributes.contains_key(other) => Ok(attribute_value(&inst.attributes[other])),
+                    None => match near_miss(inst.class, other) {
+                        Some(real) => Err(format!("a {} doesn't have '{other}'. Did you mean '{real}'?", class_name(inst.class))),
+                        // Custom fields that were never set read as nil, so
+                        // scripts can check `if p.cash == nil then`.
+                        None => Ok(Value::Nil),
+                    },
                 },
             },
 
-            FACET_POSITION | FACET_SIZE | FACET_ROTATION => {
+            FACET_POSITION | FACET_SIZE | FACET_ROTATION | FACET_VELOCITY => {
                 let v = read_vec(world.body(id).ok_or_else(gone)?, obj.facet);
                 match name {
                     "x" => Ok(Value::Num(v.x as f64)),
@@ -297,7 +587,7 @@ impl Host for WorldHost {
     }
 
     fn set_field(&self, obj: ObjectRef, name: &str, value: Value) -> Result<(), String> {
-        let mut world = self.world.lock().unwrap();
+        let mut world = self.world.lock();
         let id = InstanceId::from_raw(obj.id);
         let class = world.get(id).ok_or_else(gone)?.class;
 
@@ -311,6 +601,84 @@ impl Host for WorldHost {
                     other => Err(format!("name has to be text, not a {}", other.type_name())),
                 },
                 "class" => Err("class can't be changed".to_string()),
+                "x" | "y" | "width" | "height" | "text_size" | "text" | "background" | "visible" | "text_color"
+                | "background_color"
+                    if world.gui(id).is_some() =>
+                {
+                    let current = if name == "text_color" || name == "background_color" {
+                        let facet = if name == "text_color" { FACET_TEXT_COLOR } else { FACET_BG_COLOR };
+                        Some(self.to_color(&world, &value, color_of(&world, id, facet).unwrap())?)
+                    } else {
+                        None
+                    };
+                    let g = world.gui_mut(id).unwrap();
+                    match name {
+                        "x" => g.x = number(&value, name)?,
+                        "y" => g.y = number(&value, name)?,
+                        "width" => g.width = number(&value, name)?.max(0.0),
+                        "height" => g.height = number(&value, name)?.max(0.0),
+                        "text_size" => g.text_size = number(&value, name)?.clamp(4.0, 200.0),
+                        "text" => {
+                            // Numbers and true/false show as they'd print.
+                            g.text = match &value {
+                                Value::Str(t) => t.to_string(),
+                                Value::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
+                                Value::Num(n) => n.to_string(),
+                                Value::Bool(b) => b.to_string(),
+                                other => return Err(format!("text has to be text or a number, not a {}", other.type_name())),
+                            }
+                        }
+                        "background" | "visible" => {
+                            let Value::Bool(flag) = value else {
+                                return Err(format!("{name} has to be true or false, not a {}", value.type_name()));
+                            };
+                            if name == "background" { g.background = flag } else { g.visible = flag }
+                        }
+                        "text_color" => g.text_color = current.unwrap(),
+                        _ => g.background_color = current.unwrap(),
+                    }
+                    Ok(())
+                }
+                "floating" if world.part(id).is_some() => {
+                    let Value::Bool(f) = value else {
+                        return Err(format!("floating has to be true or false, not a {}", value.type_name()));
+                    };
+                    world.part_mut(id).unwrap().floating = f;
+                    Ok(())
+                }
+                "bounce" if world.part(id).is_some() => {
+                    world.part_mut(id).unwrap().bounce = number(&value, name)?.clamp(0.0, 1.0);
+                    Ok(())
+                }
+                "volume" if world.sound(id).is_some() => {
+                    world.sound_mut(id).unwrap().volume = number(&value, name)?.clamp(0.0, 1.0);
+                    Ok(())
+                }
+                "material" => {
+                    let names = brixo_core::Material::ALL.iter().map(|m| m.name()).collect::<Vec<_>>().join(", ");
+                    let Value::Str(text) = &value else {
+                        return Err(format!("material should be text, one of: {names}"));
+                    };
+                    let m = brixo_core::Material::from_name(text)
+                        .ok_or_else(|| format!("there's no material called '{text}'. Try one of: {names}"))?;
+                    world.part_mut(id).ok_or_else(|| format!("a {} doesn't have a material. Only parts do", class_name(class)))?.material = m;
+                    Ok(())
+                }
+                "transparency" => {
+                    let t = number(&value, name)?.clamp(0.0, 1.0);
+                    world.part_mut(id).ok_or_else(|| format!("a {} doesn't have transparency. Only parts do", class_name(class)))?.transparency = t;
+                    Ok(())
+                }
+                "attached_to" if world.gui(id).is_some() => {
+                    let target = match value {
+                        Value::Object(o) if o.facet == FACET_SELF => Some(InstanceId::from_raw(o.id)),
+                        Value::Nil => None,
+                        other => return Err(format!("attached_to has to be a part (or nil), not a {}", other.type_name())),
+                    };
+                    world.gui_mut(id).unwrap().attached_to = target;
+                    Ok(())
+                }
+                "equipped" => Err("equipped changes when the player presses 1-9; move a Tool into the player to give it to them".to_string()),
                 "shape" => {
                     let names = Shape::ALL.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
                     let Value::Str(text) = &value else {
@@ -420,14 +788,28 @@ impl Host for WorldHost {
                         write_vec(world.body_mut(id).unwrap(), facet, v);
                         Ok(())
                     }
-                    None => Err(format!(
-                        "a {} doesn't have '{other}' to set",
-                        class_name(class)
-                    )),
+                    None => {
+                        if let Some(real) = near_miss(class, other) {
+                            return Err(format!("a {} doesn't have '{other}'. Did you mean '{real}'?", class_name(class)));
+                        }
+                        // Anything else becomes a custom field: `p.cash = 100`.
+                        let attr = match value {
+                            Value::Num(n) => brixo_core::Attribute::Num(n),
+                            Value::Str(t) => brixo_core::Attribute::Str(t.to_string()),
+                            Value::Bool(b) => brixo_core::Attribute::Bool(b),
+                            Value::Nil => {
+                                world.get_mut(id).unwrap().attributes.remove(other);
+                                return Ok(());
+                            }
+                            v => return Err(format!("custom fields can hold numbers, text or true/false, not a {}", v.type_name())),
+                        };
+                        world.get_mut(id).unwrap().attributes.insert(other.to_string(), attr);
+                        Ok(())
+                    }
                 },
             },
 
-            FACET_POSITION | FACET_SIZE | FACET_ROTATION => {
+            FACET_POSITION | FACET_SIZE | FACET_ROTATION | FACET_VELOCITY => {
                 let n = number(&value, name)?;
                 let p = world.body_mut(id).ok_or_else(gone)?;
                 let mut v = read_vec(p, obj.facet);
@@ -472,7 +854,7 @@ impl Host for WorldHost {
     }
 
     fn describe(&self, obj: ObjectRef) -> String {
-        let world = self.world.lock().unwrap();
+        let world = self.world.lock();
         let id = InstanceId::from_raw(obj.id);
         let Some(inst) = world.get(id) else {
             return "<destroyed>".to_string();
@@ -502,7 +884,7 @@ impl Host for WorldHost {
     fn type_name(&self, obj: ObjectRef) -> String {
         match obj.facet {
             FACET_SELF => {
-                let world = self.world.lock().unwrap();
+                let world = self.world.lock();
                 world
                     .get(InstanceId::from_raw(obj.id))
                     .map(|i| class_name(i.class))
@@ -516,7 +898,7 @@ impl Host for WorldHost {
     }
 
     fn function_names(&self) -> Vec<&'static str> {
-        vec!["find", "destroy", "clone", "time", "players"]
+        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode"]
     }
 
     fn call(&self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -540,13 +922,13 @@ impl Host for WorldHost {
                 let Value::Str(target) = &args[0] else {
                     return Err("find needs a name, like find(\"Coin\")".to_string());
                 };
-                let world = self.world.lock().unwrap();
+                let world = self.world.lock();
                 Ok(world.find_first(target).map(object).unwrap_or(Value::Nil))
             }
             "destroy" => {
                 need(1)?;
                 let id = instance_arg(&args[0])?;
-                let mut world = self.world.lock().unwrap();
+                let mut world = self.world.lock();
                 if id == world.root() {
                     return Err("the workspace can't be destroyed".to_string());
                 }
@@ -557,7 +939,7 @@ impl Host for WorldHost {
             "clone" => {
                 need(1)?;
                 let id = instance_arg(&args[0])?;
-                let mut world = self.world.lock().unwrap();
+                let mut world = self.world.lock();
                 if world.get(id).is_none() {
                     return Err(gone());
                 }
@@ -570,9 +952,92 @@ impl Host for WorldHost {
                 need(0)?;
                 Ok(Value::Num(*self.clock.lock().unwrap()))
             }
+            "create" => {
+                need(2)?;
+                let names = CREATABLE.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ");
+                let Value::Str(wanted) = &args[0] else {
+                    return Err(format!("create needs a class name first, like create(\"Part\", self). You can create: {names}"));
+                };
+                let class = CREATABLE
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(wanted))
+                    .map(|(_, c)| *c)
+                    .ok_or_else(|| format!("can't create a '{wanted}'. You can create: {names}"))?;
+                let parent = instance_arg(&args[1])?;
+                let mut world = self.world.lock();
+                let name = CREATABLE.iter().find(|(_, c)| *c == class).unwrap().0;
+                world
+                    .create(class, name, parent)
+                    .map(object)
+                    .ok_or_else(|| "that can't hold other things (scripts can't have children)".to_string())
+            }
+            "explode" => {
+                if !(2..=3).contains(&args.len()) {
+                    return Err("explode needs a position and a radius, and optionally a power: explode(self.position, 12)".into());
+                }
+                let mut world = self.world.lock();
+                let center = self.to_vec3(&world, &args[0], Vec3::ZERO)?;
+                let radius = number(&args[1], "the radius")?;
+                if !(0.5..=100.0).contains(&radius) {
+                    return Err("an explosion's radius has to be between 0.5 and 100".into());
+                }
+                let power = match args.get(2) {
+                    Some(v) => number(v, "the power")?.clamp(0.0, 400.0),
+                    None => 70.0,
+                };
+                // Players caught in it are knocked out; they're returned so
+                // scripts can say who did it.
+                let mut caught = Vec::new();
+                for id in world.walk() {
+                    let Some(p) = world.player_mut(id) else { continue };
+                    let d = p.body.position;
+                    let dist = ((d.x - center.x).powi(2) + (d.y - center.y).powi(2) + (d.z - center.z).powi(2)).sqrt();
+                    if dist < radius + 1.5 && p.dead == 0.0 && p.health > 0.0 {
+                        p.health = 0.0;
+                        caught.push(object(id));
+                    }
+                }
+                break_and_collapse(&mut world, center, radius, power);
+                self.blasts.lock().unwrap().push(Blast { center, radius, power });
+                self.sounds.lock().unwrap().push(SoundEvent::Play { name: "boom".into(), player: None });
+                Ok(Value::list(caught))
+            }
+            "play_sound" | "play_music" | "stop_music" => {
+                let music = name != "play_sound";
+                let (wanted, player_arg) = if name == "stop_music" {
+                    (None, args.first())
+                } else {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(format!("{name} needs a name, and optionally a player: {name}(\"{}\", player)", if music { "sunny" } else { "coin" }));
+                    }
+                    let list: &[&str] = if music { &brixo_core::MUSIC } else { &brixo_core::SOUNDS };
+                    let wanted = match &args[0] {
+                        // One of Brixo's built-in sounds or tracks...
+                        Value::Str(n) if list.contains(&n.as_ref()) => n.to_string(),
+                        Value::Str(n) => {
+                            return Err(format!("there's no {} called '{n}'. Try one of: {}, or a Sound in your game: {name}(find(\"My Sound\"))", if music { "music" } else { "sound" }, list.join(", ")));
+                        }
+                        // ...or a Sound in the game (an audio file dropped on the studio).
+                        Value::Object(o) if o.facet == FACET_SELF && self.world.lock().sound(InstanceId::from_raw(o.id)).is_some() => format!("#{}", o.id),
+                        other => return Err(format!("{name} needs a sound's name or a Sound, not a {}", other.type_name())),
+                    };
+                    (Some(wanted), args.get(1))
+                };
+                let player = match player_arg {
+                    Some(v) => Some(instance_arg(v)?),
+                    None => None,
+                };
+                let event = if music {
+                    SoundEvent::Music { name: wanted, player }
+                } else {
+                    SoundEvent::Play { name: wanted.unwrap(), player }
+                };
+                self.sounds.lock().unwrap().push(event);
+                Ok(Value::Nil)
+            }
             "players" => {
                 need(0)?;
-                let world = self.world.lock().unwrap();
+                let world = self.world.lock();
                 let players = world.walk().into_iter().filter(|id| world.player(*id).is_some()).map(object);
                 Ok(Value::list(players.collect()))
             }

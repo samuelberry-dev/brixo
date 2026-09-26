@@ -267,3 +267,19 @@ fn runaway_recursion_is_stopped() {
 fn errors_report_the_right_line() {
     assert!(err("a = 1\nb = 2\n\n\nc = a / 0").starts_with("line 5:"));
 }
+
+#[test]
+fn forks_draw_different_random_numbers() {
+    // Every event handler runs on a fork; they must not all get the same
+    // "random" sequence.
+    let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut base = rovik::Interpreter::new();
+    let sink = out.clone();
+    base.on_print = Some(std::sync::Arc::new(move |t: &str| sink.lock().unwrap().push(t.to_string())));
+    for _ in 0..8 {
+        let mut fork = base.fork();
+        fork.run_source("print(random(1, 1000000))").unwrap();
+    }
+    let seen: std::collections::HashSet<String> = out.lock().unwrap().iter().cloned().collect();
+    assert!(seen.len() >= 7, "forks repeated numbers: {seen:?}");
+}

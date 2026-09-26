@@ -16,3 +16,6 @@ pollster = "0.4"
 wgpu = "24"
 winit = "0.30"
 brixo-server = { path = "../brixo-server" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

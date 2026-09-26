@@ -1,0 +1,68 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Profile &middot; Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content"></div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  const name = decodeURIComponent(location.pathname.split("/").pop());
+  let p = null;
+  try { p = await api(`/api/users/${encodeURIComponent(name)}`); } catch (e) {}
+  const me = await shell(null);
+  if (me && p && me.username === p.username) {
+    const tab = [...document.querySelectorAll("#nav .tab")].find((t) => t.textContent === "Profile");
+    if (tab) tab.classList.add("on");
+  }
+  const content = document.getElementById("content");
+  if (!p) {
+    content.innerHTML = `<div class="box"><h2>Player not found</h2><div class="inner">
+      <p>Nobody on Brixo goes by <b>${esc(name)}</b>.</p><a class="btn" href="/">Home</a></div></div>`;
+    return;
+  }
+  document.title = `${p.username} · Brixo`;
+  const mine = me && me.username === p.username;
+  const visits = p.games.reduce((n, g) => n + g.visits, 0);
+  content.innerHTML = `<div class="cols"><div class="side" style="width:260px">
+      <div class="box"><h2>${esc(p.username)}'s Profile</h2><div class="inner">
+        <div class="avatar-frame">${avatarSvg(p.avatar)}</div>
+        <div id="blurb"></div>
+        <table class="stats">
+          <tr><td>Joined</td><td>${when(p.created) || "the early days"}</td></tr>
+          <tr><td>Games made</td><td>${num(p.games.length)}</td></tr>
+          <tr><td>Game visits</td><td>${num(visits)}</td></tr>
+        </table>
+        ${mine ? `<p style="margin-top:8px"><a href="/avatar">&raquo; Change your character</a></p>` : ""}
+      </div></div>
+    </div><div class="main">
+      <div class="box"><h2>${esc(p.username)}'s Games</h2><div class="inner">
+        ${p.games.length ? `<div class="grid">${popular(p.games).map(gameCard).join("")}</div>`
+          : mine ? `<p>You haven't published a game yet. Build one in <b>Brixo Studio</b> and press <b>Publish</b>.</p>
+                    <a class="btn" href="/download">Get Brixo Studio</a>`
+                 : `<p>${esc(p.username)} hasn't published any games yet.</p>`}
+      </div></div>
+    </div></div>`;
+
+  const box = document.getElementById("blurb");
+  const show = () => {
+    box.innerHTML = (p.blurb ? `<div class="blurb">${esc(p.blurb)}</div>`
+                             : mine ? `<p class="hint" style="margin:8px 0">Say something about yourself.</p>` : "")
+      + (mine ? `<a href="#" id="edit" style="font-size:11px">Edit blurb</a>` : "");
+    const edit = document.getElementById("edit");
+    if (edit) edit.onclick = (e) => {
+      e.preventDefault();
+      box.innerHTML = `<textarea id="text" rows="3" maxlength="200" style="width:100%;margin-top:8px">${esc(p.blurb)}</textarea>
+        <div class="error" id="err"></div>
+        <button class="btn small gold" id="save">Save</button> <button class="btn small gray" id="cancel">Cancel</button>`;
+      document.getElementById("cancel").onclick = show;
+      document.getElementById("save").onclick = async () => {
+        try {
+          await api("/api/me/blurb", "PUT", { blurb: document.getElementById("text").value });
+          p = await api(`/api/users/${encodeURIComponent(p.username)}`);
+          show();
+        } catch (err) { document.getElementById("err").textContent = err.message; }
+      };
+    };
+  };
+  show();
+})();
+</script></body></html>

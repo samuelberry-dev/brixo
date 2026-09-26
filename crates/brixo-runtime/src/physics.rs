@@ -18,12 +18,14 @@ use brixo_core::{DataModel, InstanceId, PartProps, Vec3 as BVec3, Shape};
 use glam::{EulerRot, Quat, Vec3};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::prelude::*;
+#[allow(unused_imports)]
+use rapier3d::prelude::CoefficientCombineRule;
 
 /// Physics runs at a fixed rate so it behaves the same on every machine.
 pub const PHYSICS_DT: f32 = 1.0 / 60.0;
 /// Downward acceleration in studs per second squared. With 1 stud at about
 /// 0.28 m (Roblox's scale), this is Earth's gravity.
-pub const GRAVITY: f32 = 35.0;
+pub const GRAVITY: f32 = 110.0;
 /// A slow frame is caught up at most this far; beyond that the simulation
 /// just runs a little slow instead of freezing trying to catch up.
 const MAX_CATCH_UP: f32 = 0.5;
@@ -48,7 +50,10 @@ pub const JUMP_BUFFER: f32 = 0.12;
 /// jumps higher than tapping: the floaty, forgiving feel.
 pub const JUMP_HOLD_GRAVITY: f32 = 0.6;
 /// Fastest the character falls, studs per second.
-pub const MAX_FALL_SPEED: f32 = 70.0;
+pub const MAX_FALL_SPEED: f32 = 150.0;
+/// Gravity is multiplied by this while falling: a jump comes down faster
+/// than it goes up, which feels snappy instead of floaty.
+pub const FALL_GRAVITY: f32 = 1.4;
 
 /// How hard the character shoves loose parts it walks into.
 const CHARACTER_MASS: f32 = 60.0;
@@ -69,6 +74,11 @@ struct Character {
     yaw: f32,
     /// Where we last put the character, to spot scripts teleporting it.
     synced_position: BVec3,
+    /// What the character stood on last step, and where that was: if it
+    /// moves (a platform) or is a conveyor, the character goes along.
+    ground: Option<(ColliderHandle, Vec3)>,
+    /// Walking speed last step, for the animation.
+    speed: f32,
     /// Parts the character is overlapping, to find new touches.
     touching: std::collections::HashSet<InstanceId>,
 }
@@ -167,6 +177,7 @@ impl Physics {
                 let input = inputs.get(&id).copied().unwrap_or_default();
                 self.move_character(world, id, input);
             }
+            self.apply_conveyors();
             self.pipeline.step(
                 Vec3::new(0.0, -GRAVITY, 0.0),
                 &self.params,
@@ -203,6 +214,57 @@ impl Physics {
             touches.extend(self.character_touches(world, id));
         }
         touches
+    }
+
+    // --- conveyors ---
+
+    /// An explosion: loose parts within `radius` of `center` are thrown
+    /// outward (and a little upward), harder the closer they are, and
+    /// set spinning. Anchored parts don't move.
+    pub fn blast(&mut self, center: Vec3, radius: f32, strength: f32) {
+        for (_, body) in self.bodies.iter_mut() {
+            if !body.is_dynamic() {
+                continue;
+            }
+            let away = body.translation() - center;
+            let distance = away.length();
+            if distance >= radius {
+                continue;
+            }
+            let dir = if distance > 0.01 { away / distance } else { Vec3::Y };
+            let push = strength * (1.0 - distance / radius);
+            let kick = (dir + Vec3::Y * 0.35).normalize() * push;
+            body.set_linvel(body.linvel() + kick, true);
+            body.set_angvel(body.angvel() + Vec3::new(dir.z, 0.6, -dir.x) * push * 0.25, true);
+        }
+    }
+
+    /// Anchored parts with a velocity are conveyor belts: loose things
+    /// touching them are carried along at that speed.
+    fn apply_conveyors(&mut self) {
+        let belts: Vec<(ColliderHandle, Vec3)> = self
+            .parts
+            .values()
+            .filter(|t| t.synced.anchored && t.synced.velocity != BVec3::ZERO)
+            .map(|t| (t.collider, to_glam(t.synced.velocity)))
+            .collect();
+        for (belt, v) in belts {
+            let riders: Vec<ColliderHandle> = self
+                .narrow_phase
+                .contact_pairs_with(belt)
+                .filter(|p| p.has_any_active_contact())
+                .map(|p| if p.collider1 == belt { p.collider2 } else { p.collider1 })
+                .collect();
+            for c in riders {
+                let Some(parent) = self.colliders.get(c).and_then(|c| c.parent()) else { continue };
+                if let Some(body) = self.bodies.get_mut(parent) {
+                    if body.is_dynamic() {
+                        let now = body.linvel();
+                        body.set_linvel(Vec3::new(v.x, now.y, v.z), true);
+                    }
+                }
+            }
+        }
     }
 
     // --- welds ---
@@ -288,6 +350,7 @@ impl Physics {
                 Some(c) if position != c.synced_position => {
                     c.synced_position = position;
                     c.vertical_speed = 0.0;
+                    c.ground = None; // a teleport leaves whatever it stood on behind
                     if let Some(body) = self.bodies.get_mut(c.body) {
                         body.set_translation(to_glam(position), true);
                     }
@@ -332,6 +395,8 @@ impl Physics {
             jump_was_held: false,
             yaw: 0.0,
             synced_position: position,
+            ground: None,
+            speed: 0.0,
             touching: Default::default(),
         }
     }
@@ -340,6 +405,9 @@ impl Physics {
     fn move_character(&mut self, world: &DataModel, id: InstanceId, input: PlayerInput) {
         let Some(c) = self.characters.get_mut(&id) else { return };
         let Some(player) = world.player(c.id) else { return };
+        if player.dead > 0.0 {
+            return; // fallen apart: stays put until respawning
+        }
         let dt = PHYSICS_DT;
 
         let mut dir = Vec3::new(input.move_x, 0.0, input.move_z);
@@ -380,11 +448,36 @@ impl Physics {
             c.vertical_speed = c.vertical_speed.max(0.0);
         } else {
             let rising_and_held = c.vertical_speed > 0.0 && input.jump;
-            let g = if rising_and_held { GRAVITY * JUMP_HOLD_GRAVITY } else { GRAVITY };
+            let g = if rising_and_held {
+                GRAVITY * JUMP_HOLD_GRAVITY
+            } else if c.vertical_speed > 0.0 {
+                GRAVITY
+            } else {
+                GRAVITY * FALL_GRAVITY
+            };
             c.vertical_speed = (c.vertical_speed - g * dt).max(-MAX_FALL_SPEED);
         }
 
-        let desired = dir * player.walk_speed * dt + Vec3::Y * c.vertical_speed * dt;
+        // Standing on something that moves: go along with it.
+        let mut carry = Vec3::ZERO;
+        // (What's underfoot comes from a short ray down: steadier than the
+        // controller's grounded flag, which flickers while standing still.)
+        if let Some((col, last)) = c.ground {
+            if let Some(body) = self.colliders.get(col).and_then(|k| k.parent()).and_then(|b| self.bodies.get(b)) {
+                // A jump of more than a couple of studs in one step was the
+                // ground being teleported, not something to ride along with.
+                let moved = body.translation() - last;
+                if moved.length() < 2.0 {
+                    carry += moved;
+                }
+            }
+            if let Some(t) = self.owners.get(&col).and_then(|id| self.parts.get(id)) {
+                if t.synced.anchored && t.synced.velocity != BVec3::ZERO {
+                    carry += to_glam(t.synced.velocity) * dt;
+                }
+            }
+        }
+        let desired = dir * player.walk_speed * dt + Vec3::Y * c.vertical_speed * dt + carry;
 
         let Some(body) = self.bodies.get(c.body) else { return };
         let pose = *body.position();
@@ -392,9 +485,23 @@ impl Physics {
         let shape = collider.shared_shape().clone();
 
         let dispatcher = self.narrow_phase.query_dispatcher();
+        // Loose things resting on the character (above its waist) don't
+        // block walking: a crate dropped on your head shouldn't pin you.
+        let waist = pose.translation.y;
+        let riders: HashSet<ColliderHandle> = self
+            .colliders
+            .iter()
+            .filter(|(_, col)| {
+                let dynamic = col.parent().and_then(|b| self.bodies.get(b)).is_some_and(|b| b.is_dynamic());
+                dynamic && col.position().translation.y > waist
+            })
+            .map(|(h, _)| h)
+            .collect();
+        let not_rider = |h: ColliderHandle, _: &Collider| !riders.contains(&h);
         let filter = QueryFilter::default()
             .exclude_rigid_body(c.body)
-            .exclude_sensors();
+            .exclude_sensors()
+            .predicate(&not_rider);
         let mut collisions = Vec::new();
         let movement = {
             let queries =
@@ -405,6 +512,7 @@ impl Physics {
         };
 
         c.grounded = movement.grounded;
+        c.speed = Vec3::new(movement.translation.x - carry.x, 0.0, movement.translation.z - carry.z).length() / dt;
         if c.grounded && c.vertical_speed < 0.0 {
             c.vertical_speed = 0.0;
         }
@@ -433,6 +541,24 @@ impl Physics {
         if let Some(body) = self.bodies.get_mut(c.body) {
             body.set_next_kinematic_translation(pose.translation + movement.translation);
         }
+
+        // Remember what's underneath for next step's carrying.
+        let under = {
+            let queries = self.broad_phase.as_query_pipeline(dispatcher, &self.bodies, &self.colliders, filter);
+            let ray = Ray::new(pose.translation + movement.translation, -Vec3::Y);
+            queries.cast_ray(&ray, CHARACTER_HALF_HEIGHT + CHARACTER_RADIUS + 0.4, true).map(|(h, _)| h)
+        };
+        // (Other players are never ground: standing beside a teammate who
+        // respawns mustn't drag you across the map with them.)
+        let character_bodies: HashSet<RigidBodyHandle> = self.characters.values().map(|o| o.body).collect();
+        let c = self.characters.get_mut(&id).unwrap();
+        c.ground = under.and_then(|h| {
+            let body = self.colliders.get(h)?.parent()?;
+            if character_bodies.contains(&body) {
+                return None;
+            }
+            Some((h, self.bodies.get(body)?.translation()))
+        });
     }
 
     /// Parts the character just started touching, including ones it can
@@ -446,6 +572,8 @@ impl Physics {
         if let Some(p) = world.player_mut(c.id) {
             p.body.position = position;
             p.body.rotation = BVec3::new(0.0, c.yaw.to_degrees(), 0.0);
+            p.speed = c.speed;
+            p.airborne = !c.grounded;
         }
         c.synced_position = position;
 
@@ -540,6 +668,7 @@ impl Physics {
             let Some(props) = world.part_mut(*id) else { continue };
             props.position = from_glam(body.translation());
             props.rotation = euler_degrees(*body.rotation());
+            props.velocity = from_glam(body.linvel());
             tracked.synced = *props;
         }
     }
@@ -552,7 +681,17 @@ impl Physics {
         } else {
             RigidBodyBuilder::dynamic()
         };
-        let body = self.bodies.insert(builder.pose(pose_of(&props)).build());
+        let body = self.bodies.insert(
+            builder
+                .pose(pose_of(&props))
+                .linvel(to_glam(props.velocity))
+                .gravity_scale(if props.floating { 0.0 } else { 1.0 })
+                // Small loose parts (pellets, paintballs) move further in one
+                // step than they are wide: check their whole path, or they
+                // slip through players and walls without touching them.
+                .ccd_enabled(!props.anchored && props.size.x.min(props.size.y).min(props.size.z) < 1.0)
+                .build(),
+        );
         let collider = self.colliders.insert_with_parent(
             collider_for(&props, listening),
             body,
@@ -594,7 +733,7 @@ impl Physics {
         // A new size or collision setting gets a brand-new collider. That
         // goes through the same path as a new part, so contacts and the
         // part's mass are recomputed properly.
-        if old.size != props.size || old.can_collide != props.can_collide || old.shape != props.shape {
+        if old.size != props.size || old.can_collide != props.can_collide || old.shape != props.shape || old.bounce != props.bounce {
             self.owners.remove(&old_collider);
             self.colliders
                 .remove(old_collider, &mut self.islands, &mut self.bodies, true);
@@ -619,6 +758,13 @@ impl Physics {
             body.set_body_type(kind, true);
         }
 
+        if old.floating != props.floating {
+            body.set_gravity_scale(if props.floating { 0.0 } else { 1.0 }, true);
+        }
+        // A script set a loose part's velocity: launch it.
+        if old.velocity != props.velocity && body.is_dynamic() {
+            body.set_linvel(to_glam(props.velocity), true);
+        }
         let moved = old.position != props.position || old.rotation != props.rotation;
         if moved {
             // A teleport. Dynamic parts keep their velocity, like in Roblox.
@@ -692,7 +838,9 @@ fn collider_for(props: &PartProps, listening: bool) -> ColliderBuilder {
     };
     shape
         .friction(0.6)
-        .restitution(0.0)
+        // The bouncier of two touching things decides the bounce.
+        .restitution(props.bounce.clamp(0.0, 1.0))
+        .restitution_combine_rule(CoefficientCombineRule::Max)
         .density(1.0)
         .sensor(!props.can_collide)
         .active_events(events)

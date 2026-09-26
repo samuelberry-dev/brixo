@@ -7,7 +7,104 @@
       "parent": null,
       "children": [
         1,
-        9
+        37,
+        40,
+        41,
+        44,
+        47,
+        50,
+        53,
+        56,
+        59,
+        62,
+        65,
+        68,
+        71,
+        74,
+        77,
+        80,
+        83,
+        86,
+        89,
+        92,
+        95,
+        98,
+        101,
+        104,
+        107,
+        110,
+        113,
+        116,
+        119,
+        122,
+        125,
+        128,
+        131,
+        134,
+        137,
+        140,
+        143,
+        146,
+        149,
+        152,
+        155,
+        158,
+        161,
+        164,
+        167,
+        170,
+        173,
+        176,
+        179,
+        182,
+        185,
+        188,
+        191,
+        194,
+        197,
+        200,
+        203,
+        206,
+        209,
+        212,
+        215,
+        218,
+        221,
+        224,
+        227,
+        230,
+        233,
+        236,
+        239,
+        242,
+        245,
+        248,
+        251,
+        254,
+        256,
+        258,
+        260,
+        291,
+        292,
+        294,
+        295,
+        296,
+        297,
+        298,
+        300,
+        302,
+        303,
+        304,
+        305,
+        306,
+        308,
+        310,
+        312,
+        313,
+        314,
+        315,
+        316,
+        318
       ],
       "props": "Workspace"
     },
@@ -21,13 +118,13 @@
         "Part": {
           "position": {
             "x": 0.0,
-            "y": -0.5,
+            "y": 0.0,
             "z": 0.0
           },
           "size": {
-            "x": 60.0,
+            "x": 100.0,
             "y": 1.0,
-            "z": 60.0
+            "z": 100.0
           },
           "rotation": {
             "x": 0.0,
@@ -35,45 +132,6769 @@
             "z": 0.0
           },
           "color": {
-            "r": 90,
-            "g": 110,
-            "b": 90
-          }
+            "r": 19,
+            "g": 116,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
         }
       }
     },
     {
-      "id": 9,
-      "class": "Part",
-      "name": "block",
+      "id": 37,
+      "class": "SpawnLocation",
+      "name": "SpawnLocation",
       "parent": 0,
       "children": [],
       "props": {
         "Part": {
           "position": {
-            "x": -0.5,
-            "y": 2.7,
+            "x": 0.0,
+            "y": 0.6,
             "z": 0.0
           },
           "size": {
-            "x": 1.2,
-            "y": 0.8,
+            "x": 6.0,
+            "y": 0.25,
+            "z": 6.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 187,
+            "g": 187,
+            "b": 245
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 38,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 40,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -40.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
             "z": 1.0
           },
           "rotation": {
-            "x": -26.0,
-            "y": -95.0,
-            "z": 45.0
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
           },
           "color": {
-            "r": 151,
-            "g": 150,
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 39,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 40,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -40.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 40,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        38,
+        39
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 41,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        42,
+        43
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 42,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 41,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -35.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 43,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 41,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -35.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 44,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        45,
+        46
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 45,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 44,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -30.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 46,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 44,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -30.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 47,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        48,
+        49
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 48,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 47,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -25.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 49,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 47,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -25.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 50,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        51,
+        52
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 51,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 50,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -20.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 52,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 50,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -20.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 53,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        54,
+        55
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 54,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 53,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -15.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 55,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 53,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -15.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 56,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        57,
+        58
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 57,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 56,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -10.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 58,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 56,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -10.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 59,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        60,
+        61
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 60,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 59,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -5.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 61,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 59,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -5.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 62,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        63,
+        64
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 63,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 62,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 64,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 62,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 65,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        66,
+        67
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 66,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 65,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 5.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 67,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 65,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 5.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 68,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        69,
+        70
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 69,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 68,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 10.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 70,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 68,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 10.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 71,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        72,
+        73
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 72,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 71,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 15.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 73,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 71,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 15.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 74,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        75,
+        76
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 75,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 74,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 20.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 76,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 74,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 20.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 77,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        78,
+        79
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 78,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 77,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 25.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 79,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 77,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 25.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 80,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        81,
+        82
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 81,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 80,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 30.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 82,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 80,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 30.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 83,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        84,
+        85
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 84,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 83,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 35.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 85,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 83,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 35.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 86,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        87,
+        88
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 87,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 86,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 40.0,
+            "y": 2.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 88,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 86,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 40.0,
+            "y": 5.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 89,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        90,
+        91
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 90,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 89,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 45.0,
+            "y": 2.5,
+            "z": -38.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 91,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 89,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 45.0,
+            "y": 6.0,
+            "z": -38.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 92,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        93,
+        94
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 93,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 92,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 37.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 94,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 92,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 37.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 95,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        96,
+        97
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 96,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 95,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 42.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 97,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 95,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 42.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 98,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        99,
+        100
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 99,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 98,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -43.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 100,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 98,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -43.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 101,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        102,
+        103
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 102,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 101,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -38.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 103,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 101,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -38.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 104,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        105,
+        106
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 105,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 104,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -33.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 106,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 104,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -33.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 107,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        108,
+        109
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 108,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 107,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -28.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 109,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 107,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -28.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 110,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        111,
+        112
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 111,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 110,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -23.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 112,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 110,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -23.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 113,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        114,
+        115
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 114,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 113,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -18.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 115,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 113,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -18.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 116,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        117,
+        118
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 117,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 116,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -13.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 118,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 116,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -13.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 119,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        120,
+        121
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 120,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 119,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -8.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 121,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 119,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -8.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 122,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        123,
+        124
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 123,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 122,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -3.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 124,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 122,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -3.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 125,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        126,
+        127
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 126,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 125,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 2.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 127,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 125,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 2.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 128,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        129,
+        130
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 129,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 128,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 7.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 130,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 128,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 7.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 131,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        132,
+        133
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 132,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 131,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 12.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 133,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 131,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 12.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 134,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        135,
+        136
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 135,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 134,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 17.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 136,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 134,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 17.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 137,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        138,
+        139
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 138,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 137,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 22.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 139,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 137,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 22.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 140,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        141,
+        142
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 141,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 140,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 27.0,
+            "y": 2.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 142,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 140,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 27.0,
+            "y": 5.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 143,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        144,
+        145
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 144,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 143,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 32.0,
+            "y": 2.5,
+            "z": 47.0
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 145,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 143,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 32.0,
+            "y": 6.0,
+            "z": 47.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 146,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        147,
+        148
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 147,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 146,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": -38.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 148,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 146,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": -38.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 149,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        150,
+        151
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 150,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 149,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": -28.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 151,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 149,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": -28.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 152,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        153,
+        154
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 153,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 152,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": -33.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 154,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 152,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": -33.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 155,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        156,
+        157
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 156,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 155,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": -23.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 157,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 155,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": -23.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 158,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        159,
+        160
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 159,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 158,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": -18.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 160,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 158,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": -18.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 161,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        162,
+        163
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 162,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 161,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": -13.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 163,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 161,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": -13.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 164,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        165,
+        166
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 165,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 164,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": -8.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 166,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 164,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": -8.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 167,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        168,
+        169
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 168,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 167,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": -3.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 169,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 167,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": -3.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 170,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        171,
+        172
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 171,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 170,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": 1.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 172,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 170,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": 1.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 173,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        174,
+        175
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 174,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 173,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": 6.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 175,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 173,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": 6.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 176,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        177,
+        178
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 177,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 176,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": 16.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 178,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 176,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": 16.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 179,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        180,
+        181
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 180,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 179,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": 11.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 181,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 179,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": 11.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 182,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        183,
+        184
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 183,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 182,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": 21.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 184,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 182,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": 21.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 185,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        186,
+        187
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 186,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 185,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": 26.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 187,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 185,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": 26.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 188,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        189,
+        190
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 189,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 188,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": 31.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 190,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 188,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": 31.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 191,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        192,
+        193
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 192,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 191,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": 36.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 193,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 191,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": 36.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 194,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        195,
+        196
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 195,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 194,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.5,
+            "z": 41.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 196,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 194,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 6.0,
+            "z": 41.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 197,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        198,
+        199
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 198,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 197,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 2.0,
+            "z": 46.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 199,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 197,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -42.5,
+            "y": 5.0,
+            "z": 46.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 200,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        201,
+        202
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 201,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 200,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": -38.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 202,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 200,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": -38.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 203,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        204,
+        205
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 204,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 203,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": -28.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 205,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 203,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": -28.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 206,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        207,
+        208
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 207,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 206,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": -33.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 208,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 206,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": -33.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 209,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        210,
+        211
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 210,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 209,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": -23.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 211,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 209,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": -23.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 212,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        213,
+        214
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 213,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 212,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": -18.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 214,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 212,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": -18.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 215,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        216,
+        217
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 216,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 215,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": -13.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 217,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 215,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": -13.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 218,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        219,
+        220
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 219,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 218,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": -8.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 220,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 218,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": -8.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 221,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        222,
+        223
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 222,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 221,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": -3.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 223,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 221,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": -3.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 224,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        225,
+        226
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 225,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 224,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": 1.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 226,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 224,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": 1.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 227,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        228,
+        229
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 228,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 227,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": 6.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 229,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 227,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": 6.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 230,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        231,
+        232
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 231,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 230,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": 16.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 232,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 230,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": 16.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 233,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        234,
+        235
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 234,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 233,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": 11.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 235,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 233,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": 11.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 236,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        237,
+        238
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 237,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 236,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": 21.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 238,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 236,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": 21.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 239,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        240,
+        241
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 240,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 239,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": 26.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 241,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 239,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": 26.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 242,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        243,
+        244
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 243,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 242,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": 31.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 244,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 242,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": 31.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 245,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        246,
+        247
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 246,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 245,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": 36.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 247,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 245,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": 36.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 248,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        249,
+        250
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 249,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 248,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.5,
+            "z": 41.5
+          },
+          "size": {
+            "x": 1.5,
+            "y": 5.0,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 250,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 248,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 6.0,
+            "z": 41.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 251,
+      "class": "Model",
+      "name": "Tree",
+      "parent": 0,
+      "children": [
+        252,
+        253
+      ],
+      "props": "Model"
+    },
+    {
+      "id": 252,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 251,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 2.0,
+            "z": 46.5
+          },
+          "size": {
+            "x": 1.0,
+            "y": 4.0,
+            "z": 1.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 98,
+            "g": 54,
+            "b": 0
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 253,
+      "class": "Part",
+      "name": "Ball",
+      "parent": 251,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 48.5,
+            "y": 5.0,
+            "z": 46.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 4.0,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": -0.0,
+            "y": 90.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 87,
+            "g": 177,
+            "b": 68
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Ball"
+        }
+      }
+    },
+    {
+      "id": 254,
+      "class": "Part",
+      "name": "Part",
+      "parent": 0,
+      "children": [
+        255
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 11.0,
+            "y": 2.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 2.5,
+            "y": 0.3,
+            "z": 8.1
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 160,
+            "g": 160,
+            "b": 160
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 255,
+      "class": "Script",
+      "name": "Script",
+      "parent": 254,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- This script runs when you press Play.\n-- 'self' is the part it's inside.\n\nprint(\"Hello from \" + self.name)\n",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 256,
+      "class": "Part",
+      "name": "Part",
+      "parent": 0,
+      "children": [
+        257
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 15.5,
+            "y": 14.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 2.5,
+            "y": 0.3,
+            "z": 8.1
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 160,
+            "g": 160,
+            "b": 160
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 257,
+      "class": "Script",
+      "name": "Script",
+      "parent": 256,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- This script runs when you press Play.\n-- 'self' is the part it's inside.\n\nprint(\"Hello from \" + self.name)\n",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 258,
+      "class": "Part",
+      "name": "Part",
+      "parent": 0,
+      "children": [
+        259
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 20.0,
+            "y": 25.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 2.5,
+            "y": 0.3,
+            "z": 8.1
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 160,
+            "g": 160,
+            "b": 160
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 259,
+      "class": "Script",
+      "name": "Script",
+      "parent": 258,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- This script runs when you press Play.\n-- 'self' is the part it's inside.\n\nprint(\"Hello from \" + self.name)\n",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 260,
+      "class": "Part",
+      "name": "Part",
+      "parent": 0,
+      "children": [
+        261
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 24.5,
+            "y": 25.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 2.5,
+            "y": 0.3,
+            "z": 8.1
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 160,
+            "g": 160,
+            "b": 160
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 261,
+      "class": "Script",
+      "name": "Script",
+      "parent": 260,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "direction = 1\n\nevery 0.05 seconds\n    self.position.x += direction * 0.1\n\n    if self.position.x >= 57.5 then\n        direction = -1\n    end\n\n    if self.position.x <= 24.5 then\n        direction = 1\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 291,
+      "class": "Part",
+      "name": "Parkour Start",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": -5.0,
+            "y": 1.3,
+            "z": 0.0
+          },
+          "size": {
+            "x": 10.0,
+            "y": 0.8,
+            "z": 10.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 45,
+            "g": 190,
+            "b": 220
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 292,
+      "class": "Part",
+      "name": "Checkpoint 1",
+      "parent": 0,
+      "children": [
+        293
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 4.0,
+            "y": 0.3,
+            "z": 4.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 55,
+            "g": 200,
+            "b": 105
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 293,
+      "class": "Script",
+      "name": "Checkpoint",
+      "parent": 292,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        other.face = \"happy\"\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 294,
+      "class": "Part",
+      "name": "Jump 0",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 6.0,
+            "y": 2.2,
+            "z": 0.0
+          },
+          "size": {
+            "x": 4.5,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 245,
+            "g": 190,
+            "b": 45
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 295,
+      "class": "Part",
+      "name": "Jump 1",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 12.0,
+            "y": 3.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 4.5,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 245,
+            "g": 190,
+            "b": 45
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 296,
+      "class": "Part",
+      "name": "Jump 2",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 18.0,
+            "y": 4.8,
+            "z": 0.0
+          },
+          "size": {
+            "x": 4.5,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 245,
+            "g": 190,
+            "b": 45
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 297,
+      "class": "Part",
+      "name": "Jump 3",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 24.0,
+            "y": 6.1,
+            "z": 0.0
+          },
+          "size": {
+            "x": 4.5,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 245,
+            "g": 190,
+            "b": 45
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 298,
+      "class": "Part",
+      "name": "Lava",
+      "parent": 0,
+      "children": [
+        299
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 9.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 30.0,
+            "y": 0.3,
+            "z": 10.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 235,
+            "g": 45,
+            "b": 25
+          },
+          "anchored": true,
+          "can_collide": false,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 299,
+      "class": "Script",
+      "name": "LavaDamage",
+      "parent": 298,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        other.health = 0\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 300,
+      "class": "Part",
+      "name": "Checkpoint 2",
+      "parent": 0,
+      "children": [
+        301
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 27.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 4.0,
+            "y": 0.3,
+            "z": 4.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 55,
+            "g": 200,
+            "b": 105
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 301,
+      "class": "Script",
+      "name": "Checkpoint",
+      "parent": 300,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        other.face = \"happy\"\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 302,
+      "class": "Part",
+      "name": "Zigzag 0",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 31.0,
+            "y": 7.0,
+            "z": 2.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 145,
+            "g": 75,
             "b": 210
-          }
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 303,
+      "class": "Part",
+      "name": "Zigzag 1",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 36.0,
+            "y": 7.0,
+            "z": -2.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 145,
+            "g": 75,
+            "b": 210
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 304,
+      "class": "Part",
+      "name": "Zigzag 2",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 41.0,
+            "y": 7.0,
+            "z": 2.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 145,
+            "g": 75,
+            "b": 210
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 305,
+      "class": "Part",
+      "name": "Zigzag 3",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 46.0,
+            "y": 7.0,
+            "z": -2.5
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 1.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 145,
+            "g": 75,
+            "b": 210
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 306,
+      "class": "Part",
+      "name": "Lava",
+      "parent": 0,
+      "children": [
+        307
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 40.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 22.0,
+            "y": 0.3,
+            "z": 10.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 235,
+            "g": 45,
+            "b": 25
+          },
+          "anchored": true,
+          "can_collide": false,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 307,
+      "class": "Script",
+      "name": "LavaDamage",
+      "parent": 306,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        other.health = 0\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 308,
+      "class": "Part",
+      "name": "Moving Platform",
+      "parent": 0,
+      "children": [
+        309
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 52.0,
+            "y": 8.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 6.0,
+            "y": 0.8,
+            "z": 5.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 245,
+            "g": 105,
+            "b": 35
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 309,
+      "class": "Script",
+      "name": "PlatformMotion",
+      "parent": 308,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "direction = 1\n\nevery 0.05 seconds\n    self.position.z += direction * 0.12\n    if self.position.z >= 8 then\n        direction = -1\n    end\n    if self.position.z <= -8 then\n        direction = 1\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 310,
+      "class": "Part",
+      "name": "Checkpoint 3",
+      "parent": 0,
+      "children": [
+        311
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 59.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 4.0,
+            "y": 0.3,
+            "z": 4.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 55,
+            "g": 200,
+            "b": 105
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder"
+        }
+      }
+    },
+    {
+      "id": 311,
+      "class": "Script",
+      "name": "Checkpoint",
+      "parent": 310,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        other.face = \"happy\"\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 312,
+      "class": "Part",
+      "name": "Final 0",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 64.0,
+            "y": 9.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 45,
+            "g": 190,
+            "b": 220
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 313,
+      "class": "Part",
+      "name": "Final 1",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 70.0,
+            "y": 11.5,
+            "z": 3.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 45,
+            "g": 190,
+            "b": 220
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 314,
+      "class": "Part",
+      "name": "Final 2",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 76.0,
+            "y": 13.5,
+            "z": -3.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 45,
+            "g": 190,
+            "b": 220
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 315,
+      "class": "Part",
+      "name": "Final 3",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 82.0,
+            "y": 15.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 5.0,
+            "y": 0.8,
+            "z": 4.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 45,
+            "g": 190,
+            "b": 220
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 316,
+      "class": "Part",
+      "name": "Finish",
+      "parent": 0,
+      "children": [
+        317
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 89.0,
+            "y": 17.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 9.0,
+            "y": 0.8,
+            "z": 9.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 255,
+            "g": 215,
+            "b": 40
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 317,
+      "class": "Script",
+      "name": "FinishCelebration",
+      "parent": 316,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        other.face = \"determined\"\n        print(other.name + \" finished the parkour course!\")\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 318,
+      "class": "Part",
+      "name": "Parkour Safety Floor",
+      "parent": 0,
+      "children": [
+        319
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 45.0,
+            "y": -2.0,
+            "z": 0.0
+          },
+          "size": {
+            "x": 100.0,
+            "y": 0.5,
+            "z": 30.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 35,
+            "g": 35,
+            "b": 45
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block"
+        }
+      }
+    },
+    {
+      "id": 319,
+      "class": "Script",
+      "name": "FallReset",
+      "parent": 318,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        other.health = 0\n    end\nend",
+          "enabled": true
         }
       }
     }
   ],
-  "next_id": 10,
+  "next_id": 320,
   "root": 0
 }

@@ -1,0 +1,271 @@
+//! What the website remembers: accounts, avatars, sessions and games.
+//! One SQLite file behind a mutex: simple, and plenty for now.
+
+use std::sync::Mutex;
+
+use rand::RngCore;
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
+
+pub struct Db(Mutex<Connection>);
+
+pub type Rgb = (u8, u8, u8);
+
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct Avatar {
+    pub skin: Rgb,
+    pub shirt: Rgb,
+    pub pants: Rgb,
+    pub shoes: Rgb,
+    pub face: String,
+}
+
+impl Default for Avatar {
+    fn default() -> Self {
+        Avatar { skin: (227, 185, 138), shirt: (13, 105, 172), pants: (27, 42, 53), shoes: (27, 27, 27), face: "smile".into() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub avatar: Avatar,
+    /// A line or two about themselves, shown on their profile.
+    pub blurb: String,
+    /// When they joined (Unix seconds; 0 for accounts from before this was kept).
+    pub created: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameRow {
+    pub id: i64,
+    pub name: String,
+    pub owner: String,
+    pub description: String,
+    /// How many times someone has pressed Play.
+    pub visits: i64,
+    /// When it was first published (Unix seconds; 0 if unknown).
+    pub created: i64,
+    pub has_thumbnail: bool,
+}
+
+pub fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+const GAME_COLUMNS: &str = "g.id, g.name, u.username, g.description, g.visits, g.created, g.thumbnail IS NOT NULL";
+
+fn game_from_row(r: &rusqlite::Row) -> rusqlite::Result<GameRow> {
+    Ok(GameRow {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        owner: r.get(2)?,
+        description: r.get(3)?,
+        visits: r.get(4)?,
+        created: r.get(5)?,
+        has_thumbnail: r.get(6)?,
+    })
+}
+
+/// A random hex token, for sessions and tickets.
+pub fn random_token() -> String {
+    let mut bytes = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+const USER_COLUMNS: &str = "id, username, avatar, blurb, created";
+
+fn user_from_row(r: &rusqlite::Row) -> rusqlite::Result<User> {
+    let avatar: String = r.get(2)?;
+    Ok(User {
+        id: r.get(0)?,
+        username: r.get(1)?,
+        avatar: serde_json::from_str(&avatar).unwrap_or_default(),
+        blurb: r.get(3)?,
+        created: r.get(4)?,
+    })
+}
+
+/// Adds a column to an existing database if it isn't there yet (databases
+/// made before the column existed keep working, with the default filled in).
+fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> rusqlite::Result<()> {
+    let exists = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .any(|c| c == column);
+    if !exists {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))?;
+    }
+    Ok(())
+}
+
+impl Db {
+    /// Opens (or creates) the database. ":memory:" makes a throwaway one.
+    pub fn open(path: &str) -> rusqlite::Result<Db> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS users (
+                 id INTEGER PRIMARY KEY,
+                 username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                 password_hash TEXT NOT NULL,
+                 avatar TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS sessions (
+                 token TEXT PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id)
+             );
+             CREATE TABLE IF NOT EXISTS games (
+                 id INTEGER PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 owner_id INTEGER NOT NULL REFERENCES users(id),
+                 data TEXT NOT NULL,
+                 UNIQUE(name, owner_id)
+             );",
+        )?;
+        add_column(&conn, "users", "blurb", "TEXT NOT NULL DEFAULT ''")?;
+        add_column(&conn, "users", "created", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&conn, "games", "description", "TEXT NOT NULL DEFAULT ''")?;
+        add_column(&conn, "games", "visits", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&conn, "games", "created", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&conn, "games", "thumbnail", "BLOB")?;
+        Ok(Db(Mutex::new(conn)))
+    }
+
+    /// Fails if the name is taken (in any capitalisation).
+    pub fn create_user(&self, username: &str, password_hash: &str) -> rusqlite::Result<User> {
+        let conn = self.0.lock().unwrap();
+        let avatar = Avatar::default();
+        let created = now();
+        conn.execute(
+            "INSERT INTO users (username, password_hash, avatar, created) VALUES (?1, ?2, ?3, ?4)",
+            params![username, password_hash, serde_json::to_string(&avatar).unwrap(), created],
+        )?;
+        Ok(User { id: conn.last_insert_rowid(), username: username.to_string(), avatar, blurb: String::new(), created })
+    }
+
+    pub fn login_info(&self, username: &str) -> rusqlite::Result<Option<(i64, String)>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row("SELECT id, password_hash FROM users WHERE username = ?1", [username], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+    }
+
+    pub fn user(&self, id: i64) -> rusqlite::Result<Option<User>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?1"), [id], user_from_row).optional()
+    }
+
+    pub fn user_by_name(&self, name: &str) -> rusqlite::Result<Option<User>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(&format!("SELECT {USER_COLUMNS} FROM users WHERE username = ?1"), [name], user_from_row).optional()
+    }
+
+    pub fn new_session(&self, user_id: i64) -> rusqlite::Result<String> {
+        let token = random_token();
+        self.0.lock().unwrap().execute("INSERT INTO sessions (token, user_id) VALUES (?1, ?2)", params![token, user_id])?;
+        Ok(token)
+    }
+
+    pub fn session_user(&self, token: &str) -> rusqlite::Result<Option<User>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(
+            "SELECT u.id, u.username, u.avatar, u.blurb, u.created FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
+            [token],
+            user_from_row,
+        )
+        .optional()
+    }
+
+    pub fn end_session(&self, token: &str) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute("DELETE FROM sessions WHERE token = ?1", [token])?;
+        Ok(())
+    }
+
+    pub fn set_avatar(&self, user_id: i64, avatar: &Avatar) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute(
+            "UPDATE users SET avatar = ?1 WHERE id = ?2",
+            params![serde_json::to_string(avatar).unwrap(), user_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_blurb(&self, user_id: i64, blurb: &str) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute("UPDATE users SET blurb = ?1 WHERE id = ?2", params![blurb, user_id])?;
+        Ok(())
+    }
+
+    /// Publishing again under the same name replaces your earlier version
+    /// (keeping its visits, description and picture).
+    pub fn publish(&self, owner_id: i64, name: &str, data: &str) -> rusqlite::Result<i64> {
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO games (name, owner_id, data, created) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(name, owner_id) DO UPDATE SET data = excluded.data",
+            params![name, owner_id, data, now()],
+        )?;
+        conn.query_row("SELECT id FROM games WHERE name = ?1 AND owner_id = ?2", params![name, owner_id], |r| r.get(0))
+    }
+
+    pub fn games(&self) -> rusqlite::Result<Vec<GameRow>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare(&format!("SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id ORDER BY g.id"))?;
+        let rows = q.query_map([], game_from_row)?;
+        rows.collect()
+    }
+
+    pub fn game(&self, id: i64) -> rusqlite::Result<Option<GameRow>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(&format!("SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id WHERE g.id = ?1"), [id], game_from_row)
+            .optional()
+    }
+
+    pub fn games_by(&self, owner_id: i64) -> rusqlite::Result<Vec<GameRow>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare(&format!(
+            "SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id WHERE g.owner_id = ?1 ORDER BY g.id"
+        ))?;
+        let rows = q.query_map([owner_id], game_from_row)?;
+        rows.collect()
+    }
+
+    /// Only the game's owner can change these.
+    pub fn set_game_info(&self, id: i64, owner_id: i64, description: &str) -> rusqlite::Result<bool> {
+        let n = self.0.lock().unwrap().execute(
+            "UPDATE games SET description = ?1 WHERE id = ?2 AND owner_id = ?3",
+            params![description, id, owner_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn set_thumbnail(&self, id: i64, png: &[u8]) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute("UPDATE games SET thumbnail = ?1 WHERE id = ?2", params![png, id])?;
+        Ok(())
+    }
+
+    pub fn thumbnail(&self, id: i64) -> rusqlite::Result<Option<Vec<u8>>> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn.query_row("SELECT thumbnail FROM games WHERE id = ?1", [id], |r| r.get::<_, Option<Vec<u8>>>(0)).optional()?.flatten())
+    }
+
+    pub fn add_visit(&self, id: i64) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute("UPDATE games SET visits = visits + 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// (accounts, games) on the site.
+    pub fn counts(&self) -> rusqlite::Result<(i64, i64)> {
+        let conn = self.0.lock().unwrap();
+        let users: i64 = conn.query_row("SELECT COUNT(*) FROM users WHERE username != 'Brixo'", [], |r| r.get(0))?;
+        let games: i64 = conn.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0))?;
+        Ok((users, games))
+    }
+
+    /// The saved game itself. Only the website and its game servers read
+    /// this: players never download it.
+    pub fn game_data(&self, id: i64) -> rusqlite::Result<Option<String>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row("SELECT data FROM games WHERE id = ?1", [id], |r| r.get(0)).optional()
+    }
+}

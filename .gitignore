@@ -1,1 +1,7 @@
 target/
+
+# Local databases: real accounts and password hashes, never commit
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm

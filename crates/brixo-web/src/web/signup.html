@@ -1,0 +1,28 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Sign up &middot; Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content">
+<div class="box gold" style="width:340px;margin:30px auto"><h2>Sign up and play!</h2><div class="inner">
+  <form id="form">
+    <div class="field"><label for="username">Username</label><input id="username" autocomplete="username" required maxlength="20"></div>
+    <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="new-password" required></div>
+    <div class="error" id="error"></div>
+    <button class="btn gold big" type="submit" style="width:100%">Sign Up</button>
+    <p class="hint" style="margin-top:8px;text-align:center">Already have an account? <a href="/login">Log in</a></p>
+  </form>
+</div></div>
+</div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  if (await shell(null)) { location.href = "/"; return; }
+  const f = document.getElementById("form");
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/signup", "POST", { username: f.username.value, password: f.password.value });
+      location.href = "/avatar";
+    } catch (err) { document.getElementById("error").textContent = err.message; }
+  };
+})();
+</script></body></html>

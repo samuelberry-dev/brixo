@@ -10,4 +10,4 @@ pub mod server;
 
 pub use client::NetClient;
 pub use protocol::DEFAULT_PORT;
-pub use server::{start, ServerHandle};
+pub use server::{start, start_with_tickets, Identity, TicketCheck, ServerHandle};

@@ -5,6 +5,7 @@ use std::io::{self, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use parking_lot::Mutex as WorldMutex;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use brixo_core::{DataModel, InstanceId};
 use brixo_runtime::{Game, LogLine, PlayerInput};
 
-use crate::protocol::{client_view, read_msg, state_of, structure, write_msg, ToClient, ToServer};
+use crate::protocol::{client_view, read_msg, write_msg, ToClient, ToServer};
 
 /// Server ticks per second: physics, scripts, and one State to each player.
 pub const TICK_RATE: f64 = 60.0;
@@ -23,7 +24,7 @@ pub struct ServerHandle {
     port: u16,
     stop: Arc<AtomicBool>,
     log: Arc<Mutex<Vec<LogLine>>>,
-    world: Arc<Mutex<DataModel>>,
+    world: Arc<WorldMutex<DataModel>>,
     players: Arc<AtomicUsize>,
     thread: Option<JoinHandle<()>>,
 }
@@ -44,8 +45,8 @@ impl ServerHandle {
     }
 
     /// The live game world, for watching (the studio draws it).
-    pub fn world(&self) -> std::sync::MutexGuard<'_, DataModel> {
-        self.world.lock().unwrap()
+    pub fn world(&self) -> parking_lot::MutexGuard<'_, DataModel> {
+        self.world.lock()
     }
 
     pub fn player_count(&self) -> usize {
@@ -70,9 +71,29 @@ impl Drop for ServerHandle {
     }
 }
 
-/// Starts serving `model` on `port` (0 picks any free port). Players on
-/// other computers can join via this computer's address.
+/// Who a ticket belongs to: their username and saved look.
+#[derive(Debug, Clone)]
+pub struct Identity {
+    pub name: String,
+    pub look: brixo_runtime::Look,
+}
+
+/// Checks a join ticket (and uses it up). None means "not allowed in".
+pub type TicketCheck = std::sync::Arc<dyn Fn(&str) -> Option<Identity> + Send + Sync>;
+
+/// Starts serving `model` on `port` (0 picks any free port). Anyone can
+/// join, under the name they ask for: the local/LAN test server.
 pub fn start(model: DataModel, port: u16) -> io::Result<ServerHandle> {
+    start_inner(model, port, None)
+}
+
+/// A server that only lets in players with a valid ticket, who then join
+/// as their account (name and avatar). The website starts these.
+pub fn start_with_tickets(model: DataModel, port: u16, check: TicketCheck) -> io::Result<ServerHandle> {
+    start_inner(model, port, Some(check))
+}
+
+fn start_inner(model: DataModel, port: u16, tickets: Option<TicketCheck>) -> io::Result<ServerHandle> {
     let listener = TcpListener::bind(("0.0.0.0", port))?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
@@ -90,7 +111,7 @@ pub fn start(model: DataModel, port: u16) -> io::Result<ServerHandle> {
                 // Scripts start here, on the server's own thread.
                 let game = Game::start_server(model);
                 let _ = world_tx.send(game.shared_world());
-                Server::new(game, listener, log, players).run(&stop);
+                Server::new(game, listener, log, players, tickets).run(&stop);
             })?
     };
     let world = world_rx.recv().map_err(|_| io::Error::other("the server failed to start"))?;
@@ -105,6 +126,8 @@ enum Event {
 struct Connection {
     writer: TcpStream,
     player: Option<InstanceId>,
+    /// Which Sounds' audio this player already has.
+    assets_sent: std::collections::HashSet<u64>,
 }
 
 impl Drop for Connection {
@@ -125,13 +148,23 @@ struct Server {
     next_connection: u64,
     events_tx: Sender<(u64, Event)>,
     events: Receiver<(u64, Event)>,
-    last_structure: Vec<(u64, Option<u64>, String, brixo_core::Class)>,
+    /// The music everyone should hear, for players who join later.
+    music: Option<String>,
+    /// What players were last sent, to send only what changed.
+    sent: Sent,
+    /// When set, players need a ticket to join (website servers).
+    tickets: Option<TicketCheck>,
 }
 
 impl Server {
-    fn new(game: Game, listener: TcpListener, log: Arc<Mutex<Vec<LogLine>>>, player_count: Arc<AtomicUsize>) -> Self {
+    fn new(
+        game: Game,
+        listener: TcpListener,
+        log: Arc<Mutex<Vec<LogLine>>>,
+        player_count: Arc<AtomicUsize>,
+        tickets: Option<TicketCheck>,
+    ) -> Self {
         let (events_tx, events) = mpsc::channel();
-        let last_structure = structure(&game.world());
         Server {
             game,
             listener,
@@ -141,12 +174,18 @@ impl Server {
             next_connection: 0,
             events_tx,
             events,
-            last_structure,
+            music: None,
+            sent: Sent::default(),
+            tickets,
         }
     }
 
     fn run(&mut self, stop: &AtomicBool) {
-        let tick = Duration::from_secs_f64(1.0 / TICK_RATE);
+        // Filming hook: BRIXO_TIME_SCALE=0.25 runs the game at quarter
+        // speed (the same steps, just further apart), so a slow computer can
+        // render every moment and the footage is sped back up afterwards.
+        let scale = std::env::var("BRIXO_TIME_SCALE").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s > 0.01 && *s <= 1.0).unwrap_or(1.0);
+        let tick = Duration::from_secs_f64(1.0 / TICK_RATE / scale);
         let mut next = Instant::now();
         while !stop.load(Ordering::Relaxed) {
             self.accept();
@@ -154,6 +193,7 @@ impl Server {
             self.game.step(1.0 / TICK_RATE);
             self.log.lock().unwrap().extend(self.game.take_log());
             self.broadcast();
+            self.send_sounds();
             self.player_count.store(self.game.players().len(), Ordering::Relaxed);
 
             next += tick;
@@ -202,14 +242,14 @@ impl Server {
                 }
             }
         })?;
-        self.connections.insert(id, Connection { writer: stream, player: None });
+        self.connections.insert(id, Connection { writer: stream, player: None, assets_sent: Default::default() });
         Ok(())
     }
 
     fn handle_events(&mut self) {
         while let Ok((conn, event)) = self.events.try_recv() {
             match event {
-                Event::Message(ToServer::Hello { name }) => self.join(conn, &name),
+                Event::Message(ToServer::Hello { name, ticket }) => self.hello(conn, &name, ticket.as_deref()),
                 Event::Message(ToServer::Input { move_x, move_z, jump }) => {
                     if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
                         let len = (move_x * move_x + move_z * move_z).sqrt();
@@ -218,22 +258,61 @@ impl Server {
                         self.game.set_input_for(player, PlayerInput { move_x, move_z, jump });
                     }
                 }
+                Event::Message(ToServer::Chat { text }) => {
+                    if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
+                        self.game.chat(player, &text);
+                    }
+                }
+                Event::Message(msg @ (ToServer::Click { .. } | ToServer::Equip { .. } | ToServer::Activate)) => {
+                    // The game checks each request against this player: a
+                    // client can't press someone else's button or tool.
+                    let Some(player) = self.connections.get(&conn).and_then(|c| c.player) else { continue };
+                    match msg {
+                        ToServer::Click { button } => {
+                            self.game.click(player, InstanceId::from_raw(button));
+                        }
+                        ToServer::Equip { slot } => self.game.equip(player, Some(slot as usize)),
+                        _ => {
+                            self.game.activate(player);
+                        }
+                    }
+                }
                 Event::Closed => self.disconnect(conn),
             }
         }
     }
 
-    fn join(&mut self, conn: u64, requested: &str) {
+    /// A new connection says hello: on a ticketed server, the ticket decides
+    /// who they are; anywhere else, they pick a name.
+    fn hello(&mut self, conn: u64, requested: &str, ticket: Option<&str>) {
+        match &self.tickets {
+            None => self.join(conn, requested, None),
+            Some(check) => match ticket.and_then(|t| check(t)) {
+                Some(who) => self.join(conn, &who.name, Some(who.look)),
+                None => {
+                    self.log.lock().unwrap().push(LogLine {
+                        source: "Server".into(),
+                        text: "Someone tried to join without a valid ticket".into(),
+                        is_error: false,
+                    });
+                    self.connections.remove(&conn); // drops and shuts the socket
+                }
+            },
+        }
+    }
+
+    fn join(&mut self, conn: u64, requested: &str, look: Option<brixo_runtime::Look>) {
         let Some(c) = self.connections.get(&conn) else { return };
         if c.player.is_some() {
             return; // already joined
         }
         let name = self.unique_name(requested);
-        let player = self.game.add_player(&name);
+        let player = self.game.add_player_as(&name, look);
         let welcome = ToClient::Welcome { you: player.raw(), world: client_view(&self.game.world()) };
         let c = self.connections.get_mut(&conn).unwrap();
         c.player = Some(player);
-        if write_msg(&mut c.writer, &welcome).is_err() {
+        let music = ToClient::Music { name: self.music.clone() };
+        if write_msg(&mut c.writer, &welcome).and_then(|_| write_msg(&mut c.writer, &music)).is_err() {
             self.disconnect(conn);
             return;
         }
@@ -262,33 +341,166 @@ impl Server {
         (2..).map(|i| format!("{base}{i}")).find(|n| !taken(n)).unwrap()
     }
 
-    fn broadcast(&mut self) {
-        let (world_msg, state) = {
-            let world = self.game.world();
-            let shape = structure(&world);
-            let world_msg = if shape != self.last_structure {
-                self.last_structure = shape;
-                Some(ToClient::World { world: client_view(&world) })
-            } else {
-                None
+    /// Sounds scripts played this tick, to everyone or to one player.
+    fn send_sounds(&mut self) {
+        let mut dead = Vec::new();
+        for (from, name, text) in self.game.take_chat() {
+            self.log.lock().unwrap().push(LogLine { source: "Chat".into(), text: format!("{name}: {text}"), is_error: false });
+            let msg = ToClient::Chat { from: from.raw(), name, text };
+            for (id, c) in &mut self.connections {
+                if c.player.is_some() && write_msg(&mut c.writer, &msg).is_err() {
+                    dead.push(*id);
+                }
+            }
+        }
+        for event in self.game.take_sounds() {
+            let (msg, target) = match event {
+                brixo_runtime::SoundEvent::Play { name, player } => (ToClient::Sound { name }, player),
+                brixo_runtime::SoundEvent::Music { name, player } => {
+                    if player.is_none() {
+                        self.music = name.clone();
+                    }
+                    (ToClient::Music { name }, player)
+                }
             };
-            (world_msg, state_of(&world))
+            for (id, c) in &mut self.connections {
+                let wanted = c.player.is_some() && (target.is_none() || target == c.player);
+                if wanted && write_msg(&mut c.writer, &msg).is_err() {
+                    dead.push(*id);
+                }
+            }
+        }
+        for id in dead {
+            self.disconnect(id);
+        }
+    }
+
+    /// Sends each player the audio of any Sound they don't have yet.
+    fn send_assets(&mut self) {
+        let sounds: Vec<(u64, String, String)> = {
+            let w = self.game.world();
+            w.walk().into_iter().filter_map(|id| w.sound(id).map(|s| (id.raw(), s.format.clone(), s.data.clone()))).collect()
         };
+        let mut dead = Vec::new();
+        for (cid, c) in &mut self.connections {
+            if c.player.is_none() {
+                continue;
+            }
+            for (id, format, data) in &sounds {
+                if c.assets_sent.insert(*id) {
+                    let msg = ToClient::Asset { id: *id, format: format.clone(), data: data.clone() };
+                    if write_msg(&mut c.writer, &msg).is_err() {
+                        dead.push(*cid);
+                        break;
+                    }
+                }
+            }
+        }
+        for id in dead {
+            self.disconnect(id);
+        }
+    }
+
+    fn broadcast(&mut self) {
+        self.send_assets();
+        let msgs = {
+            let world = self.game.world();
+            self.sent.changes(&world)
+        };
+        if msgs.is_empty() {
+            return;
+        }
         let mut dead = Vec::new();
         for (id, c) in &mut self.connections {
             if c.player.is_none() {
                 continue; // hasn't said hello yet
             }
-            let sent = match &world_msg {
-                Some(w) => write_msg(&mut c.writer, w).and_then(|_| write_msg(&mut c.writer, &state)),
-                None => write_msg(&mut c.writer, &state),
-            };
-            if sent.is_err() {
+            if msgs.iter().any(|m| write_msg(&mut c.writer, m).is_err()) {
                 dead.push(*id);
             }
         }
         for id in dead {
             self.disconnect(id);
         }
+    }
+}
+
+/// What players were last told about the world, so each update carries only
+/// what's different: a few moving parts, not all of them, every tick.
+#[derive(Default)]
+struct Sent {
+    tree: HashMap<u64, (Option<u64>, String)>,
+    parts: HashMap<u64, brixo_core::PartProps>,
+    players: HashMap<u64, brixo_core::PlayerProps>,
+    guis: HashMap<u64, brixo_core::GuiProps>,
+    attrs: HashMap<u64, std::collections::BTreeMap<String, brixo_core::Attribute>>,
+}
+
+impl Sent {
+    fn changes(&mut self, world: &brixo_core::DataModel) -> Vec<ToClient> {
+        let hidden = crate::protocol::server_only(world);
+        let order: Vec<InstanceId> = world.walk().into_iter().filter(|id| !hidden.contains(id)).collect();
+
+        // The tree: added, removed, moved or renamed.
+        let mut tree = HashMap::with_capacity(order.len());
+        let (mut added, mut moved) = (Vec::new(), Vec::new());
+        for id in &order {
+            let inst = world.get(*id).unwrap();
+            let now = (inst.parent.map(|p| p.raw()), inst.name.clone());
+            match self.tree.get(&id.raw()) {
+                None => {
+                    if let Some(public) = crate::protocol::public_instance(world, *id) {
+                        added.push(serde_json::to_string(&public).unwrap());
+                    }
+                }
+                Some(before) if *before != now => moved.push((id.raw(), now.0, now.1.clone())),
+                _ => {}
+            }
+            tree.insert(id.raw(), now);
+        }
+        let removed: Vec<u64> = self.tree.keys().filter(|id| !tree.contains_key(id)).copied().collect();
+        self.tree = tree;
+
+        // The state: only what's different from last time.
+        let (mut parts, mut players, mut guis, mut attrs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for id in &order {
+            let raw = id.raw();
+            if let Some(p) = world.part(*id) {
+                if self.parts.get(&raw) != Some(p) {
+                    self.parts.insert(raw, *p);
+                    parts.push((raw, *p));
+                }
+            } else if let Some(p) = world.player(*id) {
+                if self.players.get(&raw) != Some(p) {
+                    self.players.insert(raw, *p);
+                    players.push((raw, *p));
+                }
+            } else if let Some(g) = world.gui(*id) {
+                if self.guis.get(&raw) != Some(g) {
+                    self.guis.insert(raw, g.clone());
+                    guis.push((raw, g.clone()));
+                }
+            }
+            let a = &world.get(*id).unwrap().attributes;
+            if self.attrs.get(&raw).map_or(!a.is_empty(), |before| before != a) {
+                self.attrs.insert(raw, a.clone());
+                attrs.push((raw, a.clone()));
+            }
+        }
+        for id in &removed {
+            self.parts.remove(id);
+            self.players.remove(id);
+            self.guis.remove(id);
+            self.attrs.remove(id);
+        }
+
+        let mut out = Vec::new();
+        if !added.is_empty() || !removed.is_empty() || !moved.is_empty() {
+            out.push(ToClient::Changes { added, removed, moved });
+        }
+        if !parts.is_empty() || !players.is_empty() || !guis.is_empty() || !attrs.is_empty() {
+            out.push(ToClient::State { parts, players, guis, attrs });
+        }
+        out
     }
 }

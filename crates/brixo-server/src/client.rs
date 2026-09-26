@@ -19,6 +19,12 @@ pub struct NetClient {
     /// Your character, once the server has let you in.
     pub me: Option<InstanceId>,
     pub connected: bool,
+    /// Sounds and music the server sent, for the app to play.
+    pub cues: Vec<brixo_runtime::Cue>,
+    /// Chat messages: (who, their name, what they said).
+    pub chat: Vec<(InstanceId, String, String)>,
+    /// The game's Sounds' audio files, as the server sends them.
+    pub assets: std::collections::HashMap<InstanceId, std::sync::Arc<Vec<u8>>>,
     last_input: Option<PlayerInput>,
 }
 
@@ -26,13 +32,22 @@ impl NetClient {
     /// Connects to `addr` ("127.0.0.1:4570", "192.168.1.20:4570"...) and asks
     /// to join as `name`. The server may add a number if the name's taken.
     pub fn connect(addr: &str, name: &str) -> io::Result<NetClient> {
+        Self::connect_with(addr, name, None)
+    }
+
+    /// Joins a website-started server with the one-time ticket from Play.
+    pub fn connect_with_ticket(addr: &str, ticket: &str) -> io::Result<NetClient> {
+        Self::connect_with(addr, "", Some(ticket.to_string()))
+    }
+
+    fn connect_with(addr: &str, name: &str, ticket: Option<String>) -> io::Result<NetClient> {
         let target = addr
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no such address"))?;
         let mut writer = TcpStream::connect_timeout(&target, Duration::from_secs(3))?;
         writer.set_nodelay(true)?;
-        write_msg(&mut writer, &ToServer::Hello { name: name.to_string() })?;
+        write_msg(&mut writer, &ToServer::Hello { name: name.to_string(), ticket })?;
 
         let mut reader = BufReader::new(writer.try_clone()?);
         let (tx, incoming) = mpsc::channel();
@@ -45,7 +60,7 @@ impl NetClient {
             // Dropping tx tells poll() the server has gone.
         })?;
 
-        Ok(NetClient { writer, incoming, world: DataModel::new(), me: None, connected: true, last_input: None })
+        Ok(NetClient { writer, incoming, world: DataModel::new(), me: None, connected: true, cues: Vec::new(), chat: Vec::new(), assets: Default::default(), last_input: None })
     }
 
     /// Applies everything the server has sent since the last call.
@@ -75,8 +90,44 @@ impl NetClient {
                     self.world = w;
                 }
             }
-            ToClient::State { parts, players } => apply_state(&mut self.world, &parts, &players),
+            ToClient::State { parts, players, guis, attrs } => apply_state(&mut self.world, &parts, &players, &guis, &attrs),
+            ToClient::Changes { added, removed, moved } => crate::protocol::apply_changes(&mut self.world, &added, &removed, &moved),
+            ToClient::Sound { name } => self.cues.push(brixo_runtime::Cue::Sound(name)),
+            ToClient::Music { name } => self.cues.push(brixo_runtime::Cue::Music(name)),
+            ToClient::Chat { from, name, text } => self.chat.push((InstanceId::from_raw(from), name, text)),
+            ToClient::Asset { id, format, data } => {
+                let props = brixo_core::SoundProps { format, data, volume: 1.0 };
+                if let Some(bytes) = props.bytes() {
+                    self.assets.insert(InstanceId::from_raw(id), std::sync::Arc::new(bytes));
+                }
+            }
         }
+    }
+
+    fn send(&mut self, msg: ToServer) {
+        if self.connected && write_msg(&mut self.writer, &msg).is_err() {
+            self.connected = false;
+        }
+    }
+
+    /// Says something in chat (the server filters it).
+    pub fn chat(&mut self, text: &str) {
+        self.send(ToServer::Chat { text: text.to_string() });
+    }
+
+    /// You clicked a TextButton.
+    pub fn click(&mut self, button: InstanceId) {
+        self.send(ToServer::Click { button: button.raw() });
+    }
+
+    /// You pressed hotbar key `slot` + 1.
+    pub fn equip(&mut self, slot: usize) {
+        self.send(ToServer::Equip { slot: slot as u32 });
+    }
+
+    /// You clicked with a tool in hand.
+    pub fn activate(&mut self) {
+        self.send(ToServer::Activate);
     }
 
     /// Tells the server what you're pressing (only when it changes).

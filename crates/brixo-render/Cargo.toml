@@ -10,3 +10,6 @@ glam = "0.33"
 pollster = "0.4"
 wgpu = "24"
 winit = "0.30"
+
+[dev-dependencies]
+naga = { version = "24", features = ["wgsl-in"] }

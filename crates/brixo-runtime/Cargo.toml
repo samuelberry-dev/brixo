@@ -9,3 +9,4 @@ brixo-core = { path = "../brixo-core" }
 rovik = { path = "../rovik" }
 glam = "0.33"
 rapier3d = "0.35"
+parking_lot = "0.12"

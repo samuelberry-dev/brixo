@@ -1,0 +1,11 @@
+[package]
+name = "brixo-samples"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brixo-core = { path = "../brixo-core" }
+
+[dev-dependencies]
+brixo-audio = { path = "../brixo-audio" }
+brixo-runtime = { path = "../brixo-runtime" }

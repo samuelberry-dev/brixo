@@ -148,12 +148,14 @@ fn you_can_still_jump_just_after_walking_off_a_ledge() {
 fn a_jump_pressed_just_before_landing_still_happens() {
     let mut game = Game::start(ledge());
     idle(&mut game, 0.5);
-    // Walk off the ledge and fall, with no coyote jump.
-    run(&mut game, 0.8, forward());
+    // Walk off the ledge (the edge is ~0.37s away) and start falling, with
+    // no coyote jump. Falls are quick now, so stop walking just past it.
+    run(&mut game, 0.42, forward());
     while !game.player_grounded() {
         let y = pos(&game).y;
-        // About 0.07s above the floor: press jump once, then let go.
-        if y < 3.4 {
+        // Moments before landing (falling fast now, so 2.5 studs up is
+        // about 0.05s away): press jump once, then let go.
+        if y < 5.0 {
             run(&mut game, FRAME, PlayerInput { jump: true, ..Default::default() });
             break;
         }
@@ -271,13 +273,14 @@ fn lava_kills_and_the_player_respawns() {
     let mut died = false;
     for _ in 0..90 {
         run(&mut game, FRAME, forward());
-        if log_texts(&game).iter().any(|t| t == "Player died and respawned") {
+        if log_texts(&game).iter().any(|t| t == "Player died") {
             died = true;
             break;
         }
     }
     assert!(died, "the lava should have killed the player");
-    idle(&mut game, 0.3);
+    // Fallen apart for a few seconds, then back at the spawn.
+    idle(&mut game, brixo_runtime::RESPAWN_TIME as f64 + 0.3);
     let p = pos(&game);
     assert!(p.z.abs() < 0.5 && (p.y - 3.5).abs() < 0.5, "back at spawn: {p:?}");
     let world = game.world();
@@ -294,7 +297,11 @@ fn falling_off_the_world_respawns_the_player() {
     idle(&mut game, 0.5);
     run(&mut game, 1.5, forward()); // off the edge
     idle(&mut game, 3.0);
-    assert!(log_texts(&game).iter().any(|t| t == "Player fell off the world and respawned"));
+    let mut log = log_texts(&game);
+    assert!(log.iter().any(|t| t == "Player fell off the world"), "{log:?}");
+    idle(&mut game, brixo_runtime::RESPAWN_TIME as f64 + 0.3);
+    log.extend(log_texts(&game));
+    assert!(log.iter().any(|t| t == "Player respawned"), "{log:?}");
 }
 
 #[test]
@@ -323,3 +330,17 @@ fn walking_into_a_crate_pushes_it() {
     let z = game.world().part(c).unwrap().position.z;
     assert!(z > 7.0, "crate pushed to z = {z}");
 }
+
+#[test]
+fn things_resting_on_your_head_dont_stop_you_walking() {
+    let mut dm = arena();
+    // A loose crate dropped onto the spawn, right on the player's head.
+    let crate_ = block(&mut dm, "Crate", Vec3::new(0.0, 8.0, 0.0), Vec3::new(1.5, 1.5, 1.5));
+    dm.part_mut(crate_).unwrap().anchored = false;
+    let mut game = Game::start(dm);
+    idle(&mut game, 1.0);
+    let head_z = pos(&game).z;
+    run(&mut game, 0.6, forward());
+    assert!(pos(&game).z - head_z > 7.0, "walked out from under the crate: {:?}", pos(&game));
+}
+

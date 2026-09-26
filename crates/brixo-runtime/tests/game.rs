@@ -169,7 +169,8 @@ fn resting_on_a_surface_is_not_touching() {
     let block = dm.create(Class::Part, "Block", root).unwrap();
     dm.part_mut(block).unwrap().position = Vec3::new(0.0, 2.0, 0.0);
     // Lowers the block until it sits exactly on the floor (y = 1).
-    add_script(&mut dm, block, "Drop", "on touched(o)\n print(\"touch\")\nend\nwait(0.1)\nself.position.y = 1");
+    // (The player, dropping in from above, may land on it: that's a real touch.)
+    add_script(&mut dm, block, "Drop", "on touched(o)\n if o.class != \"player\" then\n  print(\"touch\")\n end\nend\nwait(0.1)\nself.position.y = 1");
     let mut game = Game::start(dm);
     game.step(0.2);
     game.step(0.2);
@@ -273,18 +274,18 @@ fn destroying_a_script_stops_its_waiting_tasks() {
 
 #[test]
 fn unknown_events_are_reported() {
-    let (dm, _) = scene_with_script("P", "on clicked()\n print(1)\nend");
+    let (dm, _) = scene_with_script("P", "on exploded()\n print(1)\nend");
     let game = Game::start(dm);
     let log = script_log(&game);
     assert!(log[0].is_error && log[0].text.contains("isn't an event"));
 }
 
 #[test]
-fn unknown_part_fields_list_the_real_ones() {
+fn misspelled_fields_suggest_the_real_one() {
     let (dm, _) = scene_with_script("P", "print(self.colour)");
     let game = Game::start(dm);
     let log = script_log(&game);
-    assert!(log[0].text.contains("Parts have name, position"), "{log:?}");
+    assert!(log[0].is_error && log[0].text.contains("Did you mean 'color'?"), "{log:?}");
 }
 
 #[test]

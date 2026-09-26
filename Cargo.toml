@@ -1,3 +1,14 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+
+# Optimize dependencies (Rapier, wgpu, egui...) even in debug builds.
+# Physics is far too slow unoptimized; our own crates stay quick to rebuild.
+# Brixo's own code gets basic optimization even in everyday builds: the
+# engine does a lot of work per frame, and unoptimized it runs many times
+# slower. (Libraries get full optimization, below.)
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

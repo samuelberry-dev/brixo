@@ -16,7 +16,7 @@ impl InstanceId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Vec3 {
     pub x: f32,
     pub y: f32,
@@ -83,6 +83,90 @@ impl Shape {
     }
 }
 
+/// Where a character's right shoulder is, in its own space (facing +Z).
+pub const RIGHT_SHOULDER: Vec3 = Vec3 { x: -1.43, y: 0.97, z: 0.0 };
+/// From the shoulder to the middle of the hand.
+pub const ARM_REACH: f32 = 1.6;
+/// How long a tool swing lasts, in seconds.
+pub const SWING_TIME: f32 = 0.3;
+
+/// Whether a tool is held straight up (its `grip` is "up", like a sword)
+/// rather than out in front.
+pub fn holds_up(world: &DataModel, tool: InstanceId) -> bool {
+    world.get(tool).is_some_and(|t| matches!(t.attributes.get("grip"), Some(Attribute::Str(g)) if g == "up"))
+}
+
+/// The right arm's angle while holding a tool, in radians about the
+/// shoulder's side axis: 0 hangs down, -PI/2 points forward, -PI points
+/// straight up. `swing` is the seconds left in a swing (see SWING_TIME).
+/// A sword is held straight up and chops forward and back; anything else is
+/// held forward and kicks back a little. The renderer draws the arm with
+/// this and the runtime places the tool with it, so they always line up.
+pub fn held_arm_angle(swing: f32, up: bool) -> f32 {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let chop = if swing > 0.0 { ((1.0 - swing / SWING_TIME).clamp(0.0, 1.0) * PI).sin() } else { 0.0 };
+    if up { -PI + (FRAC_PI_2 + 0.25) * chop } else { -FRAC_PI_2 - 0.35 * chop }
+}
+
+/// Brixo's built-in sound effects: `play_sound("coin")`.
+pub const SOUNDS: [&str; 16] = [
+    "coin", "cash", "buy", "click", "error", "pop", "jump", "hit", "win", "whoosh", "death", "boom", "twang", "bonk",
+    "splat", "thud",
+];
+/// Brixo's built-in music: `play_music("sunny")`.
+pub const MUSIC: [&str; 2] = ["sunny", "rush"];
+
+/// What a part's surface looks like: a pixel-art texture tinted by the
+/// part's colour. Neon glows (ignores shadows and shading).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Material {
+    #[default]
+    Plastic,
+    Wood,
+    Brick,
+    Metal,
+    Grass,
+    Concrete,
+    Neon,
+}
+
+impl Material {
+    pub const ALL: [Material; 7] = [
+        Material::Plastic,
+        Material::Wood,
+        Material::Brick,
+        Material::Metal,
+        Material::Grass,
+        Material::Concrete,
+        Material::Neon,
+    ];
+
+    /// The name scripts use: `self.material = "wood"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Material::Plastic => "plastic",
+            Material::Wood => "wood",
+            Material::Brick => "brick",
+            Material::Metal => "metal",
+            Material::Grass => "grass",
+            Material::Concrete => "concrete",
+            Material::Neon => "neon",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Material> {
+        Material::ALL.into_iter().find(|m| m.name() == name)
+    }
+}
+
+/// A value scripts store in a custom field (`player.cash = 100`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Attribute {
+    Num(f64),
+    Str(String),
+    Bool(bool),
+}
+
 /// Properties that only a Part has.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PartProps {
@@ -103,6 +187,22 @@ pub struct PartProps {
     /// Older saves have no shape: they're all blocks.
     #[serde(default)]
     pub shape: Shape,
+    #[serde(default)]
+    pub material: Material,
+    /// 0 is solid, 1 is invisible. In between is drawn as a retro dither.
+    #[serde(default)]
+    pub transparency: f32,
+    /// For loose parts: how fast they're moving (scripts can set it to
+    /// launch them). For anchored parts: a conveyor belt, carrying whatever
+    /// rests on top along at this speed.
+    #[serde(default)]
+    pub velocity: Vec3,
+    /// Loose parts that ignore gravity (a rocket flies straight).
+    #[serde(default)]
+    pub floating: bool,
+    /// How bouncy, 0 (a thud) to 1 (a superball).
+    #[serde(default)]
+    pub bounce: f32,
 }
 
 fn yes() -> bool {
@@ -119,6 +219,11 @@ impl Default for PartProps {
             anchored: true,
             can_collide: true,
             shape: Shape::Block,
+            material: Material::Plastic,
+            transparency: 0.0,
+            velocity: Vec3::ZERO,
+            floating: false,
+            bounce: 0.0,
         }
     }
 }
@@ -136,6 +241,77 @@ impl Default for ScriptProps {
         Self {
             source: "-- This script runs when you press Play.\n-- 'self' is the part it's inside.\n\nprint(\"Hello from \" + self.name)\n".to_string(),
             enabled: true,
+        }
+    }
+}
+
+/// A sound file in a game (mp3, wav or ogg), made by dropping the file on
+/// Brixo Studio and played with `play_sound(find("Name"))`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SoundProps {
+    /// "mp3", "wav" or "ogg".
+    pub format: String,
+    /// The file itself, base64-encoded, so games stay plain JSON.
+    pub data: String,
+    /// 0 to 1.
+    pub volume: f32,
+}
+
+impl SoundProps {
+    pub fn from_bytes(format: &str, bytes: &[u8]) -> SoundProps {
+        use base64::Engine;
+        SoundProps { format: format.to_string(), data: base64::engine::general_purpose::STANDARD.encode(bytes), volume: 0.8 }
+    }
+
+    /// The file's bytes (None if the data is missing or damaged).
+    pub fn bytes(&self) -> Option<Vec<u8>> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.decode(&self.data).ok().filter(|b| !b.is_empty())
+    }
+}
+
+/// A piece of on-screen interface: a TextLabel, TextButton or Frame.
+/// Positions and sizes are fractions of the screen (0 to 1), from the
+/// top-left, so a GUI looks the same on any window size.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuiProps {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub text: String,
+    /// In points.
+    pub text_size: f32,
+    pub text_color: Color,
+    pub background_color: Color,
+    /// Whether the box behind the text is drawn.
+    pub background: bool,
+    pub visible: bool,
+    /// Float over this part instead of sitting on the screen: price tags,
+    /// name tags. `x`/`y` then nudge it in screen fractions.
+    #[serde(default)]
+    pub attached_to: Option<InstanceId>,
+}
+
+impl GuiProps {
+    fn for_class(class: Class) -> Self {
+        let base = GuiProps {
+            x: 0.4,
+            y: 0.1,
+            width: 0.2,
+            height: 0.06,
+            text: String::new(),
+            text_size: 20.0,
+            text_color: Color::new(255, 255, 255),
+            background_color: Color::new(27, 42, 53),
+            background: true,
+            visible: true,
+            attached_to: None,
+        };
+        match class {
+            Class::TextLabel => GuiProps { text: "Label".into(), background: false, ..base },
+            Class::TextButton => GuiProps { text: "Button".into(), background_color: Color::new(13, 105, 172), ..base },
+            _ => GuiProps { width: 0.3, height: 0.2, ..base },
         }
     }
 }
@@ -213,6 +389,23 @@ pub struct PlayerProps {
     pub pants_color: Color,
     pub shoes_color: Color,
     pub camera_mode: CameraMode,
+    /// The Tool in the player's hand, if any (one of the Tools inside the
+    /// player, which make up their backpack).
+    #[serde(default)]
+    pub equipped: Option<InstanceId>,
+    /// How fast the character is walking (studs/s), for the walk animation.
+    #[serde(default)]
+    pub speed: f32,
+    /// In the air (jumping or falling), for the jump pose.
+    #[serde(default)]
+    pub airborne: bool,
+    /// Seconds left in a tool swing, for the swing animation.
+    #[serde(default)]
+    pub swing: f32,
+    /// Seconds since this player died (0 while alive). Drives the
+    /// falling-apart animation; they respawn a few seconds in.
+    #[serde(default)]
+    pub dead: f32,
 }
 
 impl Default for PlayerProps {
@@ -227,13 +420,18 @@ impl Default for PlayerProps {
             health: 100.0,
             max_health: 100.0,
             walk_speed: 16.0,
-            jump_power: 22.0,
+            jump_power: 39.0,
             face: Face::Smile,
             skin_color: Color::new(242, 194, 123),
             shirt_color: Color::new(47, 158, 143),
             pants_color: Color::new(74, 85, 120),
             shoes_color: Color::new(43, 43, 51),
             camera_mode: CameraMode::Default,
+            equipped: None,
+            speed: 0.0,
+            airborne: false,
+            swing: 0.0,
+            dead: 0.0,
         }
     }
 }
@@ -250,6 +448,17 @@ pub enum Class {
     /// A group of parts that act as one object: they move together in the
     /// studio, and during play the parts inside are welded together.
     Model,
+    /// On-screen text.
+    TextLabel,
+    /// On-screen text you can click: scripts inside hear `on clicked(player)`.
+    TextButton,
+    /// An on-screen box, for panels and backgrounds.
+    Frame,
+    /// Something a player holds: put it inside a player to give it to them.
+    /// Its parts are what's held; scripts inside hear `on activated(player)`.
+    Tool,
+    /// An audio file the game can play (see SoundProps).
+    Sound,
     Player,
 }
 
@@ -266,6 +475,9 @@ pub enum Props {
     Workspace,
     Folder,
     Model,
+    Gui(GuiProps),
+    Tool,
+    Sound(SoundProps),
     /// Parts and SpawnLocations.
     Part(PartProps),
     Script(ScriptProps),
@@ -280,6 +492,9 @@ pub struct Instance {
     pub parent: Option<InstanceId>,
     pub children: Vec<InstanceId>,
     pub props: Props,
+    /// Custom fields scripts set: `player.cash = 100`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub attributes: std::collections::BTreeMap<String, Attribute>,
 }
 
 /// Owns every instance in the tree. The Workspace is the root.
@@ -288,6 +503,22 @@ pub struct DataModel {
     instances: HashMap<InstanceId, Instance>,
     next_id: u64,
     root: InstanceId,
+}
+
+/// The clipboard format (see DataModel::to_clipboard).
+#[derive(Serialize, Deserialize)]
+struct Clipboard {
+    brixo_clipboard: u32,
+    items: Vec<ClipItem>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClipItem {
+    class: Class,
+    name: String,
+    attributes: std::collections::BTreeMap<String, Attribute>,
+    props: Props,
+    children: Vec<ClipItem>,
 }
 
 /// Flat, serialisable form of the tree. Maps with non-string keys don't
@@ -311,6 +542,7 @@ impl DataModel {
                 name: "Workspace".to_string(),
                 parent: None,
                 children: Vec::new(),
+                attributes: Default::default(),
                 props: Props::Workspace,
             },
         );
@@ -415,6 +647,72 @@ impl DataModel {
         }
     }
 
+    pub fn gui(&self, id: InstanceId) -> Option<&GuiProps> {
+        match self.instances.get(&id).map(|i| &i.props) {
+            Some(Props::Gui(g)) => Some(g),
+            _ => None,
+        }
+    }
+
+    pub fn gui_mut(&mut self, id: InstanceId) -> Option<&mut GuiProps> {
+        match self.instances.get_mut(&id).map(|i| &mut i.props) {
+            Some(Props::Gui(g)) => Some(g),
+            _ => None,
+        }
+    }
+
+    /// Adds an instance exactly as given (its own id), under its parent.
+    /// For copies of a world kept in step with another (a game client).
+    /// Returns false if it's already here or its parent isn't.
+    pub fn insert_instance(&mut self, mut inst: Instance) -> bool {
+        if self.instances.contains_key(&inst.id) || inst.parent.is_some_and(|p| !self.instances.contains_key(&p)) {
+            return false;
+        }
+        inst.children.clear(); // they arrive after it, and attach themselves
+        if let Some(parent) = inst.parent {
+            self.instances.get_mut(&parent).unwrap().children.push(inst.id);
+        }
+        self.next_id = self.next_id.max(inst.id.0 + 1);
+        self.instances.insert(inst.id, inst);
+        true
+    }
+
+    pub fn sound(&self, id: InstanceId) -> Option<&SoundProps> {
+        match self.instances.get(&id).map(|i| &i.props) {
+            Some(Props::Sound(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn sound_mut(&mut self, id: InstanceId) -> Option<&mut SoundProps> {
+        match self.instances.get_mut(&id).map(|i| &mut i.props) {
+            Some(Props::Sound(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The Tool at or around `id`, if any.
+    pub fn tool_of(&self, id: InstanceId) -> Option<InstanceId> {
+        self.ancestor_of_class(id, Class::Tool)
+    }
+
+    /// The Player at or around `id`, if any.
+    pub fn player_of(&self, id: InstanceId) -> Option<InstanceId> {
+        self.ancestor_of_class(id, Class::Player)
+    }
+
+    fn ancestor_of_class(&self, id: InstanceId, class: Class) -> Option<InstanceId> {
+        let mut at = Some(id);
+        while let Some(n) = at {
+            let inst = self.instances.get(&n)?;
+            if inst.class == class {
+                return Some(n);
+            }
+            at = inst.parent;
+        }
+        None
+    }
+
     /// The closest Model around `id` (not counting `id` itself). Parts
     /// under the same Model are welded together during play.
     pub fn weld_group(&self, id: InstanceId) -> Option<InstanceId> {
@@ -486,6 +784,9 @@ impl DataModel {
             Class::Workspace => Props::Workspace,
             Class::Folder => Props::Folder,
             Class::Model => Props::Model,
+            Class::TextLabel | Class::TextButton | Class::Frame => Props::Gui(GuiProps::for_class(class)),
+            Class::Tool => Props::Tool,
+            Class::Sound => Props::Sound(SoundProps { format: "wav".into(), data: String::new(), volume: 0.8 }),
             Class::Part => Props::Part(PartProps::default()),
             Class::Script => Props::Script(ScriptProps::default()),
             Class::SpawnLocation => Props::Part(PartProps {
@@ -503,6 +804,7 @@ impl DataModel {
                 name: name.to_string(),
                 parent: Some(parent),
                 children: Vec::new(),
+                attributes: Default::default(),
                 props,
             },
         );
@@ -535,6 +837,7 @@ impl DataModel {
                 name: original.name.clone(),
                 parent: Some(parent),
                 children: Vec::new(),
+                attributes: original.attributes.clone(),
                 props: original.props.clone(),
             },
         );
@@ -545,6 +848,68 @@ impl DataModel {
             self.copy_into(child, new_id);
         }
         Some(new_id)
+    }
+
+    /// Things copied to the clipboard, as text another game can paste:
+    /// each item with its properties, fields and everything inside it, but
+    /// no ids (those belong to this game). Items inside other copied items
+    /// are skipped (they come along anyway). The root can't be copied.
+    pub fn to_clipboard(&self, ids: &[InstanceId]) -> String {
+        let items: Vec<ClipItem> = ids
+            .iter()
+            .filter(|id| **id != self.root && self.instances.contains_key(id))
+            .filter(|id| !ids.iter().any(|other| other != *id && self.is_descendant_of(**id, *other)))
+            .filter_map(|id| self.clip_item(*id))
+            .collect();
+        serde_json::to_string(&Clipboard { brixo_clipboard: 1, items }).unwrap_or_default()
+    }
+
+    fn clip_item(&self, id: InstanceId) -> Option<ClipItem> {
+        let inst = self.instances.get(&id)?;
+        Some(ClipItem {
+            class: inst.class,
+            name: inst.name.clone(),
+            attributes: inst.attributes.clone(),
+            props: inst.props.clone(),
+            children: inst.children.iter().filter_map(|c| self.clip_item(*c)).collect(),
+        })
+    }
+
+    /// Pastes clipboard text (from to_clipboard, in any game) under
+    /// `parent`, with fresh ids. Returns the new top-level things, or None if
+    /// the text isn't Brixo's or `parent` can't hold anything.
+    pub fn paste_clipboard(&mut self, text: &str, parent: InstanceId) -> Option<Vec<InstanceId>> {
+        let clip: Clipboard = serde_json::from_str(text.trim()).ok()?;
+        if clip.brixo_clipboard != 1 || !self.instances.get(&parent)?.class.can_hold_children() {
+            return None;
+        }
+        Some(clip.items.into_iter().filter_map(|item| self.paste_item(item, parent)).collect())
+    }
+
+    fn paste_item(&mut self, item: ClipItem, parent: InstanceId) -> Option<InstanceId> {
+        // (The Workspace is unique: one can't be pasted in.)
+        if item.class == Class::Workspace {
+            return None;
+        }
+        let id = InstanceId(self.next_id);
+        self.next_id += 1;
+        self.instances.insert(
+            id,
+            Instance {
+                id,
+                class: item.class,
+                name: item.name,
+                parent: Some(parent),
+                children: Vec::new(),
+                attributes: item.attributes,
+                props: item.props,
+            },
+        );
+        self.instances.get_mut(&parent)?.children.push(id);
+        for child in item.children {
+            self.paste_item(child, id);
+        }
+        Some(id)
     }
 
     /// Removes an instance and all its descendants.

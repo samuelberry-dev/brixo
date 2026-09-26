@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Get Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content">
+<div class="cols"><div class="main">
+  <div class="box"><h2>Get Brixo</h2><div class="inner">
+    <div class="feature"><div class="brick-icon" style="background:#4b974b"></div><div>
+      <b style="font-size:14px">Brixo Player</b><br>
+      Plays every game on the site. Press <b>Play</b> on any game page and Brixo Player opens and joins you in.
+    </div></div>
+    <div class="feature"><div class="brick-icon" style="background:#0d69ac"></div><div>
+      <b style="font-size:14px">Brixo Studio</b><br>
+      Where games get made: bricks, Rovik scripts, sounds, teams, tools, and a Publish button that puts your game on this site.
+    </div></div>
+    <p style="margin-top:10px"><b>Downloads open with the public launch.</b> Until then, Brixo is built from source.
+      It takes a few minutes the first time:</p>
+    <ol class="steps">
+      <li>Install Rust from <b>rustup.rs</b>.</li>
+      <li>In the Brixo folder, run <code>cargo build --release --workspace</code></li>
+      <li>Run <code>target\release\brixo-player --register-protocol</code> once, so Play buttons can open it.</li>
+      <li>Open Studio with <code>target\release\brixo-studio</code></li>
+    </ol>
+  </div></div>
+</div><div class="side">
+  <div class="box gold"><h2>What you need</h2><div class="inner">
+    <table class="stats">
+      <tr><td>System</td><td>Windows, Mac or Linux</td></tr>
+      <tr><td>Graphics</td><td>Vulkan, DirectX 12 or Metal</td></tr>
+      <tr><td>Account</td><td>Free</td></tr>
+    </table>
+  </div></div>
+  <div class="box navy"><h2>New to Brixo?</h2><div class="inner soft">
+    <p>Make an account so you can play, save your character and publish games.</p>
+    <a class="btn gold" href="/signup">Sign up free</a>
+  </div></div>
+</div></div>
+</div>
+<div id="footer"></div></div>
+<script>shell("download");</script></body></html>

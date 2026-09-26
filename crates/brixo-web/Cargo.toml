@@ -1,0 +1,28 @@
+[package]
+name = "brixo-web"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "brixo_web"
+path = "src/lib.rs"
+
+[[bin]]
+name = "brixo-web"
+path = "src/main.rs"
+
+[dependencies]
+brixo-core = { path = "../brixo-core" }
+brixo-runtime = { path = "../brixo-runtime" }
+brixo-server = { path = "../brixo-server" }
+brixo-samples = { path = "../brixo-samples" }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+argon2 = "0.5"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+ureq = { version = "2", features = ["json", "cookies"] }

@@ -58,7 +58,9 @@ pub struct Interpreter {
     pub on_wait: Option<WaitHook>,
     steps: u64,
     depth: usize,
-    rng: u64,
+    /// Shared by a script and all its forks, so every call to random()
+    /// anywhere gets the next number, not a copy of the same sequence.
+    rng: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Default for Interpreter {
@@ -84,7 +86,7 @@ impl Interpreter {
             on_wait: None,
             steps: 0,
             depth: 0,
-            rng: seed | 1,
+            rng: Arc::new(std::sync::atomic::AtomicU64::new(seed | 1)),
         }
     }
 
@@ -103,7 +105,7 @@ impl Interpreter {
             on_wait: None,
             steps: 0,
             depth: 0,
-            rng: self.rng.rotate_left(17) ^ 0x9E37_79B9_7F4A_7C15,
+            rng: self.rng.clone(),
         }
     }
 
@@ -791,11 +793,14 @@ impl Interpreter {
 
     /// xorshift64*: small and good enough for games.
     fn next_random(&mut self) -> f64 {
-        let mut x = self.rng;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.rng = x;
+        let step = |mut x: u64| {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            x
+        };
+        use std::sync::atomic::Ordering;
+        let x = step(self.rng.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(step(x))).unwrap());
         let r = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
         (r >> 11) as f64 / (1u64 << 53) as f64
     }

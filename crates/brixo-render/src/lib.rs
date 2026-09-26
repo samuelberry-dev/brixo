@@ -108,6 +108,14 @@ struct InstanceRaw {
     /// Which part of the texture atlas to use: offset (xy) and size (zw).
     /// Untextured things point at the atlas's white cell.
     uv_rect: [f32; 4],
+    /// x: 1 = tile a material texture over the part; y: 1 = neon (glows);
+    /// z: transparency (dithered); w: the material's average shade.
+    extra: [f32; 4],
+    /// Breaks ties between surfaces in exactly the same place (two parts
+    /// overlapping flush): each part sits a hair nearer or farther by this
+    /// step, so one of them always wins, the same one every frame, instead
+    /// of the two flickering ("z-fighting"). 0 for avatars.
+    layer: f32,
 }
 
 /// The atlas's plain white cell, for everything without a picture.
@@ -159,6 +167,16 @@ impl InstanceRaw {
                     shader_location: 9,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                wgpu::VertexAttribute {
+                    offset: 96,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 112,
+                    shader_location: 11,
+                    format: wgpu::VertexFormat::Float32,
+                },
             ],
         }
     }
@@ -172,6 +190,11 @@ struct CameraUniform {
     light_view_proj: [[f32; 4]; 4],
     /// Direction toward the sun (w unused).
     sun_dir: [f32; 4],
+    /// Screen back to world, for working out which way each sky pixel looks.
+    inv_view_proj: [[f32; 4]; 4],
+    /// The camera's position (xyz) and seconds since start (w), for the
+    /// distance haze and drifting clouds.
+    eye: [f32; 4],
 }
 
 /// Toward the sun: high, and a little off to one side.
@@ -260,13 +283,15 @@ fn to_glam(v: BVec3) -> Vec3 {
 }
 
 /// Instances for every part, plus the players (drawn separately, as
-/// avatars) with their highlight values.
+/// avatars) with their highlight values. `editing`: invisible parts stay
+/// faintly visible so they can be picked and edited.
 /// Parts (with their shape) and players, with highlight values. Anything
 /// in `selected` is highlighted.
 #[allow(clippy::type_complexity)]
 fn build_instances(
     model: &DataModel,
     selected: &[brixo_core::InstanceId],
+    editing: bool,
 ) -> (Vec<(brixo_core::Shape, InstanceRaw)>, Vec<(brixo_core::InstanceId, brixo_core::PlayerProps, f32)>) {
     let mut out = Vec::new();
     let mut players = Vec::new();
@@ -282,6 +307,10 @@ fn build_instances(
         }
         // Parts and SpawnLocations.
         let Some(p) = model.part(id) else { continue };
+        let transparency = if editing { p.transparency.min(0.75) } else { p.transparency };
+        if transparency >= 0.99 {
+            continue; // invisible: not drawn, no shadow
+        }
 
         let rotation = Quat::from_euler(
             glam::EulerRot::YXZ,
@@ -306,11 +335,37 @@ fn build_instances(
                 model: m.to_cols_array_2d(),
                 color: rgb(p.color.r, p.color.g, p.color.b),
                 highlight,
-                uv_rect: WHITE,
+                uv_rect: avatar::material_slot(p.material).map(atlas_rect).unwrap_or(WHITE),
+                extra: [
+                    if avatar::material_slot(p.material).is_some() { 1.0 } else { 0.0 },
+                    if p.material == brixo_core::Material::Neon { 1.0 } else { 0.0 },
+                    transparency.max(0.0),
+                    avatar::material_slot(p.material).map(|_| avatar::material_average(p.material)).unwrap_or(1.0),
+                ],
+                layer: depth_layer(id),
             },
         ));
     }
     (out, players)
+}
+
+/// Parts made one after another (a duplicate, the next brick in a wall)
+/// get different layers, so the ones most likely to overlap flush don't tie.
+fn depth_layer(id: brixo_core::InstanceId) -> f32 {
+    (id.raw() % 63 + 1) as f32
+}
+
+/// Depth runs backwards on screen: 1 at the near plane, 0 far away. With a
+/// floating-point depth buffer that keeps depth precise all the way out,
+/// instead of spending it all on the first few studs, so surfaces a hair
+/// apart stay apart at any distance.
+fn reversed_depth() -> Mat4 {
+    Mat4::from_cols(
+        glam::Vec4::new(1.0, 0.0, 0.0, 0.0),
+        glam::Vec4::new(0.0, 1.0, 0.0, 0.0),
+        glam::Vec4::new(0.0, 0.0, -1.0, 0.0),
+        glam::Vec4::new(0.0, 0.0, 1.0, 1.0),
+    )
 }
 
 /// A colour as picked (sRGB, 0-255) in the linear form the GPU blends in.
@@ -323,9 +378,65 @@ fn rgb(r: u8, g: u8, b: u8) -> [f32; 3] {
     [lin(r), lin(g), lin(b)]
 }
 
+/// How each limb is turned right now (radians about the side axis:
+/// negative swings forward/up): [left arm, right arm, left leg, right leg].
+/// Worked out from what the player is doing, so every client animates
+/// every player the same way without sending animation data.
+fn pose(p: &brixo_core::PlayerProps, time: f32, seed: f32, grip_up: bool) -> [f32; 4] {
+    let walk = (p.speed / 16.0).clamp(0.0, 1.0);
+    let a = (time * 10.0 + seed).sin() * 0.75 * walk;
+    let mut pose = [-a * 0.9, a * 0.9, a, -a];
+    if p.airborne {
+        // The classic jump: arms straight up, legs apart.
+        pose = [-2.8, -2.8, -0.3, 0.3];
+    }
+    if p.equipped.is_some() {
+        // The same arm the runtime puts the tool in (see held_arm_angle).
+        pose[1] = brixo_core::held_arm_angle(p.swing, grip_up);
+    }
+    pose
+}
+
 /// One avatar mesh for one player: they all share the player's transform
-/// and take their colour from the mesh's slot.
-fn avatar_instance(p: &brixo_core::PlayerProps, slot: avatar::Slot, highlight: f32) -> InstanceRaw {
+/// (plus a limb's swing) and take their colour from the mesh's slot.
+/// Falling apart: each piece is thrown off, tumbles through the air and
+/// stops where it lands. Worked out from the seconds since death, so every
+/// client draws the same fall. The transform is in the character's space.
+fn scatter(limb: avatar::Limb, t: f32, seed: f32) -> Mat4 {
+    use avatar::Limb::*;
+    // Each piece's middle, how it's thrown, and half its size lying down.
+    let (center, throw, rest) = match limb {
+        Head => (Vec3::new(0.0, 1.8, 0.0), Vec3::new(0.6, 11.0, 2.0), 0.86),
+        Body => (Vec3::new(0.0, 0.125, 0.0), Vec3::new(0.0, 2.5, -2.5), 0.55),
+        ArmLeft => (Vec3::new(1.43, 0.0, 0.0), Vec3::new(7.0, 7.0, 1.0), 0.45),
+        ArmRight => (Vec3::new(-1.43, 0.0, 0.0), Vec3::new(-7.0, 7.0, -1.0), 0.45),
+        LegLeft => (Vec3::new(0.49, -1.6, 0.0), Vec3::new(3.0, 4.5, 2.5), 0.47),
+        LegRight => (Vec3::new(-0.49, -1.6, 0.0), Vec3::new(-3.0, 4.5, -2.5), 0.47),
+    };
+    // A little different for every player, the same on every screen.
+    let wobble = |k: f32| ((seed * 12.9898 + k * 78.233).sin() * 43758.5453).fract() - 0.5;
+    let v = throw + Vec3::new(wobble(1.0), wobble(2.0).abs(), wobble(3.0)) * 3.0;
+    const GRAVITY: f32 = 60.0;
+    // Land when the piece's middle reaches the floor (feet level) plus half
+    // its size: solve center.y + v.y*t - g*t^2/2 = floor for t.
+    let floor = -2.5 + rest;
+    let a = GRAVITY / 2.0;
+    let land = (v.y + (v.y * v.y + 4.0 * a * (center.y - floor)).max(0.0).sqrt()) / (2.0 * a);
+    let tt = t.min(land);
+    let offset = Vec3::new(v.x * tt, v.y * tt - a * tt * tt, v.z * tt);
+    let axis = Vec3::new(v.z, 0.3, -v.x).normalize_or(Vec3::X);
+    let angle = tt * (6.0 + wobble(4.0) * 4.0);
+    Mat4::from_translation(center + offset) * Mat4::from_axis_angle(axis, angle) * Mat4::from_translation(-center)
+}
+
+fn avatar_instance(
+    p: &brixo_core::PlayerProps,
+    slot: avatar::Slot,
+    limb: avatar::Limb,
+    pose: [f32; 4],
+    seed: f32,
+    highlight: f32,
+) -> InstanceRaw {
     let c = |c: brixo_core::Color| rgb(c.r, c.g, c.b);
     let color = match slot {
         avatar::Slot::Skin => c(p.skin_color),
@@ -338,17 +449,33 @@ fn avatar_instance(p: &brixo_core::PlayerProps, slot: avatar::Slot, highlight: f
         avatar::Slot::Decal => atlas_rect(avatar::face_slot(p.face)),
         _ => WHITE,
     };
-    let m = Mat4::from_translation(to_glam(p.body.position)) * Mat4::from_rotation_y(p.body.rotation.y.to_radians());
+    let base = Mat4::from_translation(to_glam(p.body.position)) * Mat4::from_rotation_y(p.body.rotation.y.to_radians());
+    let angle = match limb {
+        avatar::Limb::Body | avatar::Limb::Head => 0.0,
+        avatar::Limb::ArmLeft => pose[0],
+        avatar::Limb::ArmRight => pose[1],
+        avatar::Limb::LegLeft => pose[2],
+        avatar::Limb::LegRight => pose[3],
+    };
+    let pivot = limb.pivot();
+    let m = if p.dead > 0.0 {
+        base * scatter(limb, p.dead, seed)
+    } else {
+        base * Mat4::from_translation(pivot) * Mat4::from_rotation_x(angle) * Mat4::from_translation(-pivot)
+    };
     InstanceRaw {
         model: m.to_cols_array_2d(),
         color,
         highlight,
         uv_rect,
+        extra: [0.0; 4],
+        layer: 0.0,
     }
 }
 
 struct AvatarDraw {
     slot: avatar::Slot,
+    limb: avatar::Limb,
     vertices: std::ops::Range<u32>,
 }
 
@@ -356,6 +483,8 @@ struct AvatarDraw {
 
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
+    blend_pipeline: wgpu::RenderPipeline,
+    sky_pipeline: wgpu::RenderPipeline,
     /// Every part shape's mesh, one after another, and where each one is.
     shape_buffer: wgpu::Buffer,
     shape_ranges: Vec<std::ops::Range<u32>>,
@@ -364,6 +493,10 @@ pub struct SceneRenderer {
     avatar_draws: Vec<AvatarDraw>,
     /// A player not to draw: your own character, in first person.
     pub hidden_player: Option<brixo_core::InstanceId>,
+    /// The studio's editor: invisible parts are drawn faintly.
+    pub editing: bool,
+    /// Seconds since the app started, for animations.
+    pub time: f32,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     /// Draws the scene from the sun into the shadow map.
@@ -403,6 +536,7 @@ impl SceneRenderer {
             avatar_vertices.extend(mesh.vertices);
             avatar_draws.push(AvatarDraw {
                 slot: mesh.slot,
+                limb: mesh.limb,
                 vertices: start..avatar_vertices.len() as u32,
             });
         }
@@ -542,7 +676,16 @@ impl SceneRenderer {
             label: Some("scene shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
+        // The scene's depth runs backwards (see reversed_depth): nearer is
+        // bigger. The shadow map's runs the usual way.
         let depth_state = |bias| wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Greater,
+            stencil: wgpu::StencilState::default(),
+            bias,
+        };
+        let shadow_depth_state = |bias| wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: true,
             depth_compare: wgpu::CompareFunction::Less,
@@ -558,8 +701,8 @@ impl SceneRenderer {
             unclipped_depth: false,
             conservative: false,
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene pipeline"),
+        let scene_pipeline = |label: &str, blend: wgpu::BlendState, depth_write: bool| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene pipeline layout"),
                 bind_group_layouts: &[&main_layout],
@@ -576,13 +719,54 @@ impl SceneRenderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
             }),
             primitive: primitive(Some(wgpu::Face::Back)),
-            depth_stencil: Some(depth_state(wgpu::DepthBiasState::default())),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                depth_write_enabled: depth_write,
+                ..depth_state(wgpu::DepthBiasState::default())
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let pipeline = scene_pipeline("scene pipeline", wgpu::BlendState::REPLACE, true);
+        // See-through parts: blended over what's already drawn, and not
+        // hiding what's behind them from each other.
+        let blend_pipeline = scene_pipeline("see-through pipeline", wgpu::BlendState::ALPHA_BLENDING, false);
+        // The sky: one triangle covering the screen, drawn first, behind
+        // everything (no depth test or write).
+        let mut sky_depth = depth_state(wgpu::DepthBiasState::default());
+        sky_depth.depth_write_enabled = false;
+        sky_depth.depth_compare = wgpu::CompareFunction::Always;
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sky pipeline layout"),
+                bind_group_layouts: &[&main_layout],
+                push_constant_ranges: &[],
+            })),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_sky"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_sky"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: primitive(None),
+            depth_stencil: Some(sky_depth),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -604,7 +788,7 @@ impl SceneRenderer {
             primitive: primitive(Some(wgpu::Face::Back)),
             // Pushes stored depths back a touch so lit surfaces don't
             // shadow themselves ("shadow acne").
-            depth_stencil: Some(depth_state(wgpu::DepthBiasState {
+            depth_stencil: Some(shadow_depth_state(wgpu::DepthBiasState {
                 constant: 2,
                 slope_scale: 2.0,
                 clamp: 0.0,
@@ -618,11 +802,15 @@ impl SceneRenderer {
 
         Self {
             pipeline,
+            blend_pipeline,
+            sky_pipeline,
             shape_buffer,
             shape_ranges,
             avatar_buffer,
             avatar_draws,
             hidden_player: None,
+            editing: false,
+            time: 0.0,
             camera_buffer,
             camera_bind_group,
             shadow_pipeline,
@@ -662,9 +850,11 @@ impl SceneRenderer {
             -SHADOW_RANGE, SHADOW_RANGE, -SHADOW_RANGE, SHADOW_RANGE, 1.0, 400.0,
         );
         let uniform = CameraUniform {
-            view_proj: camera.view_proj(aspect).to_cols_array_2d(),
+            view_proj: (reversed_depth() * camera.view_proj(aspect)).to_cols_array_2d(),
             light_view_proj: (light_proj * light_view).to_cols_array_2d(),
             sun_dir: [sun.x, sun.y, sun.z, 0.0],
+            inv_view_proj: camera.view_proj(aspect).inverse().to_cols_array_2d(),
+            eye: [camera.position.x, camera.position.y, camera.position.z, self.time],
         };
         if !self.atlas_uploaded.get() {
             let size = self.atlas.size();
@@ -687,13 +877,15 @@ impl SceneRenderer {
         }
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
 
-        let (parts, players) = build_instances(model, selected);
-        // Parts first, grouped by shape so each shape is one draw call.
+        let (parts, players) = build_instances(model, selected, self.editing);
+        // Solid parts first, grouped by shape so each shape is one draw call.
+        // (See-through ones are drawn last, one by one, farthest first.)
+        let see_through = |i: &InstanceRaw| i.extra[2] > 0.001;
         let mut instances = Vec::with_capacity(parts.len());
         let mut part_batches = Vec::new();
         for (k, shape) in brixo_core::Shape::ALL.iter().enumerate() {
             let start = instances.len() as u32;
-            instances.extend(parts.iter().filter(|(s, _)| s == shape).map(|(_, i)| *i));
+            instances.extend(parts.iter().filter(|(s, i)| s == shape && !see_through(i)).map(|(_, i)| *i));
             let end = instances.len() as u32;
             if end > start {
                 part_batches.push((k, start..end));
@@ -707,12 +899,30 @@ impl SceneRenderer {
                 if self.hidden_player == Some(*id) {
                     continue;
                 }
-                instances.push(avatar_instance(p, draw.slot, *highlight));
+                let grip_up = p.equipped.is_some_and(|t| brixo_core::holds_up(model, t));
+                let pose = pose(p, self.time, id.raw() as f32 * 1.7, grip_up);
+                instances.push(avatar_instance(p, draw.slot, draw.limb, pose, id.raw() as f32, *highlight));
             }
             let end = instances.len() as u32;
             if end > start {
                 avatar_batches.push((i, start..end));
             }
+        }
+        let eye = camera.position;
+        let mut glassy: Vec<(usize, InstanceRaw, f32)> = parts
+            .iter()
+            .filter(|(_, i)| see_through(i))
+            .map(|(shape, i)| {
+                let k = brixo_core::Shape::ALL.iter().position(|s| s == shape).unwrap_or(0);
+                let at = Vec3::new(i.model[3][0], i.model[3][1], i.model[3][2]);
+                (k, *i, at.distance_squared(eye))
+            })
+            .collect();
+        glassy.sort_by(|a, b| b.2.total_cmp(&a.2));
+        let mut glassy_draws = Vec::with_capacity(glassy.len());
+        for (k, i, _) in glassy {
+            glassy_draws.push((k, instances.len() as u32));
+            instances.push(i);
         }
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("part instances"),
@@ -772,7 +982,7 @@ impl SceneRenderer {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.depth_view,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
+                    load: wgpu::LoadOp::Clear(0.0),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -780,6 +990,10 @@ impl SceneRenderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+
+        pass.set_pipeline(&self.sky_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.draw(0..3, 0..1);
 
         if !instances.is_empty() {
             pass.set_pipeline(&self.pipeline);
@@ -792,6 +1006,13 @@ impl SceneRenderer {
             pass.set_vertex_buffer(0, self.avatar_buffer.slice(..));
             for (i, batch) in avatar_batches {
                 pass.draw(self.avatar_draws[i].vertices.clone(), batch);
+            }
+            if !glassy_draws.is_empty() {
+                pass.set_pipeline(&self.blend_pipeline);
+                pass.set_vertex_buffer(0, self.shape_buffer.slice(..));
+                for (k, at) in glassy_draws {
+                    pass.draw(self.shape_ranges[k].clone(), at..at + 1);
+                }
             }
         }
     }
@@ -820,6 +1041,8 @@ struct Camera {
     view_proj: mat4x4<f32>,
     light_view_proj: mat4x4<f32>,
     sun_dir: vec4<f32>,
+    inv_view_proj: mat4x4<f32>,
+    eye: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
@@ -841,6 +1064,8 @@ struct InstanceInput {
     @location(6) color: vec3<f32>,
     @location(7) highlight: f32,
     @location(9) uv_rect: vec4<f32>,
+    @location(10) extra: vec4<f32>,
+    @location(11) layer: f32,
 };
 
 struct VsOut {
@@ -850,6 +1075,12 @@ struct VsOut {
     @location(2) highlight: f32,
     @location(3) uv: vec2<f32>,
     @location(4) world: vec3<f32>,
+    // The vertex in the part's own space, in studs, and its own normal:
+    // material textures tile along these, so they stick to the part.
+    @location(5) local: vec3<f32>,
+    @location(6) local_normal: vec3<f32>,
+    @location(7) uv_rect: vec4<f32>,
+    @location(8) extra: vec4<f32>,
 };
 
 @vertex
@@ -858,11 +1089,18 @@ fn vs_main(v: VertexInput, i: InstanceInput) -> VsOut {
     let world = model * vec4<f32>(v.position, 1.0);
     var out: VsOut;
     out.clip_position = camera.view_proj * world;
+    // Each part's tie-breaking nudge toward the camera (see InstanceRaw::layer).
+    out.clip_position.z = out.clip_position.z * (1.0 + i.layer * 1.0e-6);
     out.world = world.xyz;
     out.color = i.color;
     out.normal = (model * vec4<f32>(v.normal, 0.0)).xyz;
     out.highlight = i.highlight;
     out.uv = i.uv_rect.xy + v.uv * i.uv_rect.zw;
+    let scale = vec3<f32>(length(i.m0.xyz), length(i.m1.xyz), length(i.m2.xyz));
+    out.local = v.position * scale;
+    out.local_normal = v.normal;
+    out.uv_rect = i.uv_rect;
+    out.extra = i.extra;
     return out;
 }
 
@@ -872,9 +1110,96 @@ fn vs_shadow(v: VertexInput, i: InstanceInput) -> @builtin(position) vec4<f32> {
     return camera.light_view_proj * model * vec4<f32>(v.position, 1.0);
 }
 
+// --- the sky -------------------------------------------------------------
+// Early-2000s daytime: saturated blue overhead, a pale horizon, a crisp sun
+// and flat two-tone clouds with hard edges. Worked out per pixel from the
+// view direction, so it's sharp at any resolution.
+
+fn hash2(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+}
+
+// Smooth value noise.
+fn vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash2(i);
+    let b = hash2(i + vec2<f32>(1.0, 0.0));
+    let c = hash2(i + vec2<f32>(0.0, 1.0));
+    let d = hash2(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+fn cloud_density(p: vec2<f32>) -> f32 {
+    return vnoise(p) * 0.6 + vnoise(p * 2.3 + vec2<f32>(17.0, 5.0)) * 0.3 + vnoise(p * 5.1) * 0.1;
+}
+
+const HORIZON = vec3<f32>(0.66, 0.84, 0.98);
+
+fn sky_color(dir: vec3<f32>) -> vec3<f32> {
+    let up = dir.y;
+    let zenith = vec3<f32>(0.08, 0.33, 0.78);
+    var col = mix(HORIZON, zenith, pow(clamp(up, 0.0, 1.0), 0.5));
+    // Below the horizon: a soft haze, never black.
+    col = select(col, mix(HORIZON, vec3<f32>(0.52, 0.68, 0.84), clamp(-up * 3.0, 0.0, 1.0)), up < 0.0);
+
+    // The sun: a hard-edged disc and a tight, bright halo.
+    let s = dot(dir, normalize(camera.sun_dir.xyz));
+    col = col + vec3<f32>(1.0, 0.95, 0.75) * smoothstep(0.985, 0.9985, s) * 0.35;
+    col = select(col, vec3<f32>(1.0, 0.98, 0.88), s > 0.9988);
+
+    // Clouds: on a flat layer above, drifting slowly. Crisp edges, a white
+    // top and a cooler shaded underside, like a painted skybox.
+    if (up > 0.015) {
+        let p = dir.xz / up * 0.9 + vec2<f32>(camera.eye.w * 0.012, camera.eye.w * 0.004);
+        let n = cloud_density(p);
+        let cover = smoothstep(0.585, 0.605, n);
+        let shade = smoothstep(0.585, 0.70, cloud_density(p - normalize(camera.sun_dir.xz + vec2<f32>(0.001)) * 0.08));
+        let cloud = mix(vec3<f32>(0.80, 0.86, 0.95), vec3<f32>(1.0, 1.0, 1.0), shade);
+        col = mix(col, cloud, cover * smoothstep(0.015, 0.12, up));
+    }
+    return col;
+}
+
+struct SkyOut {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) ndc: vec2<f32>,
+};
+
+// One triangle that covers the whole screen.
+@vertex
+fn vs_sky(@builtin(vertex_index) i: u32) -> SkyOut {
+    let xy = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0;
+    var out: SkyOut;
+    out.clip_position = vec4<f32>(xy, 0.0, 1.0);
+    out.ndc = xy;
+    return out;
+}
+
+@fragment
+fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    let far = camera.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
+    let dir = normalize(far.xyz / far.w - camera.eye.xyz);
+    return vec4<f32>(sky_color(dir), 1.0);
+}
+
+// A 4x4 ordered-dither pattern, for retro see-through parts.
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let tex = textureSample(atlas, atlas_sampler, in.uv);
+    // Materials tile one texture per 4 studs, on the face's own plane.
+    let an = abs(in.local_normal);
+    var plane = in.local.xy;
+    if (an.y >= an.x && an.y >= an.z) {
+        plane = in.local.xz;
+    } else if (an.x >= an.z) {
+        plane = in.local.zy;
+    }
+    let t = fract(plane / 4.0);
+    let tiled = in.uv_rect.xy + vec2<f32>(t.x, 1.0 - t.y) * in.uv_rect.zw;
+    let tiling = in.extra.x > 0.5;
+    let tex = textureSample(atlas, atlas_sampler, select(in.uv, tiled, tiling));
 
     // Is this point in the sun, or in something's shadow?
     let lp = camera.light_view_proj * vec4<f32>(in.world, 1.0);
@@ -885,18 +1210,33 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let lit = select(1.0, sampled, inside);
 
     // Transparent parts of a decal aren't there at all.
-    if tex.a < 0.5 {
+    if (tex.a < 0.5) {
         discard;
     }
 
-    // Old-school lighting: flat ambient plus one hard sun.
+    // Old-school lighting: flat ambient plus one hard sun. Neon ignores it.
     let n = normalize(in.normal);
     let lambert = max(dot(n, normalize(camera.sun_dir.xyz)), 0.0);
-    let shade = 0.45 + 0.7 * lambert * lit;
-    var rgb = tex.rgb * in.color * shade;
+    let shade = select(0.45 + 0.7 * lambert * lit, 1.15, in.extra.y > 0.5);
+    // Far away, a texture's pixels are smaller than the screen's and would
+    // shimmer like static: fade the detail to the material's average shade.
+    let texels_per_pixel = length(fwidth(plane)) * 16.0;
+    // (The textures are built from soft shapes a few pixels wide, so they
+    // hold up until their pixels get a few times smaller than the screen's.)
+    let fade = smoothstep(1.2, 3.5, texels_per_pixel);
+    let far_faded = mix(tex.rgb, vec3<f32>(in.extra.w), fade);
+    let texel = select(tex.rgb, far_faded * 1.25, tiling);
+    var rgb = texel * in.color * shade;
+    // Distance haze: far things fade into the sky's colour that way, so
+    // the world's edge melts into the horizon instead of ending abruptly.
+    let to_eye = in.world - camera.eye.xyz;
+    let haze = smoothstep(160.0, 520.0, length(to_eye)) * 0.6;
+    rgb = mix(rgb, sky_color(normalize(to_eye)), haze);
     // Selected parts get tinted toward orange.
     rgb = mix(rgb, vec3<f32>(1.0, 0.55, 0.1), in.highlight * 0.45);
-    return vec4<f32>(rgb, 1.0);
+    // See-through parts are blended over what's behind them (they're drawn
+    // last, farthest first); solid ones ignore this.
+    return vec4<f32>(rgb, 1.0 - in.extra.z);
 }
 "#;
 
@@ -982,4 +1322,20 @@ fn ray_unit_cube(origin: Vec3, dir: Vec3) -> Option<f32> {
         return None; // box is behind the camera
     }
     Some(if tmin >= 0.0 { tmin } else { tmax })
+}
+
+#[cfg(test)]
+mod shader_tests {
+    use super::SHADER;
+
+    /// The GPU only checks the shader when an app starts, so a mistake
+    /// there passes every other test and crashes both apps on launch. This
+    /// runs the same checker (naga) at test time.
+    #[test]
+    fn the_shader_compiles() {
+        let module = naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("the shader doesn't validate: {e:?}"));
+    }
 }

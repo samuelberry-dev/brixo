@@ -1,0 +1,35 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Games &middot; Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content"><div class="box"><h2>Games</h2><div class="inner">
+  <div class="searchbar"><input id="q" placeholder="Search games by name or creator" aria-label="Search games"></div>
+  <div class="sorts" id="sorts"></div>
+  <div id="list"></div>
+</div></div></div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  await shell("games");
+  const games = await api("/api/games");
+  const SORTS = {
+    popular: ["Popular", popular],
+    visits: ["Most Visited", (l) => [...l].sort((a, b) => b.visits - a.visits || a.id - b.id)],
+    newest: ["Newest", (l) => [...l].sort((a, b) => b.id - a.id)],
+  };
+  let sort = new URLSearchParams(location.search).get("sort") || "popular";
+  if (!SORTS[sort]) sort = "popular";
+  const q = document.getElementById("q");
+  function draw() {
+    document.getElementById("sorts").innerHTML = Object.entries(SORTS)
+      .map(([k, [label]]) => `<a href="?sort=${k}" data-k="${k}" class="${k === sort ? "on" : ""}">${label}</a>`).join("");
+    for (const a of document.querySelectorAll("#sorts a")) a.onclick = (e) => { e.preventDefault(); sort = a.dataset.k; history.replaceState(null, "", `?sort=${sort}`); draw(); };
+    const term = q.value.trim().toLowerCase();
+    const shown = SORTS[sort][1](games).filter((g) => !term || g.name.toLowerCase().includes(term) || g.owner.toLowerCase().includes(term));
+    document.getElementById("list").innerHTML = shown.length
+      ? `<div class="grid">${shown.map(gameCard).join("")}</div>`
+      : `<p>No games match "${esc(q.value)}".</p>`;
+  }
+  q.oninput = draw;
+  draw();
+})();
+</script></body></html>

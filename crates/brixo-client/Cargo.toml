@@ -8,3 +8,6 @@ brixo-core = { path = "../brixo-core" }
 brixo-render = { path = "../brixo-render" }
 brixo-runtime = { path = "../brixo-runtime" }
 glam = "0.33"
+egui = "0.31"
+brixo-audio = { path = "../brixo-audio" }
+winit = "0.30"

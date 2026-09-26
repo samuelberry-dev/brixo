@@ -1,0 +1,11 @@
+-- Rain bouncy neon balls from the sky!
+every 0.1 seconds
+    b = create("Part", self)
+    b.shape = "ball"
+    b.size = {x = 2, y = 2, z = 2}
+    b.material = "neon"
+    b.color = {r = random(40, 255), g = random(40, 255), b = random(40, 255)}
+    b.position = {x = random(-25, 25), y = 45, z = random(-25, 25)}
+    b.bounce = 0.8
+    b.anchored = false
+end

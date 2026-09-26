@@ -24,8 +24,35 @@ pub(crate) enum Slot {
     Decal,
 }
 
+/// Which body part a mesh belongs to: arms and legs swing about a pivot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Limb {
+    Body,
+    /// The head and face: part of the body, except when falling apart.
+    Head,
+    ArmLeft,
+    ArmRight,
+    LegLeft,
+    LegRight,
+}
+
+impl Limb {
+    /// The shoulder or hip each limb turns around (character space).
+    pub fn pivot(self) -> Vec3 {
+        match self {
+            Limb::Body => Vec3::ZERO,
+            Limb::Head => HEAD_CENTER,
+            Limb::ArmLeft => Vec3::new(1.43, 0.97, 0.0),
+            Limb::ArmRight => Vec3::new(-1.43, 0.97, 0.0),
+            Limb::LegLeft => Vec3::new(0.49, -0.8, 0.0),
+            Limb::LegRight => Vec3::new(-0.49, -0.8, 0.0),
+        }
+    }
+}
+
 pub(crate) struct AvatarMesh {
     pub slot: Slot,
+    pub limb: Limb,
     pub vertices: Vec<Vertex>,
 }
 
@@ -35,29 +62,23 @@ pub(crate) const HEAD_RADIUS: f32 = 0.86;
 const DECAL_SIZE: f32 = 1.25;
 
 pub(crate) fn meshes() -> Vec<AvatarMesh> {
-    let mut skin = Mesh::default();
-    let mut shirt = Mesh::default();
-    let mut pants = Mesh::default();
-    let mut shoes = Mesh::default();
-    for side in [-1.0f32, 1.0] {
-        shoes.cuboid(Vec3::new(side * 0.49, -2.325, 0.04), Vec3::new(0.9, 0.35, 1.0));
-        pants.cuboid(Vec3::new(side * 0.49, -1.475, 0.0), Vec3::new(0.88, 1.35, 0.94));
-        shirt.cuboid(Vec3::new(side * 1.43, 0.295, 0.0), Vec3::new(0.8, 1.35, 0.9));
-        skin.cuboid(Vec3::new(side * 1.43, -0.63, 0.0), Vec3::new(0.72, 0.5, 0.82));
+    let mut out = Vec::new();
+    let mut piece = |slot, limb, build: &dyn Fn(&mut Mesh)| {
+        let mut m = Mesh::default();
+        build(&mut m);
+        out.push(AvatarMesh { slot, limb, vertices: m.vertices });
+    };
+    // The character faces +Z, so its right side is -X.
+    for (side, arm, leg) in [(1.0f32, Limb::ArmLeft, Limb::LegLeft), (-1.0, Limb::ArmRight, Limb::LegRight)] {
+        piece(Slot::Shoes, leg, &|m| m.cuboid(Vec3::new(side * 0.49, -2.325, 0.04), Vec3::new(0.9, 0.35, 1.0)));
+        piece(Slot::Pants, leg, &|m| m.cuboid(Vec3::new(side * 0.49, -1.475, 0.0), Vec3::new(0.88, 1.35, 0.94)));
+        piece(Slot::Shirt, arm, &|m| m.cuboid(Vec3::new(side * 1.43, 0.295, 0.0), Vec3::new(0.8, 1.35, 0.9)));
+        piece(Slot::Skin, arm, &|m| m.cuboid(Vec3::new(side * 1.43, -0.63, 0.0), Vec3::new(0.72, 0.5, 0.82)));
     }
-    shirt.cuboid(Vec3::new(0.0, 0.125, 0.0), Vec3::new(2.0, 1.85, 1.02));
-    skin.sphere(HEAD_CENTER, HEAD_RADIUS);
-
-    let mut decal = Mesh::default();
-    decal.face_patch();
-
-    vec![
-        AvatarMesh { slot: Slot::Skin, vertices: skin.vertices },
-        AvatarMesh { slot: Slot::Shirt, vertices: shirt.vertices },
-        AvatarMesh { slot: Slot::Pants, vertices: pants.vertices },
-        AvatarMesh { slot: Slot::Shoes, vertices: shoes.vertices },
-        AvatarMesh { slot: Slot::Decal, vertices: decal.vertices },
-    ]
+    piece(Slot::Shirt, Limb::Body, &|m| m.cuboid(Vec3::new(0.0, 0.125, 0.0), Vec3::new(2.0, 1.85, 1.02)));
+    piece(Slot::Skin, Limb::Head, &|m| m.sphere(HEAD_CENTER, HEAD_RADIUS));
+    piece(Slot::Decal, Limb::Head, &|m| m.face_patch());
+    out
 }
 
 #[derive(Default)]
@@ -205,7 +226,125 @@ impl Mesh {
 /// Each face is a 64x64 pixel-art picture; slot 0 of the atlas is plain
 /// white, for everything that isn't textured.
 pub(crate) const CELL: u32 = 64;
-pub(crate) const ATLAS_SLOTS: u32 = 1 + Face::ALL.len() as u32;
+/// Materials with a texture (Plastic and Neon are plain).
+pub(crate) const TEXTURED: [brixo_core::Material; 5] = [
+    brixo_core::Material::Wood,
+    brixo_core::Material::Brick,
+    brixo_core::Material::Metal,
+    brixo_core::Material::Grass,
+    brixo_core::Material::Concrete,
+];
+pub(crate) const ATLAS_SLOTS: u32 = 1 + Face::ALL.len() as u32 + TEXTURED.len() as u32;
+
+/// Which atlas slot a material's texture lives in, if it has one.
+pub(crate) fn material_slot(m: brixo_core::Material) -> Option<u32> {
+    TEXTURED.iter().position(|t| *t == m).map(|i| 1 + Face::ALL.len() as u32 + i as u32)
+}
+
+/// A small hash for texture noise: the same pixel always gets the same value.
+fn noise(x: u32, y: u32, seed: u32) -> f32 {
+    let mut h = x.wrapping_mul(374_761_393) ^ y.wrapping_mul(668_265_263) ^ seed.wrapping_mul(2_246_822_519);
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    ((h ^ (h >> 16)) & 0xffff) as f32 / 65535.0
+}
+
+/// Smooth, tileable blobs: noise on a coarse grid of `cell`-pixel squares
+/// (wrapping every 64 pixels), blended between grid points. Gives patches
+/// and mottling instead of per-pixel static.
+fn blobs(x: u32, y: u32, cell: u32, seed: u32) -> f32 {
+    let n = 64 / cell;
+    let (gx, gy) = (x / cell, y / cell);
+    let (fx, fy) = ((x % cell) as f32 / cell as f32, (y % cell) as f32 / cell as f32);
+    let ease = |t: f32| t * t * (3.0 - 2.0 * t);
+    let at = |i: u32, j: u32| noise(i % n, j % n, seed);
+    let top = at(gx, gy) + (at(gx + 1, gy) - at(gx, gy)) * ease(fx);
+    let bottom = at(gx, gy + 1) + (at(gx + 1, gy + 1) - at(gx, gy + 1)) * ease(fx);
+    top + (bottom - top) * ease(fy)
+}
+
+/// Each textured material's average shade (as stored in the atlas), for
+/// fading detail out in the distance.
+pub(crate) fn material_average(m: brixo_core::Material) -> f32 {
+    static AVERAGES: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    let all = AVERAGES.get_or_init(|| {
+        brixo_core::Material::ALL
+            .iter()
+            .map(|&m| {
+                let mut sum = 0.0;
+                for y in 0..CELL {
+                    for x in 0..CELL {
+                        sum += (material_pixel(m, x, y) / 1.25).clamp(0.0, 1.0);
+                    }
+                }
+                sum / (CELL * CELL) as f32
+            })
+            .collect()
+    });
+    all[brixo_core::Material::ALL.iter().position(|x| *x == m).unwrap()]
+}
+
+/// One pixel of a material texture (64x64, tiles seamlessly), as a
+/// brightness around 1.0 that multiplies the part's colour.
+fn material_pixel(m: brixo_core::Material, x: u32, y: u32) -> f32 {
+    use brixo_core::Material::*;
+    let n = noise(x, y, m as u32);
+    match m {
+        Wood => {
+            // Four planks, with grain streaks and dark seams.
+            let seam = y % 16 == 15;
+            let plank = y / 16;
+            let grain = noise(x / 6 + plank * 17, y, 3);
+            let end = (x + plank * 23) % 64 == 0;
+            if seam || end { 0.55 } else { 0.82 + grain * 0.12 + n * 0.06 }
+        }
+        Brick => {
+            // Staggered bricks and light mortar.
+            let row = y / 8;
+            let shift = if row % 2 == 0 { 0 } else { 8 };
+            let mortar = y % 8 == 7 || (x + shift) % 16 == 15;
+            if mortar { 1.05 } else { 0.72 + noise((x + shift) / 16, row, 9) * 0.14 + n * 0.04 }
+        }
+        Metal => {
+            // Diamond plate: raised bumps on brushed steel.
+            let bx = (x % 8) as i32 - 4;
+            let by = (y % 8) as i32 - 4;
+            let bump = bx.abs() + by.abs() <= 2 && ((x / 8 + y / 8) % 2 == 0);
+            let brushed = 0.86 + noise(x, y / 4, 5) * 0.08;
+            if bump { brushed + 0.14 } else { brushed }
+        }
+        Grass => {
+            // Soft light and dark patches, with short blades on top.
+            let patch = blobs(x, y, 16, 7) * 0.6 + blobs(x, y, 8, 8) * 0.4;
+            let mut v = 0.8 + (patch - 0.5) * 0.24;
+            // One blade per 8x8 cell: a 1x3 stroke at a hashed spot, some
+            // lighter (catching the sun), some darker.
+            let (cx, cy) = (x / 8, y / 8);
+            let h = noise(cx, cy, 21);
+            let bx = cx * 8 + (h * 7.0) as u32;
+            let by = cy * 8 + (noise(cx, cy, 22) * 5.0) as u32;
+            if x == bx && (by..by + 3).contains(&y) {
+                v += if h > 0.5 { 0.14 } else { -0.12 };
+            }
+            v
+        }
+        Concrete => {
+            // Two slabs per tile each way: a dark seam with a lit edge, and
+            // gentle mottling rather than speckle.
+            let mut v = 0.9 + (blobs(x, y, 16, 11) - 0.5) * 0.1 + (blobs(x, y, 4, 12) - 0.5) * 0.03;
+            if x % 32 == 31 || y % 32 == 31 {
+                v = 0.7;
+            } else if x % 32 == 0 || y % 32 == 0 {
+                v += 0.05;
+            }
+            // A few small worn pits.
+            if noise(x / 2, y / 2, 13) > 0.985 {
+                v -= 0.1;
+            }
+            v
+        }
+        Plastic | Neon => 1.0,
+    }
+}
 
 /// Which atlas slot a face lives in.
 pub(crate) fn face_slot(face: Face) -> u32 {
@@ -220,13 +359,18 @@ pub(crate) fn face_atlas() -> Vec<u8> {
         for x in 0..width {
             let i = ((y * width + x) * 4) as usize;
             let slot = x / CELL;
-            let ink = slot > 0 && face_ink(Face::ALL[slot as usize - 1], (x % CELL) as f32 + 0.5, y as f32 + 0.5);
+            let faces = Face::ALL.len() as u32;
             let rgba = if slot == 0 {
                 [255, 255, 255, 255]
-            } else if ink {
-                [20, 20, 20, 255]
+            } else if slot <= faces {
+                let ink = face_ink(Face::ALL[slot as usize - 1], (x % CELL) as f32 + 0.5, y as f32 + 0.5);
+                if ink { [20, 20, 20, 255] } else { [0, 0, 0, 0] }
             } else {
-                [0, 0, 0, 0]
+                // Brightness above 1 can't be stored, so textures are kept
+                // at 0..1 and the shader scales them back up by 1.25.
+                let b = (material_pixel(TEXTURED[(slot - faces - 1) as usize], x % CELL, y) / 1.25).clamp(0.0, 1.0);
+                let v = (b * 255.0) as u8;
+                [v, v, v, 255]
             };
             px[i..i + 4].copy_from_slice(&rgba);
         }
@@ -364,8 +508,8 @@ mod tests {
                     px[((y * width + x) * 4 + 3) as usize] == 255
                 })
                 .count();
-            if slot == 0 {
-                assert_eq!(inked, (CELL * CELL) as usize);
+            if slot == 0 || slot > Face::ALL.len() as u32 {
+                assert_eq!(inked, (CELL * CELL) as usize, "white and material cells are solid");
             } else {
                 assert!(inked > 60 && inked < 800, "slot {slot} has {inked} ink pixels");
             }
