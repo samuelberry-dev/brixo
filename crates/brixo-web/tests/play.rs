@@ -193,8 +193,16 @@ fn game_servers_use_the_public_address_and_port_range() {
     assert_eq!(v6.address(7500), "[::1]:7500");
 
     // Something else already has the first port of the range: it's skipped.
-    let squatter = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
-    let first = squatter.local_addr().unwrap().port();
+    // The range sits below the ports the OS hands out for outgoing
+    // connections (Windows gives those in order, and a client's own end can
+    // land on a game port and connect to itself), like 7500-7519 on the server.
+    let (squatter, first) = (20000..30000u16)
+        .step_by(7)
+        .find_map(|p| {
+            let free = |q: u16| std::net::TcpListener::bind(("0.0.0.0", q)).is_ok();
+            (free(p + 1) && free(p + 2)).then(|| std::net::TcpListener::bind(("0.0.0.0", p)).ok().map(|l| (l, p))).flatten()
+        })
+        .expect("three free ports between 20000 and 30000");
     let (site, app) = start_site_with(with_network(Network { public_host: "localhost".into(), ports: Some((first, first + 2)) }));
     let ann = browser();
     ann.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Annie", "password": "pass words"})).unwrap();
@@ -309,3 +317,4 @@ fn studio_can_publish_big_games() {
     let code = status(maker.post(&format!("{site}/api/games")).send_json(serde_json::json!({"name": "My Flagfall", "data": data})));
     assert_eq!(code, 200);
 }
+

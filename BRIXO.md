@@ -316,6 +316,12 @@ wait(0.5)
     internet switches (see section 1).
   - Page tests: the banner has its own login form, so click
     `#form button[type=submit]`, never the first submit button on the page.
+  - Joining by name: "localhost" is ::1 first on Windows, and game servers
+    listen on IPv4, so `connect_any` tries every address. It also rejects a
+    socket connected to itself (local addr == target): with nothing on that
+    port, Windows' in-order local ports can make TCP connect to itself, which
+    looks connected but only echoes our own Hello. Tests keep game ports in
+    20000-30000, below the OS's outgoing-port range, like 7500-7519 live.
 
 ---
 

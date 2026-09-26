@@ -229,3 +229,26 @@ fn storage_stays_on_the_server_and_changes_arrive_as_changes() {
     wait_for(&mut [&mut ann], "the copy going away", |cs| cs[0].world.find_first("Copy").is_none());
     assert_eq!(ann.world.part(still).unwrap().position, Vec3::new(20.0, 1.0, 0.0), "untouched parts are still right");
 }
+
+#[test]
+fn joins_through_a_name_with_several_addresses() {
+    // "localhost" can mean ::1 before 127.0.0.1 (it does on Windows), while
+    // game servers listen on IPv4: the client must try each address.
+    let handle = brixo_server::start(brixo_core::DataModel::new(), 0).unwrap();
+    let addr = format!("localhost:{}", handle.port());
+    let mut c = brixo_server::NetClient::connect(&addr, "Tess").unwrap();
+
+    // The same on any machine: the first address is dead, the second works.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap(); // freed at once
+    let live: std::net::SocketAddr = format!("127.0.0.1:{}", handle.port()).parse().unwrap();
+    assert!(brixo_server::connect_any([dead]).is_err());
+    assert!(brixo_server::connect_any([dead, live]).is_ok(), "falls through to the address that answers");
+    let joined = brixo_server::connect_any([live]).unwrap();
+    assert_ne!(joined.local_addr().unwrap(), live, "a real connection, not one to itself");
+    let start = std::time::Instant::now();
+    while c.me.is_none() {
+        c.poll();
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "never joined");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}

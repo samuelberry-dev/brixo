@@ -41,11 +41,7 @@ impl NetClient {
     }
 
     fn connect_with(addr: &str, name: &str, ticket: Option<String>) -> io::Result<NetClient> {
-        let target = addr
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no such address"))?;
-        let mut writer = TcpStream::connect_timeout(&target, Duration::from_secs(3))?;
+        let mut writer = connect_any(addr.to_socket_addrs()?)?;
         writer.set_nodelay(true)?;
         write_msg(&mut writer, &ToServer::Hello { name: name.to_string(), ticket })?;
 
@@ -147,4 +143,23 @@ impl Drop for NetClient {
     fn drop(&mut self) {
         let _ = self.writer.shutdown(std::net::Shutdown::Both);
     }
+}
+
+/// A name can give several addresses (IPv6 then IPv4 for "localhost" on
+/// Windows, or a domain with both): try each until one answers.
+pub fn connect_any(targets: impl IntoIterator<Item = std::net::SocketAddr>) -> io::Result<TcpStream> {
+    let mut last_err = io::Error::new(io::ErrorKind::InvalidInput, "no such address");
+    for target in targets {
+        match TcpStream::connect_timeout(&target, Duration::from_secs(3)) {
+            // With no server on that port, TCP can connect a socket to itself
+            // when the OS happens to pick the same port for our end (Windows
+            // hands local ports out in order). That's nobody: try the next.
+            Ok(s) if s.local_addr().ok() == Some(target) => {
+                last_err = io::Error::new(io::ErrorKind::ConnectionRefused, format!("nothing is listening at {target}"));
+            }
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
 }

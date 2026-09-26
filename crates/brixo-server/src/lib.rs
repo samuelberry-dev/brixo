@@ -8,6 +8,6 @@ pub mod client;
 pub mod protocol;
 pub mod server;
 
-pub use client::NetClient;
+pub use client::{connect_any, NetClient};
 pub use protocol::DEFAULT_PORT;
 pub use server::{start, start_with_tickets, Identity, TicketCheck, ServerHandle};
