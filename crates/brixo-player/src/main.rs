@@ -1,7 +1,10 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //! Brixo Player: pick a game and play it. No editor, just the game.
 //!
 //! Usage:
-//!   brixo-player                              the games library
+//!   brixo-player                              the home screen (games open from the website)
+//!   brixo-player brixo://play?...             what Play on the website opens
+//!   brixo-player --uninstall                  what Windows' "Uninstall" runs
 //!   brixo-player game.brixo                   play that file (so "Open with" works)
 //!   brixo-player --join 127.0.0.1:4570 [--name Ann]   join a server
 
@@ -11,6 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use brixo_client::{draw_beacons, projector, Audio, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GameEntry, GuiEvents, Held};
+use brixo_client::install::{self, App};
 
 mod protocol;
 use brixo_core::DataModel;
@@ -155,6 +159,9 @@ struct Player {
     /// instead: then we turn by how far it moved and put it back.
     confined: bool,
     started: Instant,
+    /// A newer Brixo Player on the website, once the check finds one.
+    update: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    update_hidden: bool,
 }
 
 impl Player {
@@ -172,6 +179,8 @@ impl Player {
             chat: ChatLog::default(),
             chat_open: false,
             chat_text: String::new(),
+            update: install::check_for_update(App::Player),
+            update_hidden: false,
             locked: false,
             confined: false,
             started: Instant::now(),
@@ -394,7 +403,9 @@ impl Player {
         let mut said: Option<String> = None;
         // Clicks on the game's GUI and hotbar, and whether a click swung a tool.
         let mut gui_input: Option<(GuiEvents, bool)> = None;
-        let full_output = gpu.egui_ctx.run(raw_input, |ctx| match &mut self.screen {
+        let update = self.update.lock().unwrap().clone();
+        let update_hidden = &mut self.update_hidden;
+        let full_output = gpu.egui_ctx.run(raw_input, |ctx| { match &mut self.screen {
             Screen::Home { message } => home_ui(ctx, message.as_deref()),
             Screen::Playing(s) => {
                 // The game's own GUI and the hotbar, under our menus. The
@@ -455,6 +466,8 @@ impl Player {
                     look_around(ctx, camera, &mut s.follow);
                 }
             }
+        }
+        update_notice(ctx, update.as_deref(), update_hidden);
         });
         gpu.egui_state.handle_platform_output(&gpu.window, full_output.platform_output);
 
@@ -728,8 +741,37 @@ fn home_ui(ctx: &egui::Context, message: Option<&str>) {
             ui.add_space(8.0);
             let text = message.unwrap_or("Games open from the Brixo website: find one you like and press Play.");
             ui.label(egui::RichText::new(text).size(20.0).color(egui::Color32::WHITE));
+            ui.add_space(16.0);
+            let site = install::site();
+            let label = format!("Open {}", site.trim_start_matches("https://").trim_start_matches("http://"));
+            if ui.add(egui::Button::new(egui::RichText::new(label).size(18.0)).min_size(egui::vec2(220.0, 40.0))).clicked() {
+                install::open_url(&site);
+            }
         });
     });
+}
+
+/// "A new Brixo Player is out" along the top, until dismissed.
+fn update_notice(ctx: &egui::Context, latest: Option<&str>, hidden: &mut bool) {
+    let Some(latest) = latest else { return };
+    if *hidden {
+        return;
+    }
+    egui::Area::new(egui::Id::new("update notice"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 10.0])
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("A new {} is out ({latest}).", App::Player.title()));
+                    if ui.button("Get it").clicked() {
+                        install::open_url(&format!("{}/download", install::site()));
+                    }
+                    if ui.small_button("x").clicked() {
+                        *hidden = true;
+                    }
+                });
+            });
+        });
 }
 
 fn game_ui(ctx: &egui::Context, s: &mut Session, action: &mut Option<Action>) {
@@ -876,8 +918,13 @@ impl ApplicationHandler for Player {
             self.join(addr, name);
             return;
         }
+        // Just installed from the website's download.
+        if args.iter().any(|a| a == "--installed") {
+            self.screen = Screen::Home { message: Some(format!("{} is installed! Pick a game on {} and press Play.", App::Player.title(), install::site())) };
+            return;
+        }
         // `brixo-player path/to/game.brixo` plays that game straight away.
-        if let Some(path) = std::env::args().nth(1) {
+        if let Some(path) = std::env::args().nth(1).filter(|a| !a.starts_with("--")) {
             let path = Path::new(&path).to_path_buf();
             let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
             self.play(GameEntry { name, path });
@@ -961,6 +1008,12 @@ impl ApplicationHandler for Player {
 }
 
 fn main() {
+    // The downloaded BrixoPlayer.exe installs itself, then hands over to the
+    // installed copy; `--uninstall` is what Windows' Uninstall runs.
+    let startup = install::on_startup(App::Player, |exe| protocol::register_exe(exe).map(|_| ()));
+    if startup == install::Startup::Exit {
+        return;
+    }
     // `brixo-player --register-protocol`: make Play on the website open us.
     if std::env::args().nth(1).as_deref() == Some("--register-protocol") {
         match protocol::register() {

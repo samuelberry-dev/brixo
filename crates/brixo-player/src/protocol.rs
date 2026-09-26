@@ -47,12 +47,18 @@ fn decode(s: &str) -> String {
 }
 
 /// Tells the OS to open `brixo://` links with this program.
-#[cfg(target_os = "windows")]
 pub fn register() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    register_exe(&exe)
+}
+
+/// Tells the OS to open `brixo://` links with `exe` (the installer passes
+/// the installed copy).
+#[cfg(target_os = "windows")]
+pub fn register_exe(exe: &std::path::Path) -> Result<String, String> {
     // Under HKEY_CURRENT_USER, so no admin rights are needed.
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(r"Software\Classes\brixo").map_err(|e| e.to_string())?;
     key.set_value("", &"URL:Brixo").map_err(|e| e.to_string())?;
@@ -63,8 +69,7 @@ pub fn register() -> Result<String, String> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn register() -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+pub fn register_exe(exe: &std::path::Path) -> Result<String, String> {
     let home = std::env::var_os("HOME").ok_or("no home folder")?;
     let dir = std::path::Path::new(&home).join(".local/share/applications");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -84,7 +89,7 @@ pub fn register() -> Result<String, String> {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-pub fn register() -> Result<String, String> {
+pub fn register_exe(_exe: &std::path::Path) -> Result<String, String> {
     Err("registering brixo:// links isn't supported on this system yet".into())
 }
 

@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
@@ -7,6 +8,7 @@ mod editing;
 
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Shape, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
+use brixo_client::install::{self, App};
 use brixo_client::{draw_beacons, projector, Audio, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GuiEvents, Held};
 use brixo_runtime::{Game, LogLine, PlayerInput};
 use glam::{EulerRot, Mat4, Quat, Vec3};
@@ -16,7 +18,18 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-const SCENE_PATH: &str = "scene.brixo";
+/// Where Save and Load keep the scene: next to you when you run your own
+/// build, and in your Brixo folder (C:\Users\<you>\Brixo) for the
+/// installed Studio, which may not be allowed to write where it starts.
+fn scene_path() -> String {
+    if install::is_installed_copy(App::Studio) {
+        if let Some(brixo) = brixo_client::games_dir().parent() {
+            let _ = std::fs::create_dir_all(brixo);
+            return brixo.join("scene.brixo").to_string_lossy().into_owned();
+        }
+    }
+    "scene.brixo".to_string()
+}
 /// Output lines kept in the Output panel.
 const OUTPUT_LIMIT: usize = 1000;
 
@@ -221,6 +234,9 @@ end
 "#;
 
 struct Editor {
+    /// A newer Brixo Studio on the website, once the check finds one.
+    update: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    update_hidden: bool,
     tool: Tool,
     snap: bool,
     drag: Option<Drag>,
@@ -292,7 +308,9 @@ impl Default for Editor {
             prop_session: false,
             follow: FollowCamera::default(),
             publish_name: "My Game".to_string(),
-            web_site: "http://127.0.0.1:7420".to_string(),
+            web_site: install::site(),
+            update: install::check_for_update(App::Studio),
+            update_hidden: false,
             web_user: String::new(),
             web_pass: String::new(),
             web_error: String::new(),
@@ -339,13 +357,47 @@ impl Drop for Hosted {
     }
 }
 
+/// "A new Brixo Studio is out" along the top, until dismissed.
+fn update_notice(ctx: &egui::Context, editor: &mut Editor) {
+    let latest = editor.update.lock().unwrap().clone();
+    let Some(latest) = latest else { return };
+    if editor.update_hidden {
+        return;
+    }
+    egui::Area::new(egui::Id::new("update notice"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("A new {} is out ({latest}).", App::Studio.title()));
+                    if ui.button("Get it").clicked() {
+                        install::open_url(&format!("{}/download", install::site()));
+                    }
+                    if ui.small_button("x").clicked() {
+                        editor.update_hidden = true;
+                    }
+                });
+            });
+        });
+}
+
+/// The Brixo Player for test windows: your own build next to Studio, or
+/// the installed one.
+fn find_player() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let built = exe.with_file_name(format!("brixo-player{}", std::env::consts::EXE_SUFFIX));
+    if built.exists() {
+        return Ok(built);
+    }
+    match install::installed_exe(App::Player) {
+        Some(p) if p.exists() => Ok(p),
+        _ => Err(format!("Testing with players needs Brixo Player: get it at {}/download", install::site())),
+    }
+}
+
 /// Starts a server on the scene and opens `players` player windows on it.
 fn host(model: &DataModel, players: u32) -> Result<Hosted, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let player = exe.with_file_name(format!("brixo-player{}", std::env::consts::EXE_SUFFIX));
-    if !player.exists() {
-        return Err("Brixo Player isn't built yet. Run: cargo build -p brixo-player".to_string());
-    }
+    let player = find_player()?;
     let server = brixo_server::start(model.clone(), 0).map_err(|e| format!("couldn't start a server: {e}"))?;
     let mut hosted = Hosted { server, windows: Vec::new() };
     for _ in 0..players {
@@ -388,7 +440,7 @@ struct Studio {
 impl Studio {
     fn new() -> Self {
         // `brixo-studio game.brixo` opens that game; otherwise the demo.
-        let opened = std::env::args().nth(1).map(|path| (DataModel::load_file(&path), path));
+        let opened = std::env::args().nth(1).filter(|a| !a.starts_with("--")).map(|path| (DataModel::load_file(&path), path));
         let (model, opened_status) = match opened {
             Some((Ok(model), path)) => (model, Some(format!("Opened {path}"))),
             Some((Err(e), path)) => (demo_scene(), Some(format!("Couldn't open {path}: {e}"))),
@@ -706,6 +758,7 @@ impl Studio {
                 toggle_play |= build_ui(
                     ctx, scene, selection, status, camera, editor, output, playing, play_time,
                 );
+                update_notice(ctx, editor);
             });
             gpu.egui_state
                 .handle_platform_output(&gpu.window, full_output.platform_output);
@@ -1516,17 +1569,17 @@ fn build_ui(
                 editor.show_web_login = true;
             }
         }
-        Some(Action::Save) => match model.save_file(SCENE_PATH) {
-            Ok(()) => *status = format!("Saved to {SCENE_PATH}"),
+        Some(Action::Save) => match model.save_file(&scene_path()) {
+            Ok(()) => *status = format!("Saved to {}", scene_path()),
             Err(e) => *status = format!("Save failed: {e}"),
         },
-        Some(Action::Load) => match DataModel::load_file(SCENE_PATH) {
+        Some(Action::Load) => match DataModel::load_file(&scene_path()) {
             Ok(loaded) => {
                 editor.history.checkpoint(model);
                 *model = loaded;
                 *selection = None;
                 editor.drag = None;
-                *status = format!("Loaded {SCENE_PATH}");
+                *status = format!("Loaded {}", scene_path());
             }
             Err(e) => *status = format!("Load failed: {e}"),
         },
@@ -2873,6 +2926,11 @@ fn demo_scene() -> DataModel {
 }
 
 fn main() {
+    // The downloaded BrixoStudio.exe installs itself, then hands over to the
+    // installed copy; `--uninstall` is what Windows' Uninstall runs.
+    if install::on_startup(App::Studio, |_| Ok(())) == install::Startup::Exit {
+        return;
+    }
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut studio = Studio::new();

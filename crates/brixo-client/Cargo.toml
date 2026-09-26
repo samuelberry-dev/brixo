@@ -11,3 +11,5 @@ glam = "0.33"
 egui = "0.31"
 brixo-audio = { path = "../brixo-audio" }
 winit = "0.30"
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"

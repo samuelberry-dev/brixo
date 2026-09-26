@@ -24,7 +24,7 @@ const COOKIE: &str = "brixo_session";
 
 /// How the website runs. The defaults are right for your own PC; a real
 /// server turns on the last three (see main.rs for the settings' names).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Settings {
     /// Where players reach game servers.
     pub network: Network,
@@ -36,6 +36,21 @@ pub struct Settings {
     pub trust_proxy: bool,
     /// Signing up needs an invite code (BRIXO_INVITE_ONLY=1).
     pub invite_only: bool,
+    /// Where the Player and Studio downloads and their versions.json live
+    /// (BRIXO_DOWNLOADS). Live, Caddy serves /files/ from here itself.
+    pub downloads: std::path::PathBuf,
+}
+
+impl Default for Settings {
+    fn default() -> Settings {
+        Settings {
+            network: Network::default(),
+            secure_cookies: false,
+            trust_proxy: false,
+            invite_only: false,
+            downloads: "downloads".into(),
+        }
+    }
 }
 
 pub struct App {
@@ -83,6 +98,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/games/:id/thumbnail", get(thumbnail))
         .route("/api/games/:id/play", post(play))
         .route("/api/users/:name", get(profile))
+        .route("/api/version", get(version))
+        .route("/files/:name", get(download_file))
         .route("/", get(|| async { Html(include_str!("web/index.html")) }))
         .route("/games", get(|| async { Html(include_str!("web/games.html")) }))
         .route("/games/:id", get(|| async { Html(include_str!("web/game.html")) }))
@@ -424,6 +441,26 @@ async fn stats(State(app): State<Arc<App>>) -> Result<Json<Stats>> {
     let online = app.servers.player_counts().values().sum();
     let (users, games) = app.db.counts().map_err(oops)?;
     Ok(Json(Stats { online, games, users, invite_only: app.settings.invite_only }))
+}
+
+/// The latest Player and Studio downloads, as tools/release.ps1 wrote them:
+/// {"player": {"version", "file", "bytes"}, "studio": {...}}. Empty until
+/// the first release. Player and Studio check it for updates.
+async fn version(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    let path = app.settings.downloads.join("versions.json");
+    let v = tokio::fs::read_to_string(path).await.ok().and_then(|t| serde_json::from_str(&t).ok());
+    Json(v.unwrap_or_else(|| serde_json::json!({})))
+}
+
+/// A download, on your own PC. (Live, Caddy answers /files/ before this.)
+async fn download_file(State(app): State<Arc<App>>, Path(name): Path<String>) -> Result<Response> {
+    let safe = !name.is_empty() && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    if !safe {
+        return Err(not_found("file"));
+    }
+    let bytes = tokio::fs::read(app.settings.downloads.join(&name)).await.map_err(|_| not_found("file"))?;
+    let disposition = format!("attachment; filename=\"{name}\"");
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream".to_string()), (header::CONTENT_DISPOSITION, disposition)], bytes).into_response())
 }
 
 #[derive(Deserialize)]

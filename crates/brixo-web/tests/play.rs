@@ -318,3 +318,33 @@ fn studio_can_publish_big_games() {
     assert_eq!(code, 200);
 }
 
+
+#[test]
+fn downloads_and_versions() {
+    let dir = std::env::temp_dir().join(format!("brixo-downloads-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (site, _app) = start_site_with(brixo_web::api::Settings { downloads: dir.clone(), ..Default::default() });
+    let get = |path: &str| browser().get(&format!("{site}{path}")).call();
+
+    // Before the first release: no versions, no files.
+    let v: serde_json::Value = get("/api/version").unwrap().into_json().unwrap();
+    assert_eq!(v, serde_json::json!({}));
+    assert_eq!(status(get("/files/BrixoPlayer.exe")), 404);
+
+    // After tools/release.ps1 has uploaded.
+    std::fs::write(dir.join("BrixoPlayer.exe"), b"MZ pretend program").unwrap();
+    std::fs::write(dir.join("versions.json"), r#"{"player": {"version": "2026.09.26.0100", "file": "BrixoPlayer.exe", "bytes": 18}}"#).unwrap();
+    let v: serde_json::Value = get("/api/version").unwrap().into_json().unwrap();
+    assert_eq!(v["player"]["version"], "2026.09.26.0100");
+    let file = get("/files/BrixoPlayer.exe").unwrap();
+    assert!(file.header("content-disposition").unwrap().contains("attachment"));
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut file.into_reader(), &mut body).unwrap();
+    assert_eq!(body, b"MZ pretend program");
+
+    // Nothing outside the downloads folder.
+    for sneaky in ["/files/..%2Fversions.json", "/files/%2E%2E%2F%2E%2E%2Fetc%2Fpasswd", "/files/.hidden", "/files/a%5Cb"] {
+        assert_eq!(status(get(sneaky)), 404, "{sneaky}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1,7 +1,18 @@
 # Caddy gets and renews the HTTPS certificate by itself.
 playbrixo.com {
-	encode gzip
-	reverse_proxy 127.0.0.1:7420
+	# Player and Studio downloads, straight from disk (tools/release.ps1
+	# uploads them to this folder).
+	handle_path /files/* {
+		root * /var/www/brixo-downloads
+		header Content-Disposition attachment
+		file_server
+	}
+
+	# Everything else is the Brixo website.
+	handle {
+		encode gzip
+		reverse_proxy 127.0.0.1:7420
+	}
 }
 
 www.playbrixo.com {

@@ -51,6 +51,24 @@ Admin is the command line, on the same database (safe while the site runs,
 WAL + busy timeout): `brixo-web set-password Brixo` (hidden prompt; signs
 that account out everywhere), `brixo-web invite 5`, `brixo-web invites`.
 
+Downloads (Roblox-style, Windows): `tools/release.ps1` (run on the Windows
+PC: `powershell -ExecutionPolicy Bypass -File tools\release.ps1`) builds
+Player and Studio with `BRIXO_BUILD=<yyyy.MM.dd.HHmm>` baked in, renames them
+`BrixoPlayer.exe` / `BrixoStudio.exe`, writes `versions.json` and scp's all
+three to `/var/www/brixo-downloads` (versions.json last). Caddy serves that
+folder at `/files/`; the site reads versions.json for `/api/version` and the
+Get Brixo page. The downloaded exe installs itself (`brixo-client/src/install.rs`):
+only a file named like the download (or "BrixoPlayer (1).exe") does, never a
+cargo build; it copies to `%LOCALAPPDATA%\Brixo\Player`, renaming a running
+old copy aside, strips Zone.Identifier, adds Start Menu + desktop shortcuts and
+an Apps entry (`--uninstall`) via PowerShell with paths in env vars, registers
+brixo:// (Player), then starts the installed copy (`--installed` if no args).
+Release builds hide the console (`windows_subsystem`). Player and Studio check
+`/api/version` in the background and show "A new ... is out" (never for "dev"
+builds). Installed Studio saves `scene.brixo` in `~/Brixo`, finds Player next
+to itself or installed, and publishes to `install::site()` (BRIXO_SITE
+overrides, default https://playbrixo.com).
+
 Built-in protection (`src/limits.rs`, in memory): 10 wrong logins per 15 min
 per IP *and* per username (then 429, even for the right password), 5 signups
 an hour per IP, 10 bad invite codes per 15 min, 30 Plays a minute and 30

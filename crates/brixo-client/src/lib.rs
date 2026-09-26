@@ -3,6 +3,7 @@
 
 pub mod filming;
 pub mod gui;
+pub mod install;
 pub mod library;
 pub mod play;
 pub mod smooth;

@@ -112,17 +112,44 @@ function gameCard(g) {
 // Most played first: people playing now, then all-time visits.
 const popular = (games) => [...games].sort((a, b) => b.playing - a.playing || b.visits - a.visits || a.id - b.id);
 
-// Pressing Play: get a ticket and open Brixo Player through its link.
-async function playGame(g, button, note) {
+// Pressing Play: get a ticket, open Brixo Player through its link, and
+// show "Starting Brixo Player..." with a download button, like Roblox. The
+// box closes itself once Brixo Player takes over the screen.
+async function playGame(g, button) {
   button.disabled = true;
   try {
     const pass = await api(`/api/games/${g.id}/play`, "POST");
-    if (note) note.style.display = "block";
+    const box = startingBox(g);
+    const gone = () => { box.remove(); window.removeEventListener("blur", gone); };
+    window.addEventListener("blur", gone);
     location.href = `brixo://play?server=${encodeURIComponent(pass.server)}&ticket=${encodeURIComponent(pass.ticket)}` +
                     `&game=${encodeURIComponent(g.name)}`;
   } catch (e) { alert(e.message); }
   setTimeout(() => (button.disabled = false), 2000);
 }
+
+function startingBox(g) {
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal" role="dialog" aria-label="Starting Brixo Player">
+      <h2>Starting Brixo Player...</h2>
+      <div class="inner">
+        <div class="spinner"><span></span><span></span><span></span></div>
+        <p>Joining <b>${esc(g.name)}</b>. If your browser asks, choose <b>Open Brixo Player</b>.</p>
+        <hr>
+        <p><b>Nothing happening?</b> You need Brixo Player to play.</p>
+        <a class="btn green big" href="/download">Download Brixo Player</a>
+        <p class="hint" style="margin-top:8px"><a href="#" data-close>Close</a></p>
+      </div></div>`;
+  bg.addEventListener("click", (e) => {
+    if (e.target === bg || e.target.hasAttribute("data-close")) { e.preventDefault(); bg.remove(); }
+  });
+  document.body.appendChild(bg);
+  return bg;
+}
+
+// "31.2 MB"
+const size = (bytes) => bytes ? `${(bytes / 1048576).toFixed(1)} MB` : "";
 
 // --- avatars -------------------------------------------------------------------
 

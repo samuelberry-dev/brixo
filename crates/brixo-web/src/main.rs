@@ -18,6 +18,8 @@
 //! - BRIXO_SECURE_COOKIES=1: login cookies only over HTTPS.
 //! - BRIXO_TRUST_PROXY=1: behind Caddy; take visitors' addresses from it.
 //! - BRIXO_INVITE_ONLY=1: signing up needs an invite code.
+//! - BRIXO_DOWNLOADS: the folder with the Player/Studio downloads and
+//!   versions.json (./downloads). tools/release.ps1 fills it.
 use std::sync::Arc;
 
 use brixo_web::api::{self, App, Settings};
@@ -83,6 +85,7 @@ async fn serve(db_path: &str) {
         secure_cookies: flag("BRIXO_SECURE_COOKIES"),
         trust_proxy: flag("BRIXO_TRUST_PROXY"),
         invite_only: flag("BRIXO_INVITE_ONLY"),
+        downloads: std::env::var_os("BRIXO_DOWNLOADS").map(Into::into).unwrap_or_else(|| "downloads".into()),
     };
     let app = Arc::new(App::open_with(db_path, settings.clone()).expect("couldn't open the database"));
     api::seed_samples(&app);

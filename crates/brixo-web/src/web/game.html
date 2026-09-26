@@ -30,8 +30,6 @@
       <div class="box gold"><h2>Play</h2><div class="inner" style="text-align:center">
         <button class="btn green big" id="play" style="width:100%">&#9654; PLAY</button>
         ${me ? "" : `<p class="hint" style="margin-top:6px">Log in at the top (or <a href="/signup">sign up</a>) to play.</p>`}
-        <div class="note" id="note" style="text-align:left">Nothing happened? You need <b>Brixo Player</b> installed.
-          <a href="/download">Get it here</a>, then press Play again.</div>
       </div></div>
       <div class="box"><h2>Game Info</h2><div class="inner">
         <table class="stats">
@@ -56,7 +54,7 @@
   show();
 
   const play = document.getElementById("play");
-  play.onclick = () => me ? playGame(g, play, document.getElementById("note")) : (location.href = "/login");
+  play.onclick = () => me ? playGame(g, play) : (location.href = "/login");
 
   const edit = document.getElementById("edit");
   if (edit) edit.onclick = (e) => {
