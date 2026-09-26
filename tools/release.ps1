@@ -7,10 +7,15 @@
 # "gh auth login" once) and your latest code pushed to GitHub, because
 # that's what GitHub builds. Without those it releases Windows only and
 # keeps the Mac downloads the site already has. -SkipMac skips it on purpose.
+#
+# Built the Mac version on Codemagic instead (codemagic.yaml)? Put the three
+# files it gives you (BrixoPlayer.dmg, BrixoStudio.dmg, version.txt) in one
+# folder and pass it: -MacFolder C:\Users\you\Downloads\brixo-mac
 param(
     [string]$Server = "root@playbrixo.com",
     [string]$Site = "https://playbrixo.com",
-    [switch]$SkipMac
+    [switch]$SkipMac,
+    [string]$MacFolder = ""
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot)   # the repo folder
@@ -23,7 +28,12 @@ New-Item -ItemType Directory -Force $dist | Out-Null
 
 # --- Mac: start GitHub's build first, so it runs while Windows builds ------
 $macRun = $null
-if ($SkipMac) {
+if ($MacFolder) {
+    Write-Host "== Using the Mac build in $MacFolder"
+    foreach ($f in "BrixoPlayer.dmg", "BrixoStudio.dmg", "version.txt") {
+        if (-not (Test-Path (Join-Path $MacFolder $f))) { throw "$f isn't in $MacFolder. Download all three files from Codemagic into that folder." }
+    }
+} elseif ($SkipMac) {
     Write-Host "== Skipping the Mac version (-SkipMac)"
 } elseif (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     Write-Host "== Skipping the Mac version: the GitHub CLI isn't installed (winget install GitHub.cli, then gh auth login)"
@@ -70,9 +80,19 @@ $versions = [ordered]@{
     studio = [ordered]@{ version = $version; file = "BrixoStudio.exe"; bytes = (& $size "BrixoStudio.exe") }
 }
 
-# --- Mac: wait for GitHub and fetch the .dmg files -----------------------
+# --- Mac: from Codemagic, or wait for GitHub and fetch the .dmg files ----
 $macDone = $false
-if ($macRun) {
+if ($MacFolder) {
+    # The version baked into the Mac apps, so their update check matches.
+    $macVersion = (Get-Content (Join-Path $MacFolder "version.txt") -Raw).Trim()
+    foreach ($dmg in "BrixoPlayer.dmg", "BrixoStudio.dmg") {
+        Copy-Item (Join-Path $MacFolder $dmg) (Join-Path $dist $dmg) -Force
+        $files += (Join-Path $dist $dmg)
+    }
+    $versions["player_mac"] = [ordered]@{ version = $macVersion; file = "BrixoPlayer.dmg"; bytes = (& $size "BrixoPlayer.dmg") }
+    $versions["studio_mac"] = [ordered]@{ version = $macVersion; file = "BrixoStudio.dmg"; bytes = (& $size "BrixoStudio.dmg") }
+    $macDone = $true
+} elseif ($macRun) {
     Write-Host "== Waiting for the Mac build on GitHub (10-20 minutes the first time, less after)"
     gh run watch $macRun.databaseId --exit-status --interval 30
     if ($LASTEXITCODE -eq 0) {

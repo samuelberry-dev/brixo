@@ -1,0 +1,41 @@
+# Builds Brixo Player and Studio for Mac on Codemagic's Macs (free: 500 Mac
+# minutes a month, no card). Start it on codemagic.io: your Brixo app ->
+# Start new build -> "Brixo for Mac". When it's done, download the three
+# files it lists (two .dmg and version.txt) into one folder and run:
+#   powershell -ExecutionPolicy Bypass -File tools\release.ps1 -MacFolder <that folder>
+# (.github/workflows/mac.yml does the same on GitHub's Macs.)
+workflows:
+  brixo-mac:
+    name: Brixo for Mac
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    cache:
+      cache_paths:
+        - ~/.cargo/registry
+        - ~/.cargo/git
+        - target
+    scripts:
+      - name: Install Rust for Apple Silicon and Intel Macs
+        script: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+          source "$HOME/.cargo/env"
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build
+        script: |
+          source "$HOME/.cargo/env"
+          BRIXO_BUILD="$(date -u +%Y.%m.%d.%H%M)"
+          export BRIXO_BUILD
+          export MACOSX_DEPLOYMENT_TARGET=11.0
+          echo "Building Brixo $BRIXO_BUILD"
+          cargo build --release --target aarch64-apple-darwin -p brixo-player -p brixo-studio
+          cargo build --release --target x86_64-apple-darwin -p brixo-player -p brixo-studio
+          bash tools/package-mac.sh "$BRIXO_BUILD"
+          # release.ps1 reads this, so the site offers the exact version inside the apps.
+          echo "$BRIXO_BUILD" > dist-mac/version.txt
+    artifacts:
+      - dist-mac/*.dmg
+      - dist-mac/version.txt
