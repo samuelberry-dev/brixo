@@ -164,24 +164,172 @@ const FACE_SVG = {
                <path d="M -15 -12 L -4 -8 M 15 -12 L 4 -8 M -8 11 L 8 11" stroke="#232832" stroke-width="3" fill="none" stroke-linecap="round"/>`,
 };
 
-// The Brixo avatar: blocky body, round head, face decal. Same palettes as
-// the game, so what you pick here is exactly what you'll look like.
-// `small` leaves out the shadow (for the banner).
+// --- 3D avatars ----------------------------------------------------------------
+// Drawn with WebGL from /avatar-model.json, which the game's renderer writes
+// (brixo-render's web_model test), so the site shows exactly what you look
+// like in a game: same body, same faces, same hats.
+
+let MODEL = null;
+const modelReady = fetch("/avatar-model.json").then((r) => r.json()).then((m) => {
+  const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+  const mesh = (m) => ({
+    p: Float32Array.from(new Int16Array(bytes(m.p)), (v) => v / 1000),
+    n: Float32Array.from(new Int8Array(bytes(m.n)), (v) => v / 127),
+    uv: m.uv ? Float32Array.from(new Uint16Array(bytes(m.uv)), (v) => v / 65535) : null,
+  });
+  MODEL = {
+    cell: m.cell,
+    maxHats: m.max_hats,
+    body: m.body.map((b) => ({ slot: b.slot, limb: b.limb, ...mesh(b) })),
+    hats: m.hats.map((h) => ({ name: h.name, title: h.title, pieces: h.pieces.map((p) => ({ color: p.color, ...mesh(p) })) })),
+    faces: Object.fromEntries(Object.entries(m.faces).map(([k, v]) => [k, new Uint8Array(bytes(v))])),
+  };
+  return MODEL;
+});
+
+const AV_VS = `attribute vec3 p; attribute vec3 n; attribute vec2 uv;
+uniform mat4 mvp; uniform mat4 turn; varying vec3 vn; varying vec2 vuv;
+void main() { gl_Position = mvp * vec4(p, 1.0); vn = (turn * vec4(n, 0.0)).xyz; vuv = uv; }`;
+const AV_FS = `precision mediump float;
+uniform vec3 color; uniform sampler2D face; uniform float textured; varying vec3 vn; varying vec2 vuv;
+void main() {
+  vec3 nn = normalize(vn);
+  float light = 0.52 + 0.5 * max(dot(nn, normalize(vec3(0.45, 0.8, 0.6))), 0.0) + 0.1 * nn.y;
+  if (textured > 0.5) {
+    vec4 t = texture2D(face, vuv);
+    if (t.a < 0.5) discard;
+    gl_FragColor = vec4(t.rgb * light, 1.0);
+  } else {
+    gl_FragColor = vec4(color * light, 1.0);
+  }
+}`;
+
+// One WebGL drawing surface: a canvas, its buffers and face textures.
+class AvatarGL {
+  constructor(canvas) {
+    this.canvas = canvas;
+    const gl = this.gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true, alpha: true });
+    if (!gl) return;
+    const shader = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+    const prog = this.prog = gl.createProgram();
+    gl.attachShader(prog, shader(gl.VERTEX_SHADER, AV_VS));
+    gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, AV_FS));
+    gl.linkProgram(prog);
+    this.loc = Object.fromEntries(["p", "n", "uv"].map((k) => [k, gl.getAttribLocation(prog, k)]));
+    this.u = Object.fromEntries(["mvp", "turn", "color", "face", "textured"].map((k) => [k, gl.getUniformLocation(prog, k)]));
+    this.buffers = new Map();
+    this.textures = {};
+  }
+  buffer(mesh) {
+    const gl = this.gl;
+    let b = this.buffers.get(mesh);
+    if (!b) {
+      const make = (data) => { if (!data) return null; const x = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, x); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return x; };
+      b = { p: make(mesh.p), n: make(mesh.n), uv: make(mesh.uv), count: mesh.p.length / 3 };
+      this.buffers.set(mesh, b);
+    }
+    return b;
+  }
+  faceTexture(name) {
+    const gl = this.gl;
+    if (!this.textures[name]) {
+      const cell = MODEL.cell, bits = MODEL.faces[name] || MODEL.faces.smile;
+      const px = new Uint8Array(cell * cell * 4);
+      for (let i = 0; i < cell * cell; i++) {
+        if (bits[i >> 3] & (1 << (i & 7))) px.set([20, 20, 20, 255], i * 4);
+      }
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cell, cell, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.textures[name] = t;
+    }
+    return this.textures[name];
+  }
+  // look: {skin, shirt, pants, face, hats}; view: {yaw, headOnly, onlyHat}
+  draw(look, view = {}) {
+    const gl = this.gl;
+    if (!gl || !MODEL) return;
+    const w = this.canvas.width, h = this.canvas.height;
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.useProgram(this.prog);
+    // Camera: framed on the whole character, or just the head.
+    const [cy, span] = view.headOnly ? [2.45, 3.0] : [0.55, 6.9];
+    const fov = 0.5, dist = span / 2 / Math.tan(fov / 2);
+    const f = 1 / Math.tan(fov / 2), aspect = w / h, near = 0.5, far = 60;
+    const proj = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
+    const yaw = view.yaw ?? 0.35, pitch = view.headOnly ? 0.2 : 0.1;
+    const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    // turn = pitch * yaw (rotation only, column-major)
+    const turn = [cyw, sp * syw, -cp * syw, 0, 0, cp, sp, 0, syw, -sp * cyw, cp * cyw, 0, 0, 0, 0, 1];
+    const mul = (a, b) => { const o = new Array(16).fill(0); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) o[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k]; return o; };
+    // The model turns around its middle at the framing height.
+    const center = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -cy, 0, 1];
+    const full = mul(proj, mul([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -dist, 1], mul(turn, center)));
+    gl.uniformMatrix4fv(this.u.mvp, false, new Float32Array(full));
+    gl.uniformMatrix4fv(this.u.turn, false, new Float32Array(turn));
+    const color = (c) => gl.uniform3f(this.u.color, c[0] / 255, c[1] / 255, c[2] / 255);
+    const bind = (loc, buf, size) => {
+      if (loc < 0) return;
+      if (!buf) { gl.disableVertexAttribArray(loc); gl.vertexAttrib2f(loc, 0, 0); return; }
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    const drawMesh = (mesh) => { const b = this.buffer(mesh); bind(this.loc.p, b.p, 3); bind(this.loc.n, b.n, 3); bind(this.loc.uv, b.uv, 2); gl.drawArrays(gl.TRIANGLES, 0, b.count); };
+    const colors = { skin: look.skin, shirt: look.shirt, pants: look.pants };
+    for (const part of MODEL.body) {
+      if (view.headOnly && part.limb !== "head") continue;
+      if (part.slot === "decal") continue;
+      gl.uniform1f(this.u.textured, 0);
+      color(colors[part.slot] || [200, 200, 200]);
+      drawMesh(part);
+    }
+    // The face last, printed on the head.
+    gl.uniform1f(this.u.textured, 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.faceTexture(look.face));
+    gl.uniform1i(this.u.face, 0);
+    for (const part of MODEL.body) if (part.slot === "decal") drawMesh(part);
+    gl.uniform1f(this.u.textured, 0);
+    const worn = view.onlyHat ? [view.onlyHat] : (look.hats || []);
+    for (const hat of MODEL.hats) {
+      if (!worn.includes(hat.name)) continue;
+      for (const piece of hat.pieces) { color(piece.color); drawMesh(piece); }
+    }
+  }
+}
+
+// Pictures of avatars (for the banner, profiles, the home page): drawn on
+// one hidden canvas and copied into <img> tags.
+let picGL = null;
+function avatarPicture(look, view = {}, w = 180, h = 260) {
+  if (!MODEL) return "";
+  if (!picGL) picGL = new AvatarGL(document.createElement("canvas"));
+  if (!picGL.gl) return "";
+  const scale = 2;
+  picGL.canvas.width = w * scale; picGL.canvas.height = h * scale;
+  picGL.draw(look, view);
+  return picGL.canvas.toDataURL();
+}
+function paintAvatars() {
+  modelReady.then(() => {
+    for (const img of document.querySelectorAll("img[data-look]")) {
+      const look = JSON.parse(img.dataset.look);
+      delete img.dataset.look;
+      img.src = avatarPicture(look, {}, img.width || 180, img.height || 260);
+    }
+  });
+}
+// Kept under its old name: every page asks for avatarSvg(look).
 function avatarSvg(a, small) {
-  const shade = (c, f) => rgb(c.map((v) => Math.round(v * f)));
-  return `<svg viewBox="0 0 220 320" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-    ${small ? "" : `<ellipse cx="110" cy="304" rx="58" ry="10" fill="black" opacity=".2"/>`}
-    <rect x="58" y="228" width="44" height="18" rx="4" fill="${rgb(a.shoes)}"/>
-    <rect x="118" y="228" width="44" height="18" rx="4" fill="${rgb(a.shoes)}"/>
-    <rect x="60" y="160" width="42" height="70" fill="${rgb(a.pants)}"/>
-    <rect x="118" y="160" width="42" height="70" fill="${shade(a.pants, .88)}"/>
-    <rect x="58" y="74" width="104" height="90" fill="${rgb(a.shirt)}"/>
-    <rect x="58" y="74" width="104" height="8" fill="${shade(a.shirt, 1.12)}"/>
-    <rect x="24" y="76" width="34" height="66" fill="${shade(a.shirt, .9)}"/>
-    <rect x="162" y="76" width="34" height="66" fill="${shade(a.shirt, .9)}"/>
-    <rect x="26" y="142" width="30" height="24" fill="${rgb(a.skin)}"/>
-    <rect x="164" y="142" width="30" height="24" fill="${rgb(a.skin)}"/>
-    <circle cx="110" cy="40" r="38" fill="${rgb(a.skin)}"/>
-    <g transform="translate(110 44) scale(1.2)">${FACE_SVG[a.face] || FACE_SVG.smile}</g>
-  </svg>`;
+  setTimeout(paintAvatars);
+  const [w, h] = small ? [44, 54] : [180, 260];
+  const look = JSON.stringify({ skin: a.skin, shirt: a.shirt, pants: a.pants, face: a.face, hats: a.hats || [] });
+  return `<img class="avatar-pic" width="${w}" height="${h}" alt="" data-look='${look.replace(/'/g, "&#39;")}'>`;
 }

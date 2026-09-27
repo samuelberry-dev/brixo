@@ -54,7 +54,7 @@ p { margin: 0 0 8px; }
 
 .userbox { color: #fff; font-size: 11px; text-align: right; display: flex; align-items: center; gap: 10px; }
 .userbox .mini { width: 44px; height: 54px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.35); border-radius: 3px; }
-.userbox .mini svg { width: 100%; height: 100%; }
+.userbox .mini svg, .userbox .mini img { width: 100%; height: 100%; display: block; }
 .userbox a { color: var(--gold); font-weight: bold; }
 .userbox form { display: flex; gap: 4px; align-items: center; }
 .userbox input { width: 96px; font: 11px Verdana, sans-serif; padding: 3px 4px; border: 1px solid #0a1f38; border-radius: 2px; }
@@ -138,7 +138,7 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* --- people -------------------------------------------------------------- */
 .avatar-frame { background: linear-gradient(180deg, #e9f2fb, #cfe0f1); border: 1px solid #9ab3cd; display: flex; justify-content: center; padding: 8px; }
-.avatar-frame svg { width: 180px; height: 260px; }
+.avatar-frame svg, .avatar-frame img, .avatar-frame canvas { width: 180px; height: 260px; display: block; }
 .blurb { background: #fffbe6; border: 1px solid #ecd67e; padding: 6px 8px; font-style: italic; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
 
 /* --- character customizer ----------------------------------------------- */
@@ -148,6 +148,11 @@ textarea { resize: vertical; min-height: 60px; }
 .swatch.on, .face.on { outline: 3px solid var(--gold2); }
 .face { width: 50px; height: 50px; background: #e3b98a; border: 2px solid #fff; outline: 1px solid #8fa9c4; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .face svg { width: 34px; height: 34px; }
+.hat { width: 76px; background: linear-gradient(180deg, #e9f2fb, #cfe0f1); border: 2px solid #fff; outline: 1px solid #8fa9c4; cursor: pointer; text-align: center; padding: 2px 0 4px; }
+.hat img { width: 64px; height: 64px; display: block; margin: 0 auto; }
+.hat span { display: block; font-size: 10px; line-height: 1.15; color: var(--navy); padding: 0 2px; }
+.hat.on { outline: 3px solid var(--gold2); background: linear-gradient(180deg, #fff6d8, #f3dd92); }
+.label .hint { text-transform: none; font-weight: normal; }
 
 /* --- home ---------------------------------------------------------------- */
 .hero { display: flex; gap: 10px; }

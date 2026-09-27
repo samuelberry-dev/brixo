@@ -344,6 +344,102 @@ impl Face {
     }
 }
 
+/// A hat a player wears. Players can wear up to MAX_HATS at once; each one
+/// sits on the head in its own spot, and it's fine if two overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Hat {
+    Cap,
+    Beanie,
+    TopHat,
+    CowboyHat,
+    Crown,
+    Headphones,
+    PartyHat,
+    ChefHat,
+    VikingHelmet,
+    HardHat,
+    PropellerCap,
+    Halo,
+    TrafficCone,
+}
+
+/// How many hats a player can wear at once.
+pub const MAX_HATS: usize = 3;
+
+impl Hat {
+    pub const ALL: [Hat; 13] = [
+        Hat::Cap,
+        Hat::Beanie,
+        Hat::TopHat,
+        Hat::CowboyHat,
+        Hat::Crown,
+        Hat::Headphones,
+        Hat::PartyHat,
+        Hat::ChefHat,
+        Hat::VikingHelmet,
+        Hat::HardHat,
+        Hat::PropellerCap,
+        Hat::Halo,
+        Hat::TrafficCone,
+    ];
+
+    /// The name the website and saved avatars use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Hat::Cap => "cap",
+            Hat::Beanie => "beanie",
+            Hat::TopHat => "top_hat",
+            Hat::CowboyHat => "cowboy_hat",
+            Hat::Crown => "crown",
+            Hat::Headphones => "headphones",
+            Hat::PartyHat => "party_hat",
+            Hat::ChefHat => "chef_hat",
+            Hat::VikingHelmet => "viking_helmet",
+            Hat::HardHat => "hard_hat",
+            Hat::PropellerCap => "propeller_cap",
+            Hat::Halo => "halo",
+            Hat::TrafficCone => "traffic_cone",
+        }
+    }
+
+    /// What people see: "Top Hat".
+    pub fn title(self) -> &'static str {
+        match self {
+            Hat::Cap => "Baseball Cap",
+            Hat::Beanie => "Beanie",
+            Hat::TopHat => "Top Hat",
+            Hat::CowboyHat => "Cowboy Hat",
+            Hat::Crown => "Crown",
+            Hat::Headphones => "Headphones",
+            Hat::PartyHat => "Party Hat",
+            Hat::ChefHat => "Chef Hat",
+            Hat::VikingHelmet => "Viking Helmet",
+            Hat::HardHat => "Hard Hat",
+            Hat::PropellerCap => "Propeller Cap",
+            Hat::Halo => "Halo",
+            Hat::TrafficCone => "Traffic Cone",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Hat> {
+        Hat::ALL.into_iter().find(|h| h.name() == name)
+    }
+
+    /// Up to MAX_HATS known hats from a list of names, skipping unknown
+    /// names and repeats.
+    pub fn list(names: &[String]) -> [Option<Hat>; MAX_HATS] {
+        let mut out = [None; MAX_HATS];
+        let mut n = 0;
+        for hat in names.iter().filter_map(|s| Hat::from_name(s)) {
+            if n < MAX_HATS && !out.contains(&Some(hat)) {
+                out[n] = Some(hat);
+                n += 1;
+            }
+        }
+        out
+    }
+}
+
 /// How the camera follows a player. Games choose; `Default` lets the
 /// player scroll between third and first person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -388,6 +484,9 @@ pub struct PlayerProps {
     pub shirt_color: Color,
     pub pants_color: Color,
     pub shoes_color: Color,
+    /// The hats they're wearing (up to MAX_HATS).
+    #[serde(default)]
+    pub hats: [Option<Hat>; MAX_HATS],
     pub camera_mode: CameraMode,
     /// The Tool in the player's hand, if any (one of the Tools inside the
     /// player, which make up their backpack).
@@ -426,6 +525,7 @@ impl Default for PlayerProps {
             shirt_color: Color::new(47, 158, 143),
             pants_color: Color::new(74, 85, 120),
             shoes_color: Color::new(43, 43, 51),
+            hats: [None; MAX_HATS],
             camera_mode: CameraMode::Default,
             equipped: None,
             speed: 0.0,

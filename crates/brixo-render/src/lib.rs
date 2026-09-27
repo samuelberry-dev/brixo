@@ -442,8 +442,8 @@ fn avatar_instance(
         avatar::Slot::Skin => c(p.skin_color),
         avatar::Slot::Shirt => c(p.shirt_color),
         avatar::Slot::Pants => c(p.pants_color),
-        avatar::Slot::Shoes => c(p.shoes_color),
         avatar::Slot::Decal => rgb(255, 255, 255),
+        avatar::Slot::Paint([r, g, b]) => rgb(r, g, b),
     };
     let uv_rect = match slot {
         avatar::Slot::Decal => atlas_rect(avatar::face_slot(p.face)),
@@ -476,6 +476,7 @@ fn avatar_instance(
 struct AvatarDraw {
     slot: avatar::Slot,
     limb: avatar::Limb,
+    hat: Option<brixo_core::Hat>,
     vertices: std::ops::Range<u32>,
 }
 
@@ -537,6 +538,7 @@ impl SceneRenderer {
             avatar_draws.push(AvatarDraw {
                 slot: mesh.slot,
                 limb: mesh.limb,
+                hat: mesh.hat,
                 vertices: start..avatar_vertices.len() as u32,
             });
         }
@@ -897,6 +899,9 @@ impl SceneRenderer {
             let start = instances.len() as u32;
             for (id, p, highlight) in &players {
                 if self.hidden_player == Some(*id) {
+                    continue;
+                }
+                if draw.hat.is_some_and(|h| !p.hats.contains(&Some(h))) {
                     continue;
                 }
                 let grip_up = p.equipped.is_some_and(|t| brixo_core::holds_up(model, t));

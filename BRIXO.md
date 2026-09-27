@@ -399,9 +399,28 @@ copy/paste/duplicate, group/ungroup (Ctrl+G/U), F to focus, Add Part/GUI/Tool,
 script editor with live syntax check, Output panel, Play/Stop (F5), Players count
 (local server + a window per player), Publish, Open from library.
 
-**Avatar:** blocky body, round head, 4 pixel-art face decals, random curated
+**Avatar:** blocky body, round head, no shoes (the pants reach the ground; the
+`shoes_color` value still exists for scripts and the network, it just isn't
+drawn), 4 pixel-art face decals, random curated
 palettes, limb animations (walk, jump, hold, swing), first/third person, camera
 collision.
+
+**Hats:** 13 built-in hats (`brixo_core::Hat`: cap, beanie, top hat, cowboy hat,
+crown, headphones, party hat, chef hat, viking helmet, hard hat, propeller cap,
+halo, traffic cone). Click to wear, click again to take off, up to 3 at once
+(`MAX_HATS`); overlapping is fine. Each hat is a few simple shapes in fixed
+colours (`brixo-render/src/avatar/hats.rs`), part of the head, so it turns and
+falls apart with it. Saved on the account (`hats` in the avatar JSON, checked by
+`PUT /api/avatar`), carried in `Look` and `PlayerProps.hats` to every player.
+Scripts can't change hats yet.
+
+**Website avatars are 3D:** the site draws characters with a small WebGL
+renderer in `app.js` from `web/avatar-model.json`, which is the game's own
+avatar, hat and face meshes. That file is generated: after changing the avatar
+or a hat, run `BRIXO_WRITE_MODEL=1 cargo test -p brixo-render web_model`
+(PowerShell: `$env:BRIXO_WRITE_MODEL=1; cargo test -p brixo-render web_model;
+Remove-Item Env:BRIXO_WRITE_MODEL`). A test fails if it's out of date. The
+avatar page's preview can be dragged to turn it around.
 
 **Gameplay systems:** GUI (TextLabel/TextButton/Frame, per-player or shared,
 labels attached to parts), tools with hotbar (1-9) and `on activated`, chat

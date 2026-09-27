@@ -67,10 +67,14 @@ fn sign_up_customize_press_play_and_join_as_yourself() {
     assert_eq!(status(browser().post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "noob", "password": "whatever"}))), 400, "no rude names");
 
     // Customize the avatar.
-    let look = serde_json::json!({"skin": [204,142,105], "shirt": [196,40,28], "pants": [27,42,53], "shoes": [27,27,27], "face": "determined"});
+    let look = serde_json::json!({"skin": [204,142,105], "shirt": [196,40,28], "pants": [27,42,53], "shoes": [27,27,27], "face": "determined", "hats": ["top_hat", "headphones"]});
     ann.put(&format!("{site}/api/avatar")).send_json(look).unwrap();
     let bad_face = serde_json::json!({"skin": [1,1,1], "shirt": [1,1,1], "pants": [1,1,1], "shoes": [1,1,1], "face": "evil"});
     assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(bad_face)), 400);
+    let hat = |hats: serde_json::Value| serde_json::json!({"skin": [1,1,1], "shirt": [1,1,1], "pants": [1,1,1], "shoes": [1,1,1], "face": "smile", "hats": hats});
+    assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(hat(serde_json::json!(["sombrero"])))), 400, "unknown hat");
+    assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(hat(serde_json::json!(["cap", "cap"])))), 400, "same hat twice");
+    assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(hat(serde_json::json!(["cap", "halo", "crown", "beanie"])))), 400, "too many hats");
 
     // Press Play: a server starts, and we get a ticket into it.
     let pass: serde_json::Value = ann.post(&format!("{site}/api/games/{game_id}/play")).call().unwrap().into_json().unwrap();
@@ -85,6 +89,7 @@ fn sign_up_customize_press_play_and_join_as_yourself() {
     assert_eq!(player.world.get(me).unwrap().name, "Ann");
     let p = player.world.player(me).unwrap();
     assert_eq!(p.face, brixo_core::Face::Determined);
+    assert_eq!(p.hats, [Some(brixo_core::Hat::TopHat), Some(brixo_core::Hat::Headphones), None], "wearing our hats");
     assert_eq!((p.shirt_color.r, p.shirt_color.g, p.shirt_color.b), (196, 40, 28));
     let game_script = player.world.find_first("Game").unwrap();
     assert_eq!(player.world.script(game_script).unwrap().source, "", "scripts stay on the server");

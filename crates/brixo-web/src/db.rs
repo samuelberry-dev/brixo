@@ -16,13 +16,17 @@ pub struct Avatar {
     pub skin: Rgb,
     pub shirt: Rgb,
     pub pants: Rgb,
+    /// Still saved (games' scripts can read shoes_color), but not drawn.
     pub shoes: Rgb,
     pub face: String,
+    /// The hats they wear, by name (up to brixo_core::MAX_HATS).
+    #[serde(default)]
+    pub hats: Vec<String>,
 }
 
 impl Default for Avatar {
     fn default() -> Self {
-        Avatar { skin: (227, 185, 138), shirt: (13, 105, 172), pants: (27, 42, 53), shoes: (27, 27, 27), face: "smile".into() }
+        Avatar { skin: (227, 185, 138), shirt: (13, 105, 172), pants: (27, 42, 53), shoes: (27, 27, 27), face: "smile".into(), hats: Vec::new() }
     }
 }
 

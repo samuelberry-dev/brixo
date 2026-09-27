@@ -111,6 +111,13 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/favicon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("web/favicon.svg")) }))
         .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("web/app.css")) }))
         .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript")], include_str!("web/app.js")) }))
+        // The avatar and hat models, written by brixo-render's web_model test.
+        .route(
+            "/avatar-model.json",
+            get(|| async {
+                ([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "public, max-age=600")], include_str!("web/avatar-model.json"))
+            }),
+        )
         .layer(axum::middleware::map_response(safety_headers))
         .with_state(app)
 }
@@ -326,6 +333,17 @@ async fn set_avatar(State(app): State<Arc<App>>, headers: HeaderMap, Json(a): Js
     if Face::ALL.iter().all(|f| f.name() != a.face) {
         return Err(bad("that isn't one of the faces"));
     }
+    if a.hats.len() > brixo_core::MAX_HATS {
+        return Err(bad(&format!("you can wear up to {} hats", brixo_core::MAX_HATS)));
+    }
+    for (i, h) in a.hats.iter().enumerate() {
+        if brixo_core::Hat::from_name(h).is_none() {
+            return Err(bad("that isn't one of the hats"));
+        }
+        if a.hats[..i].contains(h) {
+            return Err(bad("you're already wearing that hat"));
+        }
+    }
     app.db.set_avatar(u.id, &a).map_err(oops)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -537,6 +555,7 @@ pub fn look_of(a: &Avatar) -> brixo_runtime::Look {
         pants: c(a.pants),
         shoes: c(a.shoes),
         face: Face::from_name(&a.face).unwrap_or_default(),
+        hats: brixo_core::Hat::list(&a.hats),
     }
 }
 

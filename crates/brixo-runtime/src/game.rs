@@ -40,6 +40,7 @@ pub struct Look {
     pub pants: brixo_core::Color,
     pub shoes: brixo_core::Color,
     pub face: brixo_core::Face,
+    pub hats: [Option<brixo_core::Hat>; brixo_core::MAX_HATS],
 }
 
 impl Look {
@@ -49,6 +50,7 @@ impl Look {
         p.pants_color = self.pants;
         p.shoes_color = self.shoes;
         p.face = self.face;
+        p.hats = self.hats;
         p.body.color = self.shirt;
     }
 }

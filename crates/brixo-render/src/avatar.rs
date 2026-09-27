@@ -8,8 +8,10 @@
 
 use std::f32::consts::{PI, TAU};
 
-use brixo_core::Face;
+use brixo_core::{Face, Hat};
 use glam::{Vec2, Vec3};
+
+mod hats;
 
 use crate::Vertex;
 
@@ -19,9 +21,10 @@ pub(crate) enum Slot {
     Skin,
     Shirt,
     Pants,
-    Shoes,
     /// The face decal: white, textured with the face's picture.
     Decal,
+    /// A fixed colour (hats).
+    Paint([u8; 3]),
 }
 
 /// Which body part a mesh belongs to: arms and legs swing about a pivot.
@@ -53,6 +56,8 @@ impl Limb {
 pub(crate) struct AvatarMesh {
     pub slot: Slot,
     pub limb: Limb,
+    /// Only drawn on players wearing this hat.
+    pub hat: Option<Hat>,
     pub vertices: Vec<Vertex>,
 }
 
@@ -66,18 +71,23 @@ pub(crate) fn meshes() -> Vec<AvatarMesh> {
     let mut piece = |slot, limb, build: &dyn Fn(&mut Mesh)| {
         let mut m = Mesh::default();
         build(&mut m);
-        out.push(AvatarMesh { slot, limb, vertices: m.vertices });
+        out.push(AvatarMesh { slot, limb, hat: None, vertices: m.vertices });
     };
     // The character faces +Z, so its right side is -X.
     for (side, arm, leg) in [(1.0f32, Limb::ArmLeft, Limb::LegLeft), (-1.0, Limb::ArmRight, Limb::LegRight)] {
-        piece(Slot::Shoes, leg, &|m| m.cuboid(Vec3::new(side * 0.49, -2.325, 0.04), Vec3::new(0.9, 0.35, 1.0)));
-        piece(Slot::Pants, leg, &|m| m.cuboid(Vec3::new(side * 0.49, -1.475, 0.0), Vec3::new(0.88, 1.35, 0.94)));
+        // No shoes: the pants go all the way to the ground.
+        piece(Slot::Pants, leg, &|m| m.cuboid(Vec3::new(side * 0.49, -1.65, 0.0), Vec3::new(0.88, 1.7, 0.94)));
         piece(Slot::Shirt, arm, &|m| m.cuboid(Vec3::new(side * 1.43, 0.295, 0.0), Vec3::new(0.8, 1.35, 0.9)));
         piece(Slot::Skin, arm, &|m| m.cuboid(Vec3::new(side * 1.43, -0.63, 0.0), Vec3::new(0.72, 0.5, 0.82)));
     }
     piece(Slot::Shirt, Limb::Body, &|m| m.cuboid(Vec3::new(0.0, 0.125, 0.0), Vec3::new(2.0, 1.85, 1.02)));
     piece(Slot::Skin, Limb::Head, &|m| m.sphere(HEAD_CENTER, HEAD_RADIUS));
     piece(Slot::Decal, Limb::Head, &|m| m.face_patch());
+    for hat in Hat::ALL {
+        for (color, m) in hats::hat_pieces(hat) {
+            out.push(AvatarMesh { slot: Slot::Paint(color), limb: Limb::Head, hat: Some(hat), vertices: m.vertices });
+        }
+    }
     out
 }
 
@@ -428,7 +438,7 @@ mod tests {
     #[test]
     fn the_avatar_is_about_five_studs_tall() {
         let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-        for m in meshes() {
+        for m in meshes().into_iter().filter(|m| m.hat.is_none()) {
             for v in &m.vertices {
                 lo = lo.min(v.position[1]);
                 hi = hi.max(v.position[1]);
@@ -514,5 +524,120 @@ mod tests {
                 assert!(inked > 60 && inked < 800, "slot {slot} has {inked} ink pixels");
             }
         }
+    }
+}
+
+/// The avatar and hat meshes plus the face pictures, for the website's 3D
+/// preview (crates/brixo-web/src/web/avatar-model.json), so the site draws
+/// exactly what the game draws. Positions are stored as whole thousandths of
+/// a stud (i16), normals as i8 (x127), UVs as u16 (x65535), all base64.
+#[cfg(test)]
+pub(crate) fn web_model_json() -> String {
+    fn b64(bytes: &[u8]) -> String {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for c in bytes.chunks(3) {
+            let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+            for k in 0..4 {
+                out.push(if k <= c.len() { T[(n >> (18 - 6 * k) & 63) as usize] as char } else { '=' });
+            }
+        }
+        out
+    }
+    let mesh = |vs: &[Vertex], uv: bool| {
+        let mut p = Vec::new();
+        let mut n = Vec::new();
+        let mut t = Vec::new();
+        for v in vs {
+            for x in v.position {
+                p.extend(((x * 1000.0).round() as i16).to_le_bytes());
+            }
+            for x in v.normal {
+                n.push((x * 127.0).round() as i8 as u8);
+            }
+            for x in v.uv {
+                t.extend(((x.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes());
+            }
+        }
+        let uv = if uv { format!(",\"uv\":\"{}\"", b64(&t)) } else { String::new() };
+        format!("\"p\":\"{}\",\"n\":\"{}\"{uv}", b64(&p), b64(&n))
+    };
+    let limb = |l: Limb| match l {
+        Limb::Body => "body",
+        Limb::Head => "head",
+        Limb::ArmLeft => "arm_left",
+        Limb::ArmRight => "arm_right",
+        Limb::LegLeft => "leg_left",
+        Limb::LegRight => "leg_right",
+    };
+    let mut body = Vec::new();
+    let mut hats: Vec<(Hat, Vec<String>)> = Hat::ALL.iter().map(|h| (*h, Vec::new())).collect();
+    for m in meshes() {
+        match (m.slot, m.hat) {
+            (Slot::Paint([r, g, b]), Some(hat)) => {
+                let entry = hats.iter_mut().find(|(h, _)| *h == hat).unwrap();
+                entry.1.push(format!("{{\"color\":[{r},{g},{b}],{}}}", mesh(&m.vertices, false)));
+            }
+            (slot, _) => {
+                let slot = match slot {
+                    Slot::Skin => "skin",
+                    Slot::Shirt => "shirt",
+                    Slot::Pants => "pants",
+                    Slot::Decal => "decal",
+                    Slot::Paint(_) => unreachable!("only hats are painted"),
+                };
+                body.push(format!(
+                    "{{\"slot\":\"{slot}\",\"limb\":\"{}\",{}}}",
+                    limb(m.limb),
+                    mesh(&m.vertices, slot == "decal")
+                ));
+            }
+        }
+    }
+    let hats: Vec<String> = hats
+        .iter()
+        .map(|(h, pieces)| format!("{{\"name\":\"{}\",\"title\":\"{}\",\"pieces\":[{}]}}", h.name(), h.title(), pieces.join(",")))
+        .collect();
+    let faces: Vec<String> = Face::ALL
+        .iter()
+        .map(|f| {
+            let mut bits = vec![0u8; (CELL * CELL / 8) as usize];
+            for y in 0..CELL {
+                for x in 0..CELL {
+                    if face_ink(*f, x as f32 + 0.5, y as f32 + 0.5) {
+                        let i = (y * CELL + x) as usize;
+                        bits[i / 8] |= 1 << (i % 8);
+                    }
+                }
+            }
+            format!("\"{}\":\"{}\"", f.name(), b64(&bits))
+        })
+        .collect();
+    format!(
+        "{{\"cell\":{CELL},\"max_hats\":{},\"body\":[\n{}\n],\"hats\":[\n{}\n],\"faces\":{{{}}}}}\n",
+        brixo_core::MAX_HATS,
+        body.join(",\n"),
+        hats.join(",\n"),
+        faces.join(",")
+    )
+}
+
+#[cfg(test)]
+mod web_model {
+    #[test]
+    fn the_websites_copy_of_the_avatar_model_is_up_to_date() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../brixo-web/src/web/avatar-model.json");
+        let fresh = super::web_model_json();
+        if std::env::var_os("BRIXO_WRITE_MODEL").is_some() {
+            std::fs::write(path, &fresh).unwrap();
+            return;
+        }
+        let saved = std::fs::read_to_string(path).unwrap_or_default().replace("\r\n", "\n");
+        assert!(
+            saved == fresh,
+            "the avatar changed: run `BRIXO_WRITE_MODEL=1 cargo test -p brixo-render web_model` \
+             (PowerShell: $env:BRIXO_WRITE_MODEL=1; cargo test -p brixo-render web_model; Remove-Item Env:BRIXO_WRITE_MODEL) \
+             to update crates/brixo-web/src/web/avatar-model.json"
+        );
     }
 }

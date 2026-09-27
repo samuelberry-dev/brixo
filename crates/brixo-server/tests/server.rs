@@ -152,6 +152,7 @@ fn ticketed_servers_let_in_ticket_holders_as_their_account() {
         pants: brixo_core::Color::new(27, 42, 53),
         shoes: brixo_core::Color::new(27, 27, 27),
         face: brixo_core::Face::Determined,
+        hats: [Some(brixo_core::Hat::Crown), None, None],
     };
     // One valid ticket, usable once (the website's rule).
     let valid = Arc::new(Mutex::new(Some("good-ticket".to_string())));
@@ -173,6 +174,7 @@ fn ticketed_servers_let_in_ticket_holders_as_their_account() {
     assert_eq!(ann.world.get(me).unwrap().name, "Ann", "named by the ticket, not by the client");
     let p = ann.world.player(me).unwrap();
     assert_eq!(p.face, brixo_core::Face::Determined);
+    assert_eq!(p.hats[0], Some(brixo_core::Hat::Crown), "hats reach everyone");
     assert_eq!((p.shirt_color.r, p.shirt_color.g, p.shirt_color.b), (13, 105, 172));
 
     // Reusing the ticket, a made-up one, or none at all: turned away.

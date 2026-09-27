@@ -4,15 +4,15 @@
 <div id="content">
 <div class="cols"><div class="side" style="width:260px">
   <div class="box"><h2>Your Character</h2><div class="inner">
-    <div class="avatar-frame" id="preview"></div>
-    <p class="hint" style="margin-top:6px">This is how you look in every Brixo game.</p>
+    <div class="avatar-frame" id="preview"><canvas id="view" width="360" height="520"></canvas></div>
+    <p class="hint" style="margin-top:6px">This is how you look in every Brixo game. Drag to turn around.</p>
   </div></div>
 </div><div class="main">
   <div class="box gold"><h2>Character Customizer</h2><div class="inner">
+    <div class="label">Hats <span class="hint" id="hat-count"></span></div><div class="row" id="hats"></div>
     <div class="label">Face</div><div class="row" id="face"></div>
     <div class="label">Shirt</div><div class="row" id="shirt"></div>
     <div class="label">Pants</div><div class="row" id="pants"></div>
-    <div class="label">Shoes</div><div class="row" id="shoes"></div>
     <div class="label">Skin</div><div class="row" id="skin"></div>
     <div style="margin-top:12px"><button class="btn green big" id="save">Save</button> <span id="status"></span></div>
   </div></div>
@@ -23,11 +23,41 @@
 (async () => {
   const me = await shell("avatar");
   if (!me) { location.href = "/login"; return; }
-  const look = { ...me.avatar };
+  const look = { ...me.avatar, hats: [...(me.avatar.hats || [])] };
+  await modelReady;
+  // The big preview: drag to turn it around.
+  const canvas = document.getElementById("view");
+  const view = new AvatarGL(canvas);
+  let yaw = 0.35, dragging = null;
+  const redraw = () => view.draw(look, { yaw });
+  canvas.style.cursor = "grab";
+  canvas.onpointerdown = (e) => { dragging = e.clientX; canvas.setPointerCapture(e.pointerId); canvas.style.cursor = "grabbing"; };
+  canvas.onpointermove = (e) => { if (dragging !== null) { yaw += (e.clientX - dragging) * 0.012; dragging = e.clientX; redraw(); } };
+  canvas.onpointerup = () => { dragging = null; canvas.style.cursor = "grab"; };
+  // Hat pictures, drawn once.
+  const hatPics = Object.fromEntries(MODEL.hats.map((h) => [h.name, avatarPicture({ skin: [200, 200, 205], face: "smile" }, { headOnly: true, onlyHat: h.name, yaw: 0.45 }, 64, 64)]));
   const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
   function draw() {
-    document.getElementById("preview").innerHTML = avatarSvg(look);
-    for (const key of ["shirt", "pants", "shoes", "skin"]) {
+    redraw();
+    // Hats: click one to put it on, click again to take it off.
+    const hats = document.getElementById("hats");
+    hats.innerHTML = "";
+    for (const h of MODEL.hats) {
+      const b = document.createElement("div");
+      const on = look.hats.includes(h.name);
+      b.className = "hat" + (on ? " on" : "");
+      b.title = h.title;
+      b.innerHTML = `<img src="${hatPics[h.name]}" alt=""><span>${esc(h.title)}</span>`;
+      b.onclick = () => {
+        if (on) look.hats = look.hats.filter((x) => x !== h.name);
+        else if (look.hats.length < MODEL.maxHats) look.hats.push(h.name);
+        else { document.getElementById("hat-count").textContent = `(up to ${MODEL.maxHats}: take one off first)`; return; }
+        draw();
+      };
+      hats.appendChild(b);
+    }
+    document.getElementById("hat-count").textContent = `(${look.hats.length} of ${MODEL.maxHats})`;
+    for (const key of ["shirt", "pants", "skin"]) {
       const row = document.getElementById(key);
       row.innerHTML = "";
       for (const c of PALETTES[key]) {
