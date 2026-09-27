@@ -136,6 +136,9 @@ fn every_page_renders_and_its_links_and_pictures_exist() {
             let src = &html[i + 10..];
             let src = &src[..src.find('"').unwrap()];
             let file = src.strip_prefix("img/").unwrap_or_else(|| panic!("{}: pictures live in img/: {src}", page.slug));
+            // (With its fingerprint, so browsers notice a retaken picture.)
+            let (file, version) = file.split_once("?v=").unwrap_or_else(|| panic!("{src} has no ?v= fingerprint"));
+            assert_eq!(version.len(), 8, "{src}");
             let bytes = docs::image(file).unwrap_or_else(|| panic!("{} shows {src}, which isn't in docs/img", page.slug));
             assert!(bytes.len() > 2000, "{src} is a real picture, not a placeholder");
         }

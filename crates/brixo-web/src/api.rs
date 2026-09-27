@@ -361,9 +361,12 @@ async fn sample_file(Path(file): Path<String>) -> Response {
     }
 }
 
+/// A guide picture. The pages ask for them with a fingerprint of the
+/// contents (?v=...), so they can be kept for good: a new picture is a new
+/// address.
 async fn learn_image(Path(file): Path<String>) -> Response {
     match crate::docs::image(&file) {
-        Some(bytes) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], bytes).into_response(),
+        Some(bytes) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], bytes).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }

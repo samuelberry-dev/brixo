@@ -247,7 +247,7 @@ fn body_html(markdown: &str) -> (String, Vec<(String, String)>) {
             other if heading.is_some() => drop(other),
             // Pictures: shown as a framed figure, the alt text as its caption.
             Event::Start(Tag::Image { dest_url, .. }) => {
-                events.push(Event::Html(format!("<figure><img src=\"{}\" alt=\"", escape(&dest_url)).into()));
+                events.push(Event::Html(format!("<figure><img src=\"{}\" alt=\"", escape(&versioned(&dest_url))).into()));
                 events.push(Event::Html("CAPTION_START".into()));
             }
             Event::End(TagEnd::Image) => events.push(Event::Html("CAPTION_END".into())),
@@ -403,6 +403,20 @@ pub fn search_index() -> &'static str {
 /// A picture by file name.
 pub fn image(name: &str) -> Option<&'static [u8]> {
     IMAGES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+}
+
+/// A picture's address with a fingerprint of its contents on the end
+/// ("img/x.png?v=3fa9c2e1"), so a retaken screenshot is a new address and
+/// browsers fetch it instead of showing the one they kept.
+fn versioned(src: &str) -> String {
+    match src.strip_prefix("img/").and_then(image) {
+        Some(bytes) => {
+            // FNV-1a: tiny, and plenty to tell two pictures apart.
+            let hash = bytes.iter().fold(0x811c9dc5u32, |h, b| (h ^ *b as u32).wrapping_mul(0x01000193));
+            format!("{src}?v={hash:08x}")
+        }
+        None => src.to_string(),
+    }
 }
 
 #[cfg(test)]
