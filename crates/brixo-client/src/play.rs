@@ -142,11 +142,13 @@ pub struct FollowCamera {
     /// How far back the camera actually was last frame, and when: walls
     /// pull it in instantly, and it eases back out from there.
     reach: Option<(f32, std::time::Instant)>,
+    /// Whether a script had the camera on a part last frame.
+    on_script_camera: bool,
 }
 
 impl Default for FollowCamera {
     fn default() -> Self {
-        Self { distance: 16.0, reach: None, shoulder: false, shoulder_blend: 0.0, shoulder_at: None }
+        Self { distance: 16.0, reach: None, shoulder: false, shoulder_blend: 0.0, shoulder_at: None, on_script_camera: false }
     }
 }
 
@@ -180,6 +182,33 @@ impl FollowCamera {
     pub fn update(&mut self, camera: &mut Camera, world: &DataModel, me: Option<InstanceId>) -> Option<InstanceId> {
         let id = me?;
         let player = world.player(id)?;
+        // A cutscene: the game has put your camera on a part.
+        if let Some(part) = brixo_core::camera_part(world, id).and_then(|p| world.part(p)) {
+            let q = glam::Quat::from_euler(glam::EulerRot::YXZ, part.rotation.y.to_radians(), part.rotation.x.to_radians(), part.rotation.z.to_radians());
+            let d = q * Vec3::Z;
+            let at = Vec3::new(part.position.x, part.position.y, part.position.z);
+            let (yaw, pitch) = (d.z.atan2(d.x), d.y.clamp(-1.0, 1.0).asin());
+            // Glide after it (scripts move parts in steps), but cut
+            // straight to a new shot.
+            let now = std::time::Instant::now();
+            let dt = self.shoulder_at.map(|t| (now - t).as_secs_f32().min(0.1)).unwrap_or(0.0);
+            self.shoulder_at = Some(now);
+            let k = if !self.on_script_camera || at.distance(camera.position) > 25.0 { 1.0 } else { 1.0 - (-10.0 * dt).exp() };
+            self.on_script_camera = true;
+            camera.position += (at - camera.position) * k;
+            let mut turn = yaw - camera.yaw;
+            while turn > std::f32::consts::PI {
+                turn -= std::f32::consts::TAU;
+            }
+            while turn < -std::f32::consts::PI {
+                turn += std::f32::consts::TAU;
+            }
+            camera.yaw += turn * k;
+            camera.pitch += (pitch - camera.pitch) * k;
+            camera.fov_degrees += (70.0 - camera.fov_degrees) * k;
+            return None;
+        }
+        self.on_script_camera = false;
         if let Some(kart) = player.kart.filter(|k| brixo_core::is_kart(world, *k)) {
             self.chase(camera, world, kart);
             return None;

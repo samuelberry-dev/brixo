@@ -16,6 +16,8 @@ use brixo_core::{DataModel, InstanceId, Vec3};
 struct Pose {
     position: Vec3,
     yaw: f32,
+    /// A part's whole rotation (players only turn).
+    rotation: Vec3,
 }
 
 /// Anything that jumps further than this between updates was teleported
@@ -42,9 +44,9 @@ fn poses(world: &DataModel) -> HashMap<InstanceId, Pose> {
     let mut out = HashMap::new();
     for id in world.walk() {
         if let Some(p) = world.player(id) {
-            out.insert(id, Pose { position: p.body.position, yaw: p.body.rotation.y });
+            out.insert(id, Pose { position: p.body.position, yaw: p.body.rotation.y, rotation: p.body.rotation });
         } else if let Some(p) = world.part(id) {
-            out.insert(id, Pose { position: p.position, yaw: p.rotation.y });
+            out.insert(id, Pose { position: p.position, yaw: p.rotation.y, rotation: p.rotation });
         }
     }
     out
@@ -106,16 +108,21 @@ impl Smoother {
         let t = (((at - ta) / (tb - ta).max(1e-6)) as f32).clamp(0.0, 1.0);
         for (id, to) in b {
             let from = a.get(id).unwrap_or(to);
-            let position = if distance(from.position, to.position) > TELEPORT {
-                to.position
-            } else {
-                lerp(from.position, to.position, t)
-            };
+            let jumped = distance(from.position, to.position) > TELEPORT;
+            let position = if jumped { to.position } else { lerp(from.position, to.position, t) };
             if let Some(p) = view.player_mut(*id) {
                 p.body.position = position;
                 p.body.rotation.y = lerp_degrees(from.yaw, to.yaw, t);
             } else if let Some(p) = view.part_mut(*id) {
                 p.position = position;
+                // Turning smoothly too (a kart going round a bend).
+                if !jumped && from.rotation != to.rotation {
+                    p.rotation = Vec3::new(
+                        lerp_degrees(from.rotation.x, to.rotation.x, t),
+                        lerp_degrees(from.rotation.y, to.rotation.y, t),
+                        lerp_degrees(from.rotation.z, to.rotation.z, t),
+                    );
+                }
             }
         }
         view

@@ -250,6 +250,11 @@ impl Physics {
         self.kart_inputs = inputs;
     }
 
+    /// A kart's boost and spin-out, in seconds left.
+    pub fn kart_timers(&self, kart: InstanceId) -> Option<(f32, f32)> {
+        self.karts.get(&kart).map(|k| (k.boost, k.spin))
+    }
+
     /// Where a kart is and which way it faces (its chassis), and its speed.
     pub fn kart_state(&self, kart: InstanceId) -> Option<(Vec3, f32, f32)> {
         let k = self.karts.get(&kart)?;
@@ -297,7 +302,8 @@ impl Physics {
                 if boosting {
                     along = (along + ACCEL * 3.0 * dt).min(top_now);
                 } else if input.throttle > 0.0 {
-                    along = if along < 0.0 { along + BRAKE * dt } else { (along + ACCEL * dt).min(top_now) };
+                    // (Over the top speed, after a boost: eased down below, not cut.)
+                    along = if along < 0.0 { along + BRAKE * dt } else if along < top_now { (along + ACCEL * dt).min(top_now) } else { along };
                 } else if input.throttle < 0.0 {
                     along = if along > 0.0 { along - BRAKE * dt } else { (along - ACCEL * 0.7 * dt).max(-REVERSE_TOP) };
                 } else {
@@ -444,6 +450,10 @@ impl Physics {
                 ("drift", Attribute::Num(drift_level)),
                 ("boosting", Attribute::Bool(k.boost > 0.0)),
                 ("spinning", Attribute::Bool(k.spin > 0.0)),
+                // How long they've got left (so a player's predicted kart
+                // boosts and spins when a script makes the server's do).
+                ("boost_left", Attribute::Num((k.boost as f64 * 20.0).round() / 20.0)),
+                ("spin_left", Attribute::Num((k.spin as f64 * 20.0).round() / 20.0)),
             ];
             if let Some(inst) = world.get_mut(id) {
                 for (key, value) in facts {

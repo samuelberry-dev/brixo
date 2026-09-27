@@ -99,8 +99,8 @@ pub fn driving(world: &DataModel, me: Option<InstanceId>) -> Option<InstanceId> 
 pub fn engine_pitch(world: &DataModel, me: Option<InstanceId>) -> Option<f32> {
     let kart = driving(world, me)?;
     let speed = num(world, kart, "speed");
-    let boost = if flag(world, kart, "boosting") { 0.25 } else { 0.0 };
-    Some(0.75 + speed / 70.0 * 1.15 + boost)
+    let boost = if flag(world, kart, "boosting") { 0.12 } else { 0.0 };
+    Some(0.8 + speed / 70.0 * 0.65 + boost)
 }
 
 /// While you drive: a speed dial in the bottom-right corner, with the drift
@@ -142,7 +142,7 @@ mod tests {
         dm.player_mut(me).unwrap().kart = Some(k);
         let idle = engine_pitch(&dm, Some(me)).unwrap();
         dm.get_mut(k).unwrap().attributes.insert("speed".into(), Attribute::Num(70.0));
-        assert!(engine_pitch(&dm, Some(me)).unwrap() > idle + 1.0);
+        assert!(engine_pitch(&dm, Some(me)).unwrap() > idle + 0.5);
         assert_ne!(spark_color(0.5), spark_color(1.0));
         assert_ne!(spark_color(1.0), spark_color(2.0));
     }

@@ -235,18 +235,38 @@ pub struct Speaker {
     engine: Option<rodio::Sink>,
 }
 
-/// A kart engine's hum: a short loop (a whole number of every wave in it,
-/// so it loops without a click) of a buzzy low note with a putt-putt.
+/// A kart engine's hum: a soft, low purr, a second long (a whole number of
+/// every wave in it, so it loops without a click). Round sine partials,
+/// not buzzy saws, with a gentle putt-putt and a breath of air in it.
 pub fn engine_loop() -> Vec<f32> {
-    let n = (RATE as f32 * 0.2) as usize;
-    (0..n)
+    use std::f32::consts::TAU;
+    let n = RATE as usize;
+    let overlap = n / 20;
+    let mut noise = 0x2545_f491u32;
+    let mut air = 0.0f32;
+    let mut out: Vec<f32> = (0..n + overlap)
         .map(|i| {
             let t = i as f32 / RATE as f32;
-            let saw = |f: f32| 2.0 * (t * f).fract() - 1.0;
-            let putt = 0.75 + 0.25 * (t * 20.0 * std::f32::consts::TAU).sin();
-            (saw(55.0) * 0.55 + saw(110.0) * 0.3 + (t * 220.0 * std::f32::consts::TAU).sin() * 0.15) * putt * 0.5
+            let sine = |f: f32| (t * f * TAU).sin();
+            // The cylinder beat: soft pulses 24 times a second.
+            let putt = 0.8 + 0.2 * sine(24.0).max(0.0);
+            let body = sine(48.0) * 0.6 + sine(96.0) * 0.25 + sine(144.0) * 0.08 + sine(72.0) * 0.12;
+            noise ^= noise << 13;
+            noise ^= noise >> 17;
+            noise ^= noise << 5;
+            let white = noise as f32 / u32::MAX as f32 * 2.0 - 1.0;
+            air += (white - air) * 0.02;
+            (body * putt + air * 0.6) * 0.45
         })
-        .collect()
+        .collect();
+    // The air doesn't repeat by itself: blend the run-on past the end into
+    // the start, so the loop's seam can't click.
+    for i in 0..overlap {
+        let k = i as f32 / overlap as f32;
+        out[i] = out[i] * k + out[n + i] * (1.0 - k);
+    }
+    out.truncate(n);
+    out
 }
 
 /// The song that's playing: what it is, when (in its own time) it started,
@@ -346,8 +366,11 @@ impl Speaker {
                     self.engine = Some(sink);
                 }
                 let sink = self.engine.as_ref().unwrap();
-                sink.set_speed(pitch.clamp(0.5, 3.0));
-                sink.set_volume(0.22 * self.sound_level);
+                let pitch = pitch.clamp(0.6, 2.0);
+                sink.set_speed(pitch);
+                // Quiet ticking over, fuller flat out, never shouting.
+                let loud = 0.05 + 0.07 * ((pitch - 0.8) / 0.8).clamp(0.0, 1.0);
+                sink.set_volume(loud * self.sound_level);
             }
         }
     }

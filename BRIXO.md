@@ -707,7 +707,15 @@ when stuck. `Game::set_autopilot` (Player: `BRIXO_AUTOPILOT=1`) drives a
 human's kart the same way, for filming. Client: chase camera (FOV and
 distance grow with speed), speed dial and drift bar, sparks and flames
 (`kart_fx`), engine note; the renderer leaves out characters within 5
-studs of the camera. Prediction covers karts. `tests/karts.rs`.
+studs of the camera. Prediction covers karts: your kart is drawn blended
+between the last two physics steps (`Physics::step_fraction`/`steps_run`;
+drawing the newest step made fast karts hop on screens faster than 60 Hz),
+and script boosts and spin-outs reach the prediction through the kart's
+`boost_left`/`spin_left` facts (without them, a boost pad made the server
+run ahead and the prediction snap forward). The view smoother blends part
+rotation too. Scripts can put a player's camera on a part (`camera_part`,
+kept as the part's id in a custom field; `FollowCamera` glides after it
+and cuts on jumps over 25 studs). `tests/karts.rs`.
 
 **Brickport Speedway** (`brixo_samples::speedway`, `brixo-samples
 speedway`): kart racing for 8, bots filling the grid. The track is a
@@ -720,14 +728,24 @@ lake, and a barn shortcut (`CUT_FROM`/`CUT_TO`; the script caps
 `top_speed` at 40 inside it; no checkpoints in the stretch it skips).
 Grandstand with ~120 fans, jumbotron (a label attached to its screen),
 start gantry with 5 lights, pits (join here), podium, town, trees, lamps.
-The **Race** script: lobby (15 s, humans free-drive from the pits, bots
-wait on the grid), grid (humans at random slots), lights, 3 laps, results
-(25 s after the first finisher, or when every human's done), podium,
-fireworks, saved `wins`/`best_lap`, leaderboard; time of day rotates
-18.0/21.8/13.5. Checkpoints are checked by position every 0.1 s (not
-touches). Items (boost, homing rocket, oil, shield) from item boxes, used
-with E; R = back to the last checkpoint; bots stuck 4 s respawn; bots are
-rubber-banded against the best human via `top_speed`. Names to avoid for
+The **Race** script: lobby (`lobby_seconds`, 45 by default; everyone on
+foot, F gets in/out of the nearest free kart, race karts parked in the pit
+boxes, bots standing in the garages; it waits while nobody's in), then
+`to_grid` (humans who haven't opted out with the "Race next" button or G,
+in random slots; bots to make 8), the flyover (the **Flyover Camera** part
+glides through the **Flyover** folder's From/To shots with everyone's
+`camera_part` on it, to Intro Music), quiet, five lights with beeps, GO
+into Race Music (Final Lap Music + sting when the leader starts the last
+lap), 3 laps, results (25 s after the first finisher, or when every human's
+done), podium, fireworks, Victory Fanfare, saved `wins`/`best_lap`,
+leaderboard; time of day rotates 18.0/21.8/13.5. The **Drift Park**
+(`DRIFT`, infield) has 4 practice karts (`practice = true`), always free;
+the script puts back any that leave it. Checkpoints are checked by position
+every 0.1 s (not touches). Items (boost, homing rocket, spike mine, shield)
+from item boxes, used with E; R = back to the last checkpoint; F twice
+leaves a race; bots stuck 4 s respawn; bots are rubber-banded against the
+best human via `top_speed`. All its music is synthesized in `synth.rs`
+(`speedway_*`). Names to avoid for
 custom fields: anything one letter off a built-in field (`place` reads as
 a typo of `face`; `lane` is exempted). `tests/speedway.rs` races it headless.
 

@@ -342,6 +342,19 @@ pub fn kart_chassis(world: &DataModel, kart: InstanceId) -> Option<InstanceId> {
 pub const KART_AT: &str = "kart_at";
 pub const KART_Q: &str = "kart_q";
 
+/// A player's `camera_part` (scripts set it for a cutscene): the player's
+/// camera sits at that part, looking the way its front faces. Kept as the
+/// part's id in a custom field.
+pub const CAMERA_PART: &str = "camera_part";
+
+/// The part a player's camera is fixed to, if a script has set one.
+pub fn camera_part(world: &DataModel, player: InstanceId) -> Option<InstanceId> {
+    match world.get(player)?.attributes.get(CAMERA_PART) {
+        Some(Attribute::Num(n)) => Some(InstanceId::from_raw(*n as u64)).filter(|p| world.part(*p).is_some()),
+        _ => None,
+    }
+}
+
 /// Where a character's right shoulder is, in its own space (facing +Z).
 pub const RIGHT_SHOULDER: Vec3 = Vec3 { x: -1.43, y: 0.97, z: 0.0 };
 /// From the shoulder to the middle of the hand.

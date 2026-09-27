@@ -51,6 +51,8 @@ const CUT_TO: (f32, f32) = (-108.0, 2.0);
 /// Where the pits and the plaza are (x from, x to, z from, z to).
 const PLAZA: (f32, f32, f32, f32) = (-70.0, 70.0, 15.0, 62.0);
 const PODIUM: (f32, f32) = (60.0, 112.0);
+/// The Drift Park: a practice pad in the infield (x from, x to, z from, z to).
+pub const DRIFT: (f32, f32, f32, f32) = (105.0, 212.0, 58.0, 188.0);
 
 pub const KART_COLORS: [(&str, Rgb, Rgb); 8] = [
     ("Red", (220, 45, 40), (255, 210, 60)),
@@ -465,7 +467,7 @@ fn build_land(b: &mut B, rng: &mut Rand) {
 
 /// Somewhere clear of the track, water, and the places built on.
 fn clear(t: &[Sample], p: (f32, f32), r: f32) -> bool {
-    if in_water(p, r + 2.0) || in_rect(p, PLAZA, r + 4.0) || in_rect(p, (-125.0, 125.0, -85.0, -15.0), r) || flat_dist(p, PODIUM) < r + 22.0 {
+    if in_water(p, r + 2.0) || in_rect(p, PLAZA, r + 4.0) || in_rect(p, DRIFT, r + 6.0) || in_rect(p, (-125.0, 125.0, -85.0, -15.0), r) || flat_dist(p, PODIUM) < r + 22.0 {
         return false;
     }
     if seg_dist(p, CUT_FROM, CUT_TO) < r + 12.0 {
@@ -908,13 +910,21 @@ end
 "#;
 
 /// The race: the lobby, the grid, the lights, laps, items, the podium.
-pub const RACE: &str = r#"-- Brickport Speedway: races for up to 8, bots filling the grid.
+pub const RACE: &str = r#"-- Brickport Speedway: kart racing for up to 8, bots filling the grid.
+--
+-- Between races (the lobby): walk round the pits, get in any kart with F
+-- and drive the track, or practise in the Drift Park (always open). Click
+-- "Race next" (or press G) to sit the next race out.
+-- A race: a flyover of the track, the grid, five red lights, three laps,
+-- the podium. Then back to the lobby.
 LAPS = 3
 BOT_NAMES = ["Bolt", "Turbo", "Nitro", "Blaze", "Zippy", "Comet", "Rocket", "Dash", "Sparky", "Flash"]
 TIMES = [18.0, 21.8, 13.5]
-ITEM_NAMES = {boost = "BOOST", rocket = "ROCKET", oil = "OIL SLICK", shield = "SHIELD"}
+ITEM_NAMES = {boost = "BOOST", rocket = "ROCKET", mine = "SPIKE MINE", shield = "SHIELD"}
 world = find("Workspace")
 world.phase = "lobby"
+-- How long between races (a Workspace field, lobby_seconds, can change it).
+LOBBY_SECONDS = world.lobby_seconds or 45
 
 -- The checkpoints, in order, with which way each faces.
 fn read_checkpoints()
@@ -927,10 +937,13 @@ fn read_checkpoints()
 end
 cps = read_checkpoints()
 NCP = len(cps)
-karts = find("Karts").children
+karts = find("Race Karts").children
+practice = find("Practice Karts").children
 lights = find("Lights").children
 fans = find("Crowd").children
 barn = find("Barn Floor")
+park = find("Drift Park Floor")
+flycam = find("Flyover Camera")
 
 -- Everyone racing, by name: {p, kart, ch (chassis), passed, next, ...}
 racers = {}
@@ -941,6 +954,9 @@ go_time = 0
 first_finish = 0
 finished_count = 0
 cheer_until = 0
+lobby_ends = 0
+final_lap_on = false
+retire_asked = {}
 
 fn chassis_of(kart)
     for c in kart.children do
@@ -996,7 +1012,11 @@ fn bots()
     return list
 end
 
-fn free_kart()
+fn is_practice(kart)
+    return kart != nil and kart.practice == true
+end
+
+fn free_race_kart()
     for k in karts do
         if k.driver == nil then
             return k
@@ -1005,7 +1025,22 @@ fn free_kart()
     return nil
 end
 
--- Each human's own screen: lap, place, times, and their item.
+fn child(p, name)
+    for c in p.children do
+        if c.name == name then
+            return c
+        end
+    end
+    return nil
+end
+
+-- Whether someone's in for the next race (everyone is, until they say no).
+fn racing_next(p)
+    return p.sit_out != true
+end
+
+-- Each human's own screen: lap, place, times, their item, and the button
+-- to sit a race out.
 fn make_hud(p)
     hud = create("TextLabel", p)
     hud.name = "Race HUD"
@@ -1030,15 +1065,10 @@ fn make_hud(p)
     item.background_color = {r = 245, g = 205, b = 48}
     item.text_color = {r = 13, g = 42, b = 74}
     item.visible = false
-end
-
-fn child(p, name)
-    for c in p.children do
-        if c.name == name then
-            return c
-        end
-    end
-    return nil
+    button = clone(find("Race Toggle Template"))
+    button.name = "Race Toggle"
+    button.parent = p
+    button.visible = true
 end
 
 -- Puts a player in a kart at a spot.
@@ -1047,76 +1077,9 @@ fn seat(p, kart, at, facing)
     p.kart = kart
 end
 
--- Humans in karts at the pits, free to drive round; bots on the grid.
-fn to_lobby()
-    world.phase = "lobby"
-    for p in players() do
-        p.item = nil
-        p.race_place = nil
-    end
-    -- How many bots we want: enough to fill 8, but at least 3 to race.
-    want = max(3, 8 - len(humans()))
-    have = bots()
-    while len(have) < want do
-        b = add_bot(BOT_NAMES[len(have) + 1])
-        b.lane = random(-5, 5)
-        b.skill = 64 + random(0, 5)
-        push(have, b)
-    end
-    -- Humans first: each gets a kart (taking one from a bot if need be).
-    slot = 0
-    for p in humans() do
-        if p.kart == nil then
-            k = free_kart()
-            if k == nil then
-                for b in bots() do
-                    if k == nil and b.kart != nil then
-                        k = b.kart
-                        b.kart = nil
-                    end
-                end
-            end
-            if k != nil then
-                slot += 1
-                seat(p, k, {x = -77 + slot * 17, y = 1.5, z = 48}, 90)
-            end
-        end
-        if p.kart != nil then
-            p.kart.locked = nil
-            p.kart.top_speed = nil
-        end
-    end
-    -- Bots wait on the grid (the extra ones watch from the stands).
-    gs = 0
-    n = 0
-    for b in bots() do
-        n += 1
-        if n > want then
-            if b.kart != nil then
-                b.kart = nil
-            end
-        else
-            if b.kart == nil then
-                k = free_kart()
-                if k != nil then
-                    b.kart = k
-                end
-            end
-            if b.kart != nil then
-                gs += 1
-                place_kart(b.kart, slot_at(9 - gs), 90)
-                b.kart.locked = true
-            end
-        end
-    end
-    wait(0.3)
-    n = 0
-    for b in bots() do
-        n += 1
-        if b.kart == nil then
-            b.position = {x = -80 + n * 12, y = 17, z = -50}
-        end
-    end
+-- Where race kart n parks in the pits, and where bots wait between races.
+fn pit_box(n)
+    return {x = -60 + (n - 1) * 17, y = 1.5, z = 48}
 end
 
 fn slot_at(i)
@@ -1124,67 +1087,169 @@ fn slot_at(i)
     return {x = s.position.x, y = 1.5, z = s.position.z}
 end
 
--- Everyone in a kart lines up on the grid, humans at random slots.
-fn to_grid()
-    world.phase = "grid"
-    racers = {}
-    order = []
-    list = []
-    for p in humans() do
-        if p.kart != nil then
-            insert(list, random(1, len(list) + 1), p)
-        end
+-- Out of whatever kart they're in, standing at `at` (a moment later, once
+-- the engine's let them out).
+fn to_foot(p, at)
+    if p.kart != nil then
+        p.kart = nil
+        wait(0.25)
     end
-    for p in bots() do
-        if p.kart != nil then
-            push(list, p)
-        end
+    if at != nil then
+        p.position = at
     end
-    n = 0
-    for p in list do
-        n += 1
-        if n <= 8 then
-            k = p.kart
-            place_kart(k, slot_at(n), 90)
-            k.locked = true
-            k.top_speed = nil
-            p.item = nil
-            racers[p.name] = {p = p, kart = k, ch = chassis_of(k), passed = 0, next = 1, lap_start = 0, best = nil, done = false, finish = nil, respawned = 0, shield = 0, bubble = nil}
-            push(order, p.name)
-        end
-    end
-    finished_count = 0
-    first_finish = 0
 end
 
-fn lights_out()
-    for l in lights do
-        l.color = {r = 70, g = 12, b = 12}
+-- F: in or out of the nearest kart.
+fn toggle_kart(p)
+    if p.kart != nil then
+        s = racers[p.name]
+        if s != nil and world.phase == "race" and not s.done then
+            -- Leaving a race: ask first.
+            if retire_asked[p.name] == nil or time() - retire_asked[p.name] > 3 then
+                retire_asked[p.name] = time()
+                tell(p, "Press F again to leave the race")
+                return
+            end
+            remove(racers, p.name)
+            drop_from_order(p.name)
+            k = p.kart
+            p.kart = nil
+            wait(0.3)
+            park_karts()
+            tell(p, "You left the race")
+            return
+        end
+        if s != nil and (world.phase == "intro" or world.phase == "grid") then
+            tell(p, "The race is about to start!")
+            return
+        end
+        p.kart = nil
+        return
     end
-    say("Get ready...")
-    wait(1.5)
-    for l in lights do
-        l.color = {r = 255, g = 30, b = 30}
-        play_sound("click")
-        wait(0.8)
+    best = nil
+    best_d = 81
+    for k in karts do
+        best_d = nearer(p, k, best_d)
+        if best_d < 0 then
+            best = k
+            best_d = -best_d
+        end
     end
-    wait(0.4 + random() * 0.8)
-    for l in lights do
-        l.color = {r = 40, g = 255, b = 80}
+    for k in practice do
+        best_d = nearer(p, k, best_d)
+        if best_d < 0 then
+            best = k
+            best_d = -best_d
+        end
     end
-    say("GO!")
-    play_sound("whoosh")
-    play_music("rush")
-    go_time = time()
-    for name in racers do
-        s = racers[name]
-        s.lap_start = go_time
-        s.kart.locked = nil
+    if best == nil then
+        tell(p, "Walk up to a kart, then press F")
+        return
     end
-    world.phase = "race"
-    cheer_until = time() + 4
-    wait(1.2)
-    say("")
+    if not is_practice(best) and world.phase != "lobby" then
+        tell(p, "Those karts are racing: try the Drift Park!")
+        return
+    end
+    best.locked = nil
+    best.top_speed = nil
+    p.kart = best
+end
+
+-- Gives back minus the squared distance to kart k if it's free and nearer
+-- than `best` (squared), otherwise `best`.
+fn nearer(p, k, best)
+    if k.driver != nil then
+        return best
+    end
+    c = chassis_of(k)
+    dx = c.position.x - p.position.x
+    dy = c.position.y - p.position.y
+    dz = c.position.z - p.position.z
+    d = dx * dx + dy * dy + dz * dz
+    if d < best then
+        return -d
+    end
+    return best
+end
+
+fn drop_from_order(name)
+    list = []
+    for n in order do
+        if n != name then
+            push(list, n)
+        end
+    end
+    order = list
+end
+
+-- A message just for one player, for a few seconds.
+fn tell(p, text)
+    note = child(p, "Note")
+    if note == nil then
+        note = create("TextLabel", p)
+        note.name = "Note"
+        note.x = 0.33
+        note.y = 0.3
+        note.width = 0.34
+        note.height = 0.06
+        note.text_size = 22
+        note.background = true
+        note.background_color = {r = 13, g = 42, b = 74}
+        note.text_color = {r = 245, g = 205, b = 48}
+    end
+    note.text = text
+    note.visible = true
+    p.note_until = time() + 3
+end
+
+-- The race karts back in the pits, empty, ready for anyone.
+fn park_karts()
+    n = 0
+    for k in karts do
+        n += 1
+        if k.driver == nil then
+            place_kart(k, pit_box(n), 90)
+        end
+        k.locked = nil
+        k.top_speed = nil
+    end
+end
+
+-- A mine: a glowing red orb with a pulsing ring round it.
+fn drop_mine(x, y, z, owner)
+    m = create("Model", find("Effects"))
+    m.name = "Spike Mine"
+    orb = create("Part", m)
+    orb.name = "Orb"
+    orb.shape = "ball"
+    orb.material = "neon"
+    orb.color = {r = 255, g = 40, b = 30}
+    orb.size = {x = 2.4, y = 2.4, z = 2.4}
+    orb.position = {x = x, y = y + 1.3, z = z}
+    orb.can_collide = false
+    orb.anchored = true
+    for i in 1..4 do
+        spike = create("Part", m)
+        spike.name = "Spike"
+        spike.material = "neon"
+        spike.color = {r = 255, g = 220, b = 40}
+        spike.size = {x = 0.4, y = 3.6, z = 0.4}
+        spike.position = {x = x, y = y + 1.3, z = z}
+        spike.rotation = {x = 45 * (i % 2), y = 45 * i, z = 45 * floor(i / 2)}
+        spike.can_collide = false
+        spike.anchored = true
+    end
+    ring = create("Part", m)
+    ring.name = "Ring"
+    ring.shape = "cylinder"
+    ring.material = "neon"
+    ring.color = {r = 255, g = 60, b = 40}
+    ring.size = {x = 6, y = 0.1, z = 6}
+    ring.position = {x = x, y = y + 0.08, z = z}
+    ring.transparency = 0.4
+    ring.can_collide = false
+    ring.anchored = true
+    push(fx, {kind = "mine", part = m, ring = ring, owner = owner, born = time(), x = x, y = y, z = z})
 end
 
 fn progress(s)
@@ -1335,17 +1400,9 @@ fn use_item(p)
         b.carry_y = -1.5
         s.bubble = b
         play_sound("pop", p)
-    elseif what == "oil" then
-        o = create("Part", find("Effects"))
-        o.name = "Oil Slick"
-        o.shape = "cylinder"
-        o.color = {r = 20, g = 18, b = 26}
-        o.size = {x = 6, y = 0.1, z = 6}
-        o.position = {x = at.x - fwd.x * 5, y = at.y - 1.05, z = at.z - fwd.z * 5}
-        o.can_collide = false
-        o.anchored = true
-        push(fx, {kind = "oil", part = o, owner = p.name, born = time()})
-        play_sound("splat", p)
+    elseif what == "mine" then
+        drop_mine(at.x - fwd.x * 6, at.y - 1.1, at.z - fwd.z * 6, p.name)
+        play_sound("click", p)
     elseif what == "rocket" then
         -- Homes in on whoever's just ahead (straight on, if nobody is).
         target = nil
@@ -1379,9 +1436,11 @@ fn firework(x, z)
     push(fx, {kind = "shell", part = shell, born = time(), vy = 38 + random() * 12})
 end
 
-fn burst(at)
-    colours = [{r = 255, g = 70, b = 70}, {r = 80, g = 180, b = 255}, {r = 255, g = 220, b = 60}, {r = 120, g = 255, b = 120}, {r = 255, g = 110, b = 230}]
-    colour = colours[random(1, 5)]
+fn burst(at, colour)
+    if colour == nil then
+        colours = [{r = 255, g = 70, b = 70}, {r = 80, g = 180, b = 255}, {r = 255, g = 220, b = 60}, {r = 120, g = 255, b = 120}, {r = 255, g = 110, b = 230}]
+        colour = colours[random(1, 5)]
+    end
     for i in 1..14 do
         a = i / 14 * 6.2832
         up = random() * 2 - 1
@@ -1399,7 +1458,7 @@ fn burst(at)
     play_sound("boom")
 end
 
--- One moment of rockets, oil, fireworks. Gives back false when it's done.
+-- One moment of rockets, mines, fireworks. Gives back false when it's done.
 fn step_fx(f, dt)
     age = time() - f.born
     part = f.part
@@ -1427,16 +1486,21 @@ fn step_fx(f, dt)
         part.position = {x = part.position.x + f.dx * 115 * dt, y = part.position.y, z = part.position.z + f.dz * 115 * dt}
         part.rotation = {x = 0, y = atan2(f.dx, f.dz) * 57.2958, z = 0}
         return true
-    elseif f.kind == "oil" then
-        if age > 30 then
+    elseif f.kind == "mine" then
+        if age > 40 then
             return false
         end
+        -- The ring pulses, so it shows from a long way off.
+        grow = 6 + 2.5 * sin(age * 8)
+        f.ring.size = {x = grow, y = 0.1, z = grow}
+        f.ring.transparency = 0.35 + 0.25 * sin(age * 8)
         for name in racers do
             s = racers[name]
-            dx = s.ch.position.x - part.position.x
-            dz = s.ch.position.z - part.position.z
-            if dx * dx + dz * dz < 12 and abs(s.ch.position.y - part.position.y) < 3 and (name != f.owner or age > 1.5) then
+            dx = s.ch.position.x - f.x
+            dz = s.ch.position.z - f.z
+            if dx * dx + dz * dz < 16 and abs(s.ch.position.y - f.y) < 3 and (name != f.owner or age > 1.5) then
                 hit(s)
+                burst({x = f.x, y = f.y + 1, z = f.z}, {r = 255, g = 60, b = 40})
                 return false
             end
         end
@@ -1445,7 +1509,7 @@ fn step_fx(f, dt)
         part.position.y += f.vy * dt
         f.vy -= 30 * dt
         if f.vy < 4 then
-            burst(part.position)
+            burst(part.position, nil)
             return false
         end
         return true
@@ -1462,6 +1526,7 @@ fn step_fx(f, dt)
 end
 
 -- The big screen: the top five.
+
 fn jumbotron_text()
     text = "BRICKPORT SPEEDWAY"
     n = 0
@@ -1514,15 +1579,21 @@ fn show_standings()
     end
 end
 
--- Each human's own HUD.
+
+-- Each human's own HUD, and their race button.
 fn show_hud(p)
     hud = child(p, "Race HUD")
     item = child(p, "Item Slot")
+    button = child(p, "Race Toggle")
+    note = child(p, "Note")
     if hud == nil then
         return
     end
+    if note != nil and p.note_until != nil and time() > p.note_until then
+        note.visible = false
+    end
     s = racers[p.name]
-    if s == nil or world.phase == "lobby" then
+    if s == nil or world.phase == "lobby" or world.phase == "intro" then
         hud.visible = false
     else
         lap = min(LAPS, max(1, floor((s.passed - 1) / NCP) + 1))
@@ -1537,11 +1608,22 @@ fn show_hud(p)
         hud.text = "LAP " + lap + "/" + LAPS + "     " + ordinal(place) + " of " + len(order) + "\nTIME " + fmt(t) + "   BEST " + fmt(s.best)
         hud.visible = true
     end
-    if p.item != nil and p.kart != nil then
+    if p.item != nil and p.kart != nil and s != nil then
         item.text = "E:  " + ITEM_NAMES[p.item]
         item.visible = true
     else
         item.visible = false
+    end
+    if button != nil then
+        -- Between races: whether you're in the next one.
+        button.visible = world.phase == "lobby" or (world.phase != "lobby" and s == nil)
+        if racing_next(p) then
+            button.text = "Next race: I'm IN  (G)"
+            button.background_color = {r = 40, g = 150, b = 70}
+        else
+            button.text = "Next race: sitting out  (G)"
+            button.background_color = {r = 120, g = 60, b = 60}
+        end
     end
 end
 
@@ -1557,32 +1639,11 @@ on player_joined(p)
         p.best_lap = "-"
     end
     make_hud(p)
-    play_music("sunny", p)
-    if world.phase == "lobby" and p.kart == nil then
-        k = free_kart()
-        benched = nil
-        if k == nil then
-            for b in bots() do
-                if k == nil and b.kart != nil then
-                    k = b.kart
-                    b.kart = nil
-                    benched = b
-                end
-            end
-        end
-        if k != nil then
-            k.locked = nil
-            k.top_speed = nil
-            seat(p, k, {x = random(-50, 50), y = 1.5, z = 40}, 90)
-        end
-        if benched != nil then
-            wait(0.3)
-            benched.position = {x = random(-80, 80), y = 17, z = -50}
-        end
-    elseif world.phase != "lobby" then
-        tell = child(p, "Item Slot")
-        tell.text = "Next race soon!"
-        tell.visible = true
+    if world.phase == "lobby" or world.phase == "results" then
+        play_music(find("Lobby Music"), p)
+        tell(p, "Walk up to a kart and press F to drive!")
+    else
+        tell(p, "A race is on: watch, or practise in the Drift Park")
     end
 end
 
@@ -1593,30 +1654,35 @@ on player_left(p)
         if s.bubble != nil then
             destroy(s.bubble)
         end
-        list = []
-        for name in order do
-            if name != p.name then
-                push(list, name)
-            end
-        end
-        order = list
+        drop_from_order(p.name)
     end
 end
 
 on key(p, k)
     if k == "e" then
         use_item(p)
+    elseif k == "f" then
+        toggle_kart(p)
+    elseif k == "g" then
+        if racing_next(p) then
+            p.sit_out = true
+        else
+            p.sit_out = nil
+        end
+        show_hud(p)
     elseif k == "r" then
         s = racers[p.name]
         if s != nil and world.phase == "race" then
             respawn(s)
+        elseif is_practice(p.kart) then
+            place_kart(p.kart, {x = park.position.x - 40, y = 1.5, z = park.position.z}, 90)
         elseif p.kart != nil then
             place_kart(p.kart, {x = 0, y = 1.5, z = 40}, 90)
         end
     end
 end
 
--- Fast: rockets, oil and fireworks.
+-- Fast: rockets, mines, fireworks.
 every 0.05 seconds
     i = 1
     while i <= len(fx) do
@@ -1630,7 +1696,12 @@ every 0.05 seconds
     end
 end
 
--- Often: checkpoints, places, speed, the barn, falls.
+-- Whether a point's in the Drift Park (with a little room round it).
+fn in_park(pos)
+    return abs(pos.x - park.position.x) < park.size.x / 2 + 4 and abs(pos.z - park.position.z) < park.size.z / 2 + 4
+end
+
+-- Often: checkpoints, places, speed, the barn, falls, practice karts.
 every 0.1 seconds
     for p in players() do
         -- Anyone who ends up in the river is fished out.
@@ -1638,10 +1709,20 @@ every 0.1 seconds
             p.position = {x = 0, y = 3, z = 32}
         end
     end
+    -- Practice karts stay in the Drift Park.
+    for k in practice do
+        c = chassis_of(k)
+        if not in_park(c.position) or c.position.y < -3 then
+            place_kart(k, {x = park.position.x - 40, y = 1.5, z = park.position.z}, 90)
+            if k.driver != nil then
+                tell(k.driver, "Practice karts stay in the Drift Park")
+            end
+        end
+    end
     if world.phase == "lobby" then
-        for p in humans() do
-            if p.kart != nil and chassis_of(p.kart).position.y < -3 then
-                place_kart(p.kart, {x = 0, y = 1.5, z = 40}, 90)
+        for k in karts do
+            if chassis_of(k).position.y < -3 then
+                place_kart(k, {x = 0, y = 1.5, z = 40}, 90)
             end
         end
     end
@@ -1683,13 +1764,48 @@ every 0.1 seconds
         end
     end
     rank()
+    -- The last lap: the music turns up.
+    if world.phase == "race" and not final_lap_on and len(order) > 0 then
+        lead = racers[order[1]]
+        if lead.passed >= (LAPS - 1) * NCP + 1 then
+            final_lap_on = true
+            play_sound(find("Final Lap Sting"))
+            play_music(find("Final Lap Music"))
+            say("FINAL LAP!")
+            show_banner_until = time() + 2
+        end
+    end
 end
+
+show_banner_until = 0
 
 -- Now and then: screens, bots' items, rubber bands, the crowd.
 every 0.5 seconds
     show_standings()
     for p in humans() do
         show_hud(p)
+    end
+    if world.phase == "lobby" then
+        left = max(0, floor(lobby_ends - time()))
+        ins = 0
+        for p in humans() do
+            if racing_next(p) then
+                ins += 1
+            end
+        end
+        if ins == 0 then
+            say("")
+            find("Countdown").text = "Next race: waiting for racers (click I'm IN)"
+        else
+            find("Countdown").text = "Next race in " + left + "s   ·   " + ins + " racing"
+        end
+        find("Countdown").visible = true
+    else
+        find("Countdown").visible = false
+    end
+    if world.phase == "race" and show_banner_until > 0 and time() > show_banner_until then
+        show_banner_until = 0
+        say("")
     end
     if world.phase == "race" then
         best_human = nil
@@ -1734,11 +1850,189 @@ every 0.5 seconds
     end
 end
 
+-- The lobby: race karts back in the pits, bots waiting in the garages,
+-- everyone free to drive about.
+fn to_lobby()
+    world.phase = "lobby"
+    lobby_ends = time() + LOBBY_SECONDS
+    for p in players() do
+        p.item = nil
+        p.race_place = nil
+        p.camera_part = nil
+    end
+    n = 0
+    for b in bots() do
+        n += 1
+        to_foot(b, {x = -60 + ((n - 1) % 8) * 17, y = 3, z = 70})
+    end
+    park_karts()
+end
+
+-- Lines up the grid: everyone who's in, in a race kart (humans at random
+-- slots), and bots to make at least 4 and up to 8. Anyone else driving a
+-- race kart gets out; practice karts carry on.
+fn to_grid()
+    racers = {}
+    order = []
+    final_lap_on = false
+    list = []
+    for p in humans() do
+        if racing_next(p) and len(list) < 8 then
+            insert(list, random(1, len(list) + 1), p)
+        elseif p.kart != nil and not is_practice(p.kart) then
+            to_foot(p, {x = random(-40, 40), y = 3, z = 32})
+        end
+    end
+    -- Humans in practice karts come out of them for the race.
+    for p in list do
+        if is_practice(p.kart) then
+            to_foot(p, nil)
+        end
+    end
+    want = min(8 - len(list), max(3, 8 - len(list)))
+    have = bots()
+    while len(have) < want do
+        b = add_bot(BOT_NAMES[len(have) + 1])
+        b.lane = random(-5, 5)
+        b.skill = 64 + random(0, 5)
+        push(have, b)
+    end
+    n = 0
+    for b in have do
+        n += 1
+        if n <= want then
+            push(list, b)
+        end
+    end
+    -- Everyone into a race kart on their slot.
+    for p in list do
+        if p.kart != nil and is_practice(p.kart) then
+            p.kart = nil
+        end
+    end
+    wait(0.3)
+    n = 0
+    for p in list do
+        n += 1
+        k = p.kart
+        if k == nil then
+            k = free_race_kart()
+        end
+        if k != nil then
+            seat(p, k, slot_at(n), 90)
+            k.locked = true
+            k.top_speed = nil
+            p.item = nil
+            racers[p.name] = {p = p, kart = k, ch = chassis_of(k), passed = 0, next = 1, lap_start = 0, best = nil, done = false, finish = nil, respawned = 0, shield = 0, bubble = nil}
+            push(order, p.name)
+        end
+    end
+    finished_count = 0
+    first_finish = 0
+end
+
+-- Moves the flyover camera from one pose to another over `seconds`.
+fn glide(from, to, seconds)
+    steps = floor(seconds / 0.03)
+    for i in 0..steps do
+        t = i / steps
+        -- Ease in and out.
+        e = t * t * (3 - 2 * t)
+        flycam.position = {x = from.position.x + (to.position.x - from.position.x) * e, y = from.position.y + (to.position.y - from.position.y) * e, z = from.position.z + (to.position.z - from.position.z) * e}
+        turn = to.rotation.y - from.rotation.y
+        while turn > 180 do
+            turn -= 360
+        end
+        while turn < -180 do
+            turn += 360
+        end
+        flycam.rotation = {x = from.rotation.x + (to.rotation.x - from.rotation.x) * e, y = from.rotation.y + turn * e, z = 0}
+        wait(0.03)
+    end
+end
+
+-- Who watches the flyover: everyone not in a practice kart.
+fn watchers()
+    list = []
+    for p in humans() do
+        if not is_practice(p.kart) then
+            push(list, p)
+        end
+    end
+    return list
+end
+
+-- The show before a race: a flyover of the track to its own music, a
+-- moment's quiet on the grid, then the five lights.
+fn intro()
+    world.phase = "intro"
+    stop_music()
+    shots = find("Flyover").children
+    first = shots[1]
+    flycam.position = find_in(first, "From").position
+    for p in watchers() do
+        p.camera_part = flycam
+    end
+    say("Race " + race_no + "  ·  Brickport Speedway  ·  " + LAPS + " laps")
+    play_sound(find("Intro Music"))
+    n = 0
+    for shot in shots do
+        n += 1
+        if n == 2 then
+            say("")
+        end
+        glide(find_in(shot, "From"), find_in(shot, "To"), shot.seconds)
+    end
+    world.phase = "grid"
+    -- Racers look at their own kart; everyone else keeps the grid view.
+    for name in racers do
+        racers[name].p.camera_part = nil
+    end
+    wait(1.2)
+    for l in lights do
+        l.color = {r = 70, g = 12, b = 12}
+    end
+    for l in lights do
+        l.color = {r = 255, g = 30, b = 30}
+        play_sound(find("Light Beep"))
+        wait(0.8)
+    end
+    wait(0.4 + random() * 0.8)
+    for l in lights do
+        l.color = {r = 40, g = 255, b = 80}
+    end
+    play_sound(find("Go Beep"))
+    play_music(find("Race Music"))
+    say("GO!")
+    go_time = time()
+    for name in racers do
+        s = racers[name]
+        s.lap_start = go_time
+        s.kart.locked = nil
+    end
+    for p in humans() do
+        p.camera_part = nil
+    end
+    world.phase = "race"
+    cheer_until = time() + 4
+    show_banner_until = time() + 1.2
+end
+
+fn find_in(parent, name)
+    for c in parent.children do
+        if c.name == name then
+            return c
+        end
+    end
+    return nil
+end
+
 -- The results: the podium, fireworks, and wins and best laps saved.
 fn results()
     world.phase = "results"
     rank()
-    play_music("sunny")
+    play_sound(find("Victory Fanfare"))
+    play_music(find("Lobby Music"))
     cheer_until = time() + 8
     text = "RESULTS"
     n = 0
@@ -1771,14 +2065,13 @@ fn results()
     board = find("Results")
     board.text = text
     board.visible = true
-    -- Out of the karts, onto the podium (and everyone else in front).
+    -- Out of the karts, onto the podium (and the rest in front of it).
     for name in racers do
         s = racers[name]
         s.kart.locked = true
         s.p.kart = nil
     end
     wait(0.3)
-    podium = find("Podium")
     n = 0
     for name in order do
         n += 1
@@ -1788,11 +2081,6 @@ fn results()
             s.p.position = {x = step.position.x, y = step.position.y + step.size.y / 2 + 3, z = step.position.z}
         else
             s.p.position = {x = 30 + n * 5, y = 3, z = 90}
-        end
-    end
-    for p in humans() do
-        if racers[p.name] == nil then
-            p.position = {x = 60, y = 3, z = 88}
         end
     end
     for i in 1..8 do
@@ -1806,36 +2094,36 @@ fn results()
         if s.bubble != nil then
             destroy(s.bubble)
         end
-        s.kart.locked = nil
-        s.kart.top_speed = nil
     end
     racers = {}
     order = []
 end
 
--- Round and round: lobby, grid, lights, race, results.
+-- Round and round: lobby, flyover, lights, race, results.
 fn run_races()
+    play_music(find("Lobby Music"))
     while true do
-        while len(humans()) == 0 do
-            wait(1)
+        world.time_of_day = TIMES[race_no % 3 + 1]
+        to_lobby()
+        -- The lobby lasts its time, and waits for someone who wants to race.
+        while true do
+            ins = 0
+            for p in humans() do
+                if racing_next(p) then
+                    ins += 1
+                end
+            end
+            if ins == 0 then
+                lobby_ends = time() + LOBBY_SECONDS
+            end
+            if time() >= lobby_ends then
+                break
+            end
+            wait(0.5)
         end
         race_no += 1
-        world.time_of_day = TIMES[(race_no - 1) % 3 + 1]
-        to_lobby()
-        play_music("sunny")
-        count = 15
-        while count > 0 or len(humans()) == 0 do
-            if len(humans()) == 0 then
-                say("")
-                count = 15
-            else
-                say("Race " + race_no + " in " + count + "   (drive around!)")
-                count -= 1
-            end
-            wait(1)
-        end
         to_grid()
-        lights_out()
+        intro()
         race_end = time() + 300
         while time() < race_end do
             all_done = true
@@ -1848,7 +2136,13 @@ fn run_races()
             if finished_count > 0 and (all_done or time() - first_finish > 25) then
                 break
             end
-            if len(humans()) == 0 then
+            humans_racing = 0
+            for name in racers do
+                if not is_bot(racers[name].p) then
+                    humans_racing += 1
+                end
+            end
+            if humans_racing == 0 then
                 break
             end
             wait(0.25)
@@ -1860,6 +2154,179 @@ end
 leaderboard("wins", "best_lap")
 run_races()
 "#;
+
+/// A kart built facing +Z, then turned `yaw` degrees and put at `at`
+/// (its chassis).
+fn kart_at(b: &mut B, parent: InstanceId, name: &str, at: V, yaw: f32, colour: Rgb, trim: Rgb) -> InstanceId {
+    let kart = build_kart(&mut b.dm, parent, name, (0.0, at.1, 0.0), colour, trim);
+    for id in b.dm.parts_under(kart) {
+        let p = b.dm.part_mut(id).unwrap();
+        let turned = rotate((p.position.x, 0.0, p.position.z), (0.0, yaw, 0.0));
+        p.position.x = at.0 + turned.0;
+        p.position.z = at.2 + turned.2;
+        // (Composing a yaw onto YXZ Euler angles is just adding it.)
+        p.rotation = Vec3::new(p.rotation.x, p.rotation.y + yaw, p.rotation.z);
+    }
+    kart
+}
+
+/// Turned to look from `from` at `to`: the rotation that points a part's
+/// front (+Z) that way.
+fn look_rotation(from: V, to: V) -> V {
+    let d = sub(to, from);
+    let flat = (d.0 * d.0 + d.2 * d.2).sqrt();
+    (-(d.1.atan2(flat)).to_degrees(), d.0.atan2(d.2).to_degrees(), 0.0)
+}
+
+/// The Drift Park: an open pad of tarmac in the infield, ringed by tyres,
+/// with cones to weave through, a circle to drift round and a little jump.
+/// Four practice karts, always free, even during a race.
+fn build_drift_park(b: &mut B) {
+    let root = b.root();
+    let park = b.folder(root, "Drift Park");
+    let (x0, x1, z0, z1) = DRIFT;
+    let (cx, cz) = ((x0 + x1) / 2.0, (z0 + z1) / 2.0);
+    let floor = b.part(park, "Drift Park Floor", (cx, LIFT / 2.0 - 0.02, cz), (x1 - x0, LIFT, z1 - z0), (70, 72, 80), Material::Concrete);
+    let _ = floor;
+    // Painted lines: a drift circle and a start box.
+    let circle = (cx + 20.0, cz + 25.0);
+    for k in 0..24 {
+        let a = k as f32 / 24.0 * std::f32::consts::TAU;
+        let at = (circle.0 + a.cos() * 22.0, LIFT + 0.02, circle.1 + a.sin() * 22.0);
+        let id = b.part(park, "Circle Line", at, (0.6, 0.04, 5.2), (245, 245, 245), Material::Plastic);
+        b.turned(id, (0.0, -a.to_degrees(), 0.0));
+        b.ghost(id, 0.0);
+    }
+    let cone = |b: &mut B, x: f32, z: f32| {
+        let c = b.part(park, "Cone", (x, LIFT + 0.9, z), (1.2, 1.8, 1.2), (255, 120, 20), Material::Plastic);
+        b.shape(c, Shape::Cylinder);
+        b.ghost(c, 0.0);
+        let band = b.part(park, "Cone Band", (x, LIFT + 1.1, z), (1.25, 0.3, 1.25), (250, 250, 250), Material::Plastic);
+        b.shape(band, Shape::Cylinder);
+        b.ghost(band, 0.0);
+    };
+    // A slalom down the west side, and a ring of cones in the circle.
+    for k in 0..7 {
+        cone(b, x0 + 30.0 + if k % 2 == 0 { -4.0 } else { 4.0 }, z0 + 20.0 + k as f32 * 13.0);
+    }
+    for k in 0..8 {
+        let a = k as f32 / 8.0 * std::f32::consts::TAU;
+        cone(b, circle.0 + a.cos() * 9.0, circle.1 + a.sin() * 9.0);
+    }
+    // A kicker and a landing, running north.
+    let kick = b.part(park, "Park Kicker", (cx + 20.0, LIFT + 1.5, z0 + 22.0), (12.0, 3.0, 10.0), (250, 200, 30), Material::Metal);
+    b.shape(kick, Shape::Wedge);
+    let land = b.part(park, "Park Landing", (cx + 20.0, LIFT + 1.0, z0 + 52.0), (12.0, 2.0, 12.0), (250, 200, 30), Material::Metal);
+    b.shape(land, Shape::Wedge);
+    b.turned(land, (0.0, 180.0, 0.0));
+    // Tyre walls all round, with a gap on the pits side to walk in.
+    let tyre = |b: &mut B, x: f32, z: f32| {
+        let t = b.part(park, "Tyres", (x, 1.0, z), (2.6, 2.0, 2.6), (30, 30, 34), Material::Plastic);
+        b.shape(t, Shape::Cylinder);
+    };
+    let mut x = x0;
+    while x <= x1 {
+        tyre(b, x, z0 - 1.5);
+        tyre(b, x, z1 + 1.5);
+        x += 2.8;
+    }
+    let mut z = z0;
+    while z <= z1 {
+        if !(z > cz - 8.0 && z < cz + 8.0) {
+            tyre(b, x0 - 1.5, z);
+        }
+        tyre(b, x1 + 1.5, z);
+        z += 2.8;
+    }
+    // A sign at the gate.
+    let board = b.part(park, "Drift Park Sign", (x0 - 6.0, 5.0, cz - 11.0), (0.6, 4.0, 10.0), NAVY, Material::Plastic);
+    b.part(park, "Sign Post", (x0 - 6.0, 1.5, cz - 11.0), (0.5, 3.0, 0.5), (60, 60, 64), Material::Metal);
+    let label = b.label(root, "Drift Park Label", "DRIFT PARK · practise any time · F to drive", (0.0, 0.0, 0.22, 0.04), 15.0, GOLD, Some(NAVY));
+    b.dm.gui_mut(label).unwrap().attached_to = Some(board);
+    let label = b.label(root, "Pits Label", "PITS · walk up to a kart, press F", (0.0, 0.0, 0.18, 0.04), 15.0, GOLD, Some(NAVY));
+    let roof = b.dm.find_first("Garage Roof").unwrap();
+    b.dm.gui_mut(label).unwrap().attached_to = Some(roof);
+}
+
+/// The flyover before a race: shots from a moving camera (each a From
+/// and a To, looking at what matters), about ten seconds in all, then
+/// behind the grid.
+fn build_flyover(b: &mut B) {
+    let root = b.root();
+    let fly = b.folder(root, "Flyover");
+    // (from, looking at), (to, looking at), seconds.
+    let shots: [((V, V), (V, V), f32); 6] = [
+        (((-95.0, 26.0, 30.0), (-10.0, 8.0, -25.0)), ((55.0, 20.0, 34.0), (10.0, 8.0, -25.0)), 2.2),
+        (((305.0, 22.0, 40.0), (262.0, 2.0, 100.0)), ((305.0, 18.0, 175.0), (258.0, 2.0, 150.0)), 2.0),
+        (((-30.0, 5.0, 150.0), (-75.0, 12.0, 178.0)), ((-120.0, 6.0, 205.0), (-75.0, 12.0, 175.0)), 2.0),
+        (((-226.0, 7.0, 298.0), (-265.0, 6.0, 312.0)), ((-226.0, 12.0, 336.0), (-265.0, 6.0, 320.0)), 1.9),
+        (((-200.0, 15.0, 470.0), (-150.0, 3.0, 440.0)), ((-30.0, 15.0, 468.0), (20.0, 3.0, 428.0)), 1.9),
+        (((-135.0, 9.0, -3.0), (-40.0, 3.0, 0.0)), ((-105.0, 7.0, -2.0), (-10.0, 6.0, 0.0)), 2.3),
+    ];
+    for (n, ((from, look_a), (to, look_b), seconds)) in shots.iter().enumerate() {
+        let shot = b.dm.create(Class::Model, &format!("Shot {}", n + 1), fly).unwrap();
+        b.attr(shot, "seconds", Attribute::Num(*seconds as f64));
+        for (name, at, look) in [("From", *from, *look_a), ("To", *to, *look_b)] {
+            let id = b.part(shot, name, at, (0.5, 0.5, 1.0), (255, 0, 255), Material::Neon);
+            b.turned(id, look_rotation(at, look));
+            b.ghost(id, 1.0);
+        }
+    }
+    let cam = b.part(root, "Flyover Camera", (-95.0, 26.0, 30.0), (0.5, 0.5, 1.0), (255, 0, 255), Material::Neon);
+    b.ghost(cam, 1.0);
+}
+
+/// Templates the race copies: the per-player "race next" button.
+fn build_storage(b: &mut B) {
+    let root = b.root();
+    let storage = b.folder(root, "Storage");
+    let id = b.dm.create(Class::TextButton, "Race Toggle Template", storage).unwrap();
+    let g = b.dm.gui_mut(id).unwrap();
+    g.text = "Next race: I'm IN  (G)".into();
+    (g.x, g.y, g.width, g.height) = (0.39, 0.125, 0.22, 0.045);
+    g.text_size = 16.0;
+    g.text_color = Color::new(255, 255, 255);
+    g.background = true;
+    g.background_color = Color::new(40, 150, 70);
+    g.visible = false;
+    b.script(id, "Toggle", RACE_TOGGLE);
+}
+
+const RACE_TOGGLE: &str = r#"
+-- In or out of the next race.
+on clicked(p)
+    if p.sit_out == true then
+        p.sit_out = nil
+        self.text = "Next race: I'm IN  (G)"
+        self.background_color = {r = 40, g = 150, b = 70}
+    else
+        p.sit_out = true
+        self.text = "Next race: sitting out  (G)"
+        self.background_color = {r = 120, g = 60, b = 60}
+    end
+end
+"#;
+
+/// The music and the sounds of the start, made in code (see synth.rs).
+fn build_sounds(b: &mut B) {
+    let root = b.root();
+    let sounds = b.folder(root, "Music");
+    use crate::synth;
+    for (name, bytes, volume) in [
+        ("Lobby Music", synth::speedway_lobby(), 0.55),
+        ("Intro Music", synth::speedway_intro(), 0.7),
+        ("Race Music", synth::speedway_race(false), 0.5),
+        ("Final Lap Music", synth::speedway_race(true), 0.5),
+        ("Light Beep", synth::light_beep(), 0.8),
+        ("Go Beep", synth::go_beep(), 0.8),
+        ("Final Lap Sting", synth::final_lap_sting(), 0.8),
+        ("Victory Fanfare", synth::victory(), 0.8),
+    ] {
+        let id = b.dm.create(Class::Sound, name, sounds).unwrap();
+        *b.dm.sound_mut(id).unwrap() = brixo_core::SoundProps::from_bytes("wav", &bytes);
+        b.dm.sound_mut(id).unwrap().volume = volume;
+    }
+}
 
 pub fn brickport_speedway() -> DataModel {
     let mut b = B { dm: DataModel::new() };
@@ -1875,24 +2342,22 @@ pub fn brickport_speedway() -> DataModel {
     build_race_bits(&mut b, &t);
     b.folder(root, "Effects");
 
-    // The karts, parked on the grid to start.
-    let karts = b.folder(root, "Karts");
+    // The race karts, parked in the pits; the practice karts, in the park.
+    let karts = b.folder(root, "Race Karts");
     for (k, (name, colour, trim)) in KART_COLORS.iter().enumerate() {
-        let at = grid_slot(k);
-        let kart = build_kart(&mut b.dm, karts, &format!("{name} Kart"), (0.0, at.1, 0.0), *colour, *trim);
-        // Built facing +Z at the origin; turn it to face +X on its slot.
-        let parts = b.dm.parts_under(kart);
-        for id in parts {
-            let p = b.dm.part_mut(id).unwrap();
-            let (x, z) = (p.position.x, p.position.z);
-            // Yaw 90: +Z becomes +X, +X becomes -Z.
-            p.position.x = at.0 + z;
-            p.position.z = at.2 - x;
-            p.rotation = Vec3::new(p.rotation.x, p.rotation.y + 90.0, p.rotation.z);
-            // (Wheels are turned about Z first; composing yaw on the Euler
-            // angles is right for YXZ order.)
-        }
+        let at = (-60.0 + k as f32 * 17.0, LIFT + 1.1, 48.0);
+        kart_at(&mut b, karts, &format!("{name} Kart"), at, 90.0, *colour, *trim);
     }
+    let practice = b.folder(root, "Practice Karts");
+    for k in 0..4 {
+        let at = (DRIFT.0 + 12.0, LIFT + 1.1, DRIFT.2 + 22.0 + k as f32 * 12.0);
+        let kart = kart_at(&mut b, practice, &format!("Practice Kart {}", k + 1), at, 90.0, (235, 235, 240), (30, 30, 36));
+        b.attr(kart, "practice", Attribute::Bool(true));
+    }
+    build_drift_park(&mut b);
+    build_flyover(&mut b);
+    build_storage(&mut b);
+    build_sounds(&mut b);
 
     // Lighting: it starts at sunset.
     let mut l = brixo_core::Lighting::of(&b.dm);
@@ -1907,7 +2372,9 @@ pub fn brickport_speedway() -> DataModel {
     let standings = b.label(root, "Standings", "", (0.01, 0.25, 0.16, 0.3), 15.0, (255, 255, 255), Some((20, 24, 36)));
     b.dm.gui_mut(standings).unwrap().visible = false;
     b.label(root, "Title", "BRICKPORT SPEEDWAY", (0.39, 0.012, 0.22, 0.05), 24.0, GOLD, Some(NAVY));
-    b.label(root, "Help", "W/S drive · A/D steer · hold Space to drift, let go to boost · E use item · R back on track", (0.2, 0.94, 0.6, 0.04), 14.0, (255, 255, 255), Some((20, 24, 36)));
+    b.label(root, "Help", "F get in / out of a kart · W/S drive · A/D steer · hold Space to drift, let go to boost · E item · R back on track · G sit out", (0.14, 0.94, 0.72, 0.04), 14.0, (255, 255, 255), Some((20, 24, 36)));
+    let countdown = b.label(root, "Countdown", "", (0.36, 0.075, 0.28, 0.045), 18.0, (255, 255, 255), Some((20, 24, 36)));
+    b.dm.gui_mut(countdown).unwrap().visible = false;
 
     b.script(root, "Race", RACE);
     b.dm

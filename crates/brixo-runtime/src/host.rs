@@ -288,7 +288,7 @@ fn fields_for(class: Class) -> Vec<&'static str> {
         Class::Model => f.extend(["driver", "speed", "steer", "drift", "boosting", "spinning", "locked", "top_speed"]),
         Class::Player => f.extend([
             "position", "size", "rotation", "velocity", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
-            "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped", "kart", "bot",
+            "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped", "kart", "bot", "camera_part",
         ]),
         Class::TextLabel | Class::TextButton | Class::Frame => f.extend([
             "text", "text_size", "text_color", "background", "background_color", "visible", "x", "y", "width",
@@ -505,6 +505,8 @@ impl Host for WorldHost {
                 "kart" if world.player(id).is_some() => {
                     Ok(world.player(id).unwrap().kart.filter(|k| world.get(*k).is_some()).map(object).unwrap_or(Value::Nil))
                 }
+                // The part a cutscene camera sits on (nil: the usual camera).
+                "camera_part" if world.player(id).is_some() => Ok(brixo_core::camera_part(&world, id).map(object).unwrap_or(Value::Nil)),
                 "bot" if world.player(id).is_some() => Ok(Value::Bool(matches!(inst.attributes.get("bot"), Some(brixo_core::Attribute::Bool(true))))),
                 // Who's driving a kart (nil if nobody).
                 "driver" if brixo_core::is_kart(&world, id) => Ok(world
@@ -679,6 +681,19 @@ impl Host for WorldHost {
                 }
                 "mouse" | "look" | "swinging" | "bot" if world.player(id).is_some() => Err(format!("{name} can't be changed")),
                 "driver" if brixo_core::is_kart(&world, id) => Err("a kart's driver can't be set: set the player's kart instead (player.kart = the_kart)".into()),
+                // A cutscene: the player's camera sits on a part, looking
+                // the way it faces (move the part to move the camera).
+                "camera_part" if world.player(id).is_some() => match value {
+                    Value::Nil => {
+                        world.get_mut(id).unwrap().attributes.remove(brixo_core::CAMERA_PART);
+                        Ok(())
+                    }
+                    Value::Object(o) if world.part(InstanceId::from_raw(o.id)).is_some() => {
+                        world.get_mut(id).unwrap().attributes.insert(brixo_core::CAMERA_PART.into(), brixo_core::Attribute::Num(o.id as f64));
+                        Ok(())
+                    }
+                    other => Err(format!("camera_part has to be a part (or nil for the usual camera), not a {}", other.type_name())),
+                },
                 // Sit a player in a kart to drive it, or (nil) get them out.
                 "kart" if world.player(id).is_some() => match value {
                     Value::Nil => {

@@ -55,6 +55,7 @@ A **SpawnLocation** is a part players appear on. Give it a `team` custom field a
 | `children` | list (read) | Their tools, and their own GUI. |
 | `kart` | kart or `nil` | The kart they're driving. Set it to put them in one (a kart or any part of it), `nil` to get out. |
 | `bot` | true/false (read) | A computer player, made by `add_bot`. |
+| `camera_part` | part or `nil` | A cutscene: their camera sits on this part, looking the way its front faces. Move the part to move the camera. `nil` gives them their usual camera back. |
 | `lane` | number | A bot's distance to the left of the racing line (negative: right). |
 
 `camera` is also a variable in Studio's single-player Play: `camera.mode` is the same as your own `camera_mode`.

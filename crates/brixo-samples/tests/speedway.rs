@@ -1,7 +1,8 @@
-//! Races Brickport Speedway headless: the lobby, the grid, the lights, bots
-//! lapping the whole track (jump and all), items, and the results.
+//! Races Brickport Speedway headless: the lobby (getting in and out of
+//! karts), the flyover and lights, bots lapping the whole track (jump and
+//! all), items, the results, sitting a race out, and the Drift Park.
 
-use brixo_core::{Attribute, DataModel, InstanceId};
+use brixo_core::{Attribute, DataModel, InstanceId, Vec3};
 use brixo_runtime::{Game, PlayerInput};
 
 const FRAME: f64 = 1.0 / 60.0;
@@ -36,36 +37,76 @@ fn label(game: &Game, name: &str) -> String {
     w.gui(id).unwrap().text.clone()
 }
 
+/// The game, with a short lobby.
+fn speedway(lobby: f64) -> Game {
+    let mut dm = brixo_samples::speedway::brickport_speedway();
+    let root = dm.root();
+    dm.get_mut(root).unwrap().attributes.insert("lobby_seconds".into(), Attribute::Num(lobby));
+    Game::start_server(dm)
+}
+
+fn stand_by(game: &Game, me: InstanceId, part: &str) {
+    let w = game.world();
+    let kart = w.find_first(part).unwrap();
+    let c = brixo_core::kart_chassis(&w, kart).unwrap();
+    let at = w.part(c).unwrap().position;
+    drop(w);
+    game.world().player_mut(me).unwrap().body.position = Vec3::new(at.x, at.y + 2.0, at.z + 4.0);
+}
+
+fn wait_for(game: &mut Game, what: &str, most: f64) -> f64 {
+    let mut t = 0.0;
+    while phase(game) != what {
+        run(game, 0.5);
+        t += 0.5;
+        assert!(t < most, "waiting for {what}: still {}", phase(game));
+    }
+    t
+}
+
 #[test]
 fn a_whole_race_with_bots() {
-    let mut game = Game::start_server(brixo_samples::speedway::brickport_speedway());
+    let mut game = speedway(4.0);
     let me = game.add_player("Ann");
     run(&mut game, 1.0);
     check(&game);
     assert_eq!(phase(&game), "lobby");
-    {
-        let w = game.world();
-        let kart = w.player(me).unwrap().kart.expect("Ann's in a kart in the lobby");
-        assert!(brixo_core::is_kart(&w, kart));
-        let bots = game.players().iter().filter(|p| w.get(**p).is_some_and(|i| i.attributes.get("bot") == Some(&Attribute::Bool(true))) && w.player(**p).unwrap().kart.is_some()).count();
-        assert_eq!(bots, 7, "bots fill the grid");
-    }
+    assert!(game.world().player(me).unwrap().kart.is_none(), "on foot to start");
+
+    // F by a kart in the pits: in. F again: out.
+    stand_by(&game, me, "Red Kart");
+    run(&mut game, 0.3);
+    assert!(game.key(me, "f"));
+    run(&mut game, 0.3);
+    let red = game.world().find_first("Red Kart").unwrap();
+    assert_eq!(game.world().player(me).unwrap().kart, Some(red), "in the kart");
+    game.key(me, "f");
+    run(&mut game, 0.3);
+    assert!(game.world().player(me).unwrap().kart.is_none(), "out again");
+    game.key(me, "f");
+    run(&mut game, 0.3);
+    assert_eq!(game.world().player(me).unwrap().kart, Some(red), "and back in");
     // Drive about the pits a little.
     game.set_input_for(me, PlayerInput { move_x: 0.0, move_z: 1.0, jump: false });
     run(&mut game, 1.0);
     game.set_input_for(me, PlayerInput::default());
 
-    // The lights, and they're off.
-    let mut t = 0.0;
-    while phase(&game) != "race" {
-        run(&mut game, 0.5);
-        t += 0.5;
-        assert!(t < 30.0, "the race starts: {}", phase(&game));
+    // The flyover: the camera's on the flyover camera, then back on the kart.
+    let waited = wait_for(&mut game, "intro", 20.0);
+    println!("intro after {waited}s");
+    run(&mut game, 1.0);
+    {
+        let w = game.world();
+        assert_eq!(brixo_core::camera_part(&w, me), w.find_first("Flyover Camera"), "watching the flyover");
+        let bots = game.players().iter().filter(|p| w.get(**p).is_some_and(|i| i.attributes.get("bot") == Some(&Attribute::Bool(true))) && w.player(**p).unwrap().kart.is_some()).count();
+        assert_eq!(bots, 7, "bots fill the grid");
     }
+    let waited = wait_for(&mut game, "race", 30.0);
+    println!("racing {waited}s later");
+    assert!(brixo_core::camera_part(&game.world(), me).is_none(), "the camera's back behind the kart");
     check(&game);
-    println!("racing after {t}s");
 
-    // Items, with E: a boost, an oil slick, a rocket at whoever's ahead.
+    // Items, with E: a boost, a mine, a rocket at whoever's ahead, a shield.
     let kart = game.world().player(me).unwrap().kart.unwrap();
     let set_item = |game: &mut Game, what: &str| {
         game.world().get_mut(me).unwrap().attributes.insert("item".into(), Attribute::Str(what.into()));
@@ -80,10 +121,10 @@ fn a_whole_race_with_bots() {
     run(&mut game, 0.2);
     assert_eq!(game.world().get(kart).unwrap().attributes.get("boosting"), Some(&Attribute::Bool(true)), "boosting");
     assert!(text(&game.world(), me, "item").is_none(), "used up");
-    set_item(&mut game, "oil");
+    set_item(&mut game, "mine");
     game.key(me, "e");
     run(&mut game, 0.2);
-    assert_eq!(effects(&game, "Oil Slick"), 1);
+    assert_eq!(effects(&game, "Spike Mine"), 1, "a mine");
     set_item(&mut game, "rocket");
     game.key(me, "e");
     run(&mut game, 0.2);
@@ -95,7 +136,6 @@ fn a_whole_race_with_bots() {
     run(&mut game, 4.5);
     assert_eq!(effects(&game, "Rocket"), 0, "the rocket's gone");
     check(&game);
-    // The HUD shows where you are.
     {
         let w = game.world();
         let hud = w.get(me).unwrap().children.iter().copied().find(|c| w.get(*c).unwrap().name == "Race HUD").unwrap();
@@ -109,14 +149,10 @@ fn a_whole_race_with_bots() {
     while phase(&game) == "race" && t < 200.0 {
         run(&mut game, 1.0);
         t += 1.0;
-        let s = label(&game, "Standings");
-        if (t as i32) % 10 == 0 {
-            println!("t={t}\n{s}");
-        }
-        last = s;
+        last = label(&game, "Standings");
         check(&game);
     }
-    println!("race over after {t}s: {}", phase(&game));
+    println!("race over after {t}s");
     assert_eq!(phase(&game), "results", "{last}");
     run(&mut game, 0.5);
     let results = label(&game, "Results");
@@ -124,8 +160,43 @@ fn a_whole_race_with_bots() {
     assert!(results.contains("1st") && !results.lines().nth(1).unwrap().contains("DNF"), "a bot won: {results}");
     let finished = results.lines().filter(|l| !l.contains("DNF")).count() - 1;
     assert!(finished >= 5, "most bots finished: {results}");
-    run(&mut game, 12.0);
+    wait_for(&mut game, "lobby", 20.0);
     check(&game);
-    assert_eq!(phase(&game), "lobby", "back to the lobby");
-    assert!(game.world().player(me).unwrap().kart.is_some(), "back in a kart");
+    run(&mut game, 0.5);
+    assert!(game.world().player(me).unwrap().kart.is_none(), "on foot in the lobby");
+
+    // Sitting the next one out: no race starts without anyone in it.
+    assert!(game.key(me, "g"));
+    run(&mut game, 10.0);
+    assert_eq!(phase(&game), "lobby", "waits for a racer");
+    check(&game);
+}
+
+#[test]
+fn the_drift_park_is_open_during_a_race() {
+    let mut game = speedway(2.0);
+    let racer = game.add_player("Ann");
+    let watcher = game.add_player("Bo");
+    run(&mut game, 0.5);
+    game.key(watcher, "g");
+    wait_for(&mut game, "race", 60.0);
+    check(&game);
+    assert!(game.world().player(watcher).unwrap().kart.is_none());
+    assert!(game.world().player(racer).unwrap().kart.is_some(), "Ann races");
+    // A race kart: no. A practice kart: yes.
+    stand_by(&game, watcher, "Practice Kart 1");
+    run(&mut game, 0.3);
+    game.key(watcher, "f");
+    run(&mut game, 0.3);
+    let practice = game.world().find_first("Practice Kart 1").unwrap();
+    assert_eq!(game.world().player(watcher).unwrap().kart, Some(practice), "practising");
+    // Driving out of the park puts you back in it.
+    game.set_input_for(watcher, PlayerInput { move_x: 0.0, move_z: 1.0, jump: false });
+    run(&mut game, 6.0);
+    let w = game.world();
+    let c = w.part(brixo_core::kart_chassis(&w, practice).unwrap()).unwrap().position;
+    let (x0, x1, z0, z1) = brixo_samples::speedway::DRIFT;
+    assert!(c.x > x0 - 6.0 && c.x < x1 + 6.0 && c.z > z0 - 6.0 && c.z < z1 + 6.0, "still in the park: {c:?}");
+    drop(w);
+    check(&game);
 }

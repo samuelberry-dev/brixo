@@ -121,6 +121,32 @@ bot.kart = find("Blue Kart")
 
 (`find` gives `nil` when there's no Blue Kart, which puts nobody in a kart.) Bots slow down for bends, steer round karts in their way, and back up when they're stuck. `lane` keeps a bot that many studs to the left of the line (negative for the right), so a pack of bots spreads out. Give bots different `top_speed`s so some are faster than others, or change them during the race to keep it close.
 
+## A flyover before the race
+
+Set a player's `camera_part` to a part and their camera sits on it, looking the way the part's front faces; move the part and the camera glides after it. Make the part invisible and not solid. `camera_part = nil` gives them their camera back.
+
+```rovik run with=part:Camera_Part
+cam = find("Camera Part")
+cam.transparency = 1
+cam.can_collide = false
+
+fn flyover(p)
+    p.camera_part = cam
+    for i in 0..100 do
+        cam.position = {x = -60 + i * 1.2, y = 25, z = 40}
+        cam.rotation = {x = 20, y = 180, z = 0}
+        wait(0.03)
+    end
+    p.camera_part = nil
+end
+
+on player_joined(p)
+    flyover(p)
+end
+```
+
+`rotation.y` turns it (`180` looks towards -Z) and `rotation.x` tips it down.
+
 ## Laps and places
 
 Brixo leaves the rules of a race to your scripts. The usual way: **checkpoints** around the track, in order, that each kart must pass in turn; a lap is passing them all. Brickport Speedway's **Race** script does it all, and it's worth reading: the lobby, the grid, the start lights, laps and places, items, bots that catch up when they fall behind, the podium and fireworks, and saving wins and best laps. See [The sample games, explained](samples#brickport-speedway).

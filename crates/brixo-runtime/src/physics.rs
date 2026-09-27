@@ -117,6 +117,8 @@ pub struct Physics {
     parts: HashMap<InstanceId, Tracked>,
     owners: HashMap<ColliderHandle, InstanceId>,
     accumulator: f32,
+    /// How many fixed steps have run, ever.
+    steps_run: u64,
     steps_taken: u64,
     /// One character per player, by the player's id.
     characters: HashMap<InstanceId, Character>,
@@ -185,6 +187,7 @@ impl Physics {
             parts: HashMap::new(),
             owners: HashMap::new(),
             accumulator: 0.0,
+            steps_run: 0,
             steps_taken: 0,
             characters: HashMap::new(),
             welds: HashMap::new(),
@@ -217,6 +220,7 @@ impl Physics {
         let mut touches = Vec::new();
         while self.accumulator >= PHYSICS_DT {
             self.accumulator -= PHYSICS_DT;
+            self.steps_run += 1;
             let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
             for id in ids {
                 // (Drivers sit in their kart instead.)
@@ -837,6 +841,18 @@ impl Physics {
                 self.held_yaw.remove(&id);
             }
         }
+    }
+
+    /// How far into the next physics step the clock has got, 0 to 1:
+    /// physics moves in fixed 1/60 s steps, so a smooth picture on a faster
+    /// screen blends the last two steps by this much.
+    pub fn step_fraction(&self) -> f32 {
+        (self.accumulator / PHYSICS_DT).clamp(0.0, 1.0)
+    }
+
+    /// How many fixed steps have run so far.
+    pub fn steps_run(&self) -> u64 {
+        self.steps_run
     }
 
     /// Slides a character by `by` without disturbing its jump or fall (a

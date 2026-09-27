@@ -60,10 +60,28 @@ struct KartPrediction {
     seat: Option<(Vec3, Vec3)>,
     history: VecDeque<(f64, Vec3, f32)>,
     last_server: Option<Vec3>,
+    /// The step before `pose` and `seat` (drawn blended between the two:
+    /// physics steps 60 times a second, screens draw more often, and
+    /// drawing the newest step makes a fast kart hop), and how far
+    /// between them to draw.
+    before: Option<(brixo_core::PartProps, Option<(Vec3, Vec3)>)>,
+    blend: f32,
+    /// When we last copied a spin-out from the server (only once each).
+    spun_at: f64,
 }
 
 fn sub(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(a.x - b.x, a.y - b.y, a.z - b.z)
+}
+
+fn lerp(a: Vec3, b: Vec3, t: f32) -> Vec3 {
+    Vec3::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+}
+
+/// Blends rotations (degrees), each the short way round.
+fn lerp_angles(a: Vec3, b: Vec3, t: f32) -> Vec3 {
+    let one = |a: f32, b: f32| a + ((b - a + 540.0).rem_euclid(360.0) - 180.0) * t;
+    Vec3::new(one(a.x, b.x), one(a.y, b.y), one(a.z, b.z))
 }
 
 fn dist(a: Vec3, b: Vec3) -> f32 {
@@ -178,7 +196,7 @@ impl Predictor {
         let Some(chassis) = brixo_core::kart_chassis(server, kart) else { return };
         if self.kart.as_ref().is_none_or(|k| k.kart != kart || k.chassis != chassis) {
             self.physics = Physics::new();
-            self.kart = Some(KartPrediction { kart, chassis, pose: None, facts: Vec::new(), seat: None, history: VecDeque::new(), last_server: None });
+            self.kart = Some(KartPrediction { kart, chassis, pose: None, facts: Vec::new(), seat: None, history: VecDeque::new(), last_server: None, before: None, blend: 1.0, spun_at: -10.0 });
         }
         let Some(server_pose) = server.part(chassis).copied() else { return };
         let server_at = server_pose.position;
@@ -194,7 +212,9 @@ impl Predictor {
         let mut fix = None;
         match nearest {
             None => {}
-            Some((_, _, d)) if d > 5.0 => snap = true,
+            // (Far off our path: it went somewhere we didn't, like a
+            // respawn. Nearer, it's ease-able drift.)
+            Some((_, _, d)) if d > 10.0 => snap = true,
             Some((p, yaw, d)) if d > DEAD_ZONE => {
                 let turn = server_pose.rotation.y.to_radians() - yaw;
                 let turn = (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
@@ -208,6 +228,7 @@ impl Predictor {
                 *p = server_pose;
             }
             k.history.clear();
+            k.before = None;
         }
         self.physics.step(&mut world, 0.0, &HashSet::new(), &HashMap::new());
         if let Some((off, turn)) = fix {
@@ -218,15 +239,41 @@ impl Predictor {
                 *yaw += turn * e;
             }
         }
+        // Boosts and spin-outs a script gave the server's kart (a boost pad,
+        // an item): ours too, or we'd fall behind (or run on) and snap.
+        let num = |key: &str| match server.get(kart).and_then(|i| i.attributes.get(key)) {
+            Some(brixo_core::Attribute::Num(n)) => *n as f32,
+            _ => 0.0,
+        };
+        if let Some((boost, spin)) = self.physics.kart_timers(kart) {
+            if num("boost_left") > boost + 0.15 {
+                self.physics.kart_command(brixo_runtime::physics::KartCommand::Boost(kart, num("boost_left")));
+            }
+            if num("spin_left") > spin + 0.15 && spin <= 0.0 && t - k.spun_at > 1.5 {
+                self.physics.kart_command(brixo_runtime::physics::KartCommand::SpinOut(kart));
+                k.spun_at = t;
+            }
+        }
         let mut inputs = HashMap::new();
         inputs.insert(kart, brixo_runtime::kart::KartInput::from_player(input));
         self.physics.set_kart_inputs(inputs);
         let players: HashMap<InstanceId, PlayerInput> = [(me, input)].into_iter().collect();
+        let steps_before = self.physics.steps_run();
         self.physics.step(&mut world, dt, &HashSet::new(), &players);
+        let stepped = self.physics.steps_run() > steps_before;
         let Some(pose) = world.part(chassis).copied() else { return };
+        let seat = world.player(me).map(|p| (p.body.position, p.body.rotation));
+        // A new physics step: the one we had becomes the one before. (With
+        // no step, a drift correction still moves both, together.)
+        if stepped {
+            k.before = k.pose.map(|old| (old, k.seat));
+        } else if let (Some(old), Some((then, _))) = (k.pose, k.before.as_mut()) {
+            then.position = Vec3::new(then.position.x + pose.position.x - old.position.x, then.position.y + pose.position.y - old.position.y, then.position.z + pose.position.z - old.position.z);
+        }
+        k.blend = self.physics.step_fraction();
         k.pose = Some(pose);
         k.facts = world.get(kart).map(|i| i.attributes.iter().map(|(a, b)| (a.clone(), b.clone())).collect()).unwrap_or_default();
-        k.seat = world.player(me).map(|p| (p.body.position, p.body.rotation));
+        k.seat = seat;
         k.history.push_back((t, pose.position, pose.rotation.y.to_radians()));
         while k.history.front().is_some_and(|(when, _, _)| t - when > HISTORY) {
             k.history.pop_front();
@@ -238,7 +285,22 @@ impl Predictor {
     /// of the server's world that's about to be drawn).
     pub fn apply(&self, view: &mut DataModel) {
         if let (Some(k), Some(me)) = (&self.kart, self.me) {
-            if let (Some(pose), Some(p)) = (k.pose, view.part_mut(k.chassis)) {
+            // Between the last two steps (see `before`).
+            let (pose, seat) = match (k.pose, k.before) {
+                (Some(now), Some((then, then_seat))) => {
+                    let t = k.blend;
+                    let mut p = now;
+                    p.position = lerp(then.position, now.position, t);
+                    p.rotation = lerp_angles(then.rotation, now.rotation, t);
+                    let seat = match (then_seat, k.seat) {
+                        (Some((a, ar)), Some((b, br))) => Some((lerp(a, b, t), lerp_angles(ar, br, t))),
+                        _ => k.seat,
+                    };
+                    (Some(p), seat)
+                }
+                _ => (k.pose, k.seat),
+            };
+            if let (Some(pose), Some(p)) = (pose, view.part_mut(k.chassis)) {
                 *p = pose;
             }
             if let Some(inst) = view.get_mut(k.kart) {
@@ -246,7 +308,7 @@ impl Predictor {
                     inst.attributes.insert(key.clone(), value.clone());
                 }
             }
-            if let (Some((at, turn)), Some(p)) = (k.seat, view.player_mut(me)) {
+            if let (Some((at, turn)), Some(p)) = (seat, view.player_mut(me)) {
                 p.body.position = at;
                 p.body.rotation = turn;
             }
@@ -432,6 +494,46 @@ mod tests {
         // Never pulled back while driving.
         for w in frames[..60].windows(2) {
             assert!(w[1].0.z >= w[0].0.z - 0.05, "pulled back: {:?} then {:?}", w[0].0, w[1].0);
+        }
+    }
+
+    #[test]
+    fn your_kart_moves_smoothly_on_a_fast_screen() {
+        // Physics steps 60 times a second; the screen draws 144. Drawn,
+        // the kart should move about the same distance every frame, not
+        // sit still for a frame and then hop.
+        let (dm, k) = kart_arena();
+        let mut game = Game::start_server(dm);
+        let me = game.add_player("Ann");
+        game.world().player_mut(me).unwrap().kart = Some(k);
+        for _ in 0..30 {
+            game.step(1.0 / 60.0);
+        }
+        let mut pred = Predictor::default();
+        let start = Instant::now();
+        let throttle = PlayerInput { move_z: 1.0, ..Default::default() };
+        let mut drawn = Vec::new();
+        let mut server_time = 0.0;
+        for f in 0..(144 * 3) {
+            let now = f as f64 / 144.0;
+            while server_time < now {
+                game.set_input_for(me, throttle);
+                game.step(1.0 / 60.0);
+                server_time += 1.0 / 60.0;
+            }
+            let server = game.world().clone();
+            pred.step_at(&server, Some(me), throttle, None, 1.0 / 144.0, start + Duration::from_secs_f64(now));
+            let mut view = server.clone();
+            pred.apply(&mut view);
+            let c = brixo_core::kart_chassis(&view, k).unwrap();
+            drawn.push(view.part(c).unwrap().position.z);
+        }
+        // At speed (the last second), every frame moves on by about the same.
+        let steps: Vec<f32> = drawn.windows(2).skip(144 * 2).map(|w| w[1] - w[0]).collect();
+        let mean = steps.iter().sum::<f32>() / steps.len() as f32;
+        assert!(mean > 0.3, "moving: {mean}");
+        for s in &steps {
+            assert!((s - mean).abs() < mean * 0.35, "uneven: {s} against {mean}: {steps:?}");
         }
     }
 }
