@@ -31,7 +31,7 @@
           <tr><td>Games made</td><td>${num(p.games.length)}</td></tr>
           <tr><td>Game visits</td><td>${num(visits)}</td></tr>
         </table>
-        ${mine ? `<p style="margin-top:8px"><a href="/avatar">&raquo; Change your character</a></p>` : ""}
+        ${mine ? `<p style="margin-top:8px"><a href="/avatar">&raquo; Change your character</a><br><a href="#" id="pw">&raquo; Change your password</a></p><div id="pwbox"></div>` : ""}
       </div></div>
     </div><div class="main">
       <div class="box"><h2>${esc(p.username)}'s Games</h2><div class="inner">
@@ -64,5 +64,30 @@
     };
   };
   show();
+
+  const pw = document.getElementById("pw");
+  if (pw) pw.onclick = (e) => {
+    e.preventDefault();
+    const box = document.getElementById("pwbox");
+    box.innerHTML = `<form id="pwform" class="pwform">
+      <input type="text" name="username" autocomplete="username" value="${esc(p.username)}" hidden>
+      <div class="field"><label for="cur">Current password</label><input id="cur" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="new1">New password</label><input id="new1" type="password" autocomplete="new-password" required minlength="8" maxlength="128"></div>
+      <div class="field"><label for="new2">Type it again</label><input id="new2" type="password" autocomplete="new-password" required></div>
+      <div class="error" id="pwerr"></div>
+      <button class="btn small gold" type="submit">Save</button> <button class="btn small gray" type="button" id="pwcancel">Cancel</button>
+    </form>`;
+    document.getElementById("pwcancel").onclick = () => { box.innerHTML = ""; };
+    const f = document.getElementById("pwform");
+    f.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const err = document.getElementById("pwerr");
+      if (f.new1.value !== f.new2.value) { err.textContent = "those two don't match"; return; }
+      try {
+        await api("/api/me/password", "PUT", { current: f.cur.value, password: f.new1.value });
+        box.innerHTML = `<p class="hint" style="color:#2f7d32">Password changed. Anywhere else you were logged in has been logged out.</p>`;
+      } catch (e2) { err.textContent = e2.message; }
+    };
+  };
 })();
 </script></body></html>

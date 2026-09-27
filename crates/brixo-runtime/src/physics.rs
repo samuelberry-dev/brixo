@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver};
 
-use brixo_core::{DataModel, InstanceId, PartProps, Vec3 as BVec3, Shape};
+use brixo_core::{DataModel, Hinge, InstanceId, PartProps, Vec3 as BVec3, Shape};
 use glam::{EulerRot, Quat, Vec3};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::prelude::*;
@@ -123,7 +123,30 @@ pub struct Physics {
     /// Players who face a fixed way whatever way they walk (shift lock:
     /// the way the camera looks), by player id.
     held_yaw: HashMap<InstanceId, f32>,
+    /// Hinged parts: the joint holding each one.
+    hinges: HashMap<InstanceId, HingeJoint>,
 }
+
+/// A hinged part's joint, and what it was built from (a change rebuilds it).
+struct HingeJoint {
+    joint: ImpulseJointHandle,
+    /// The part it's hinged to, or None for the spot it was in.
+    to: Option<InstanceId>,
+    /// For a hinge to the world: the fixed body it hangs on.
+    anchor: Option<RigidBodyHandle>,
+    built_from: (Hinge, brixo_core::Side, BVec3),
+    /// The motor settings last applied.
+    motor: (f32, Option<f32>),
+}
+
+/// How hard hinge motors push (their acceleration model ignores mass, so
+/// a big door and a small one move alike).
+const MOTOR_STIFFNESS: f32 = 300.0;
+const MOTOR_DAMPING: f32 = 40.0;
+const MOTOR_FACTOR: f32 = 30.0;
+/// Hinged parts turn with a little friction, so a swinging sign or a
+/// pushed door slows down and settles like a real one.
+const HINGE_DAMPING: f32 = 3.0;
 
 impl Default for Physics {
     fn default() -> Self {
@@ -158,6 +181,7 @@ impl Physics {
             characters: HashMap::new(),
             welds: HashMap::new(),
             held_yaw: HashMap::new(),
+            hinges: HashMap::new(),
         }
     }
 
@@ -173,6 +197,7 @@ impl Physics {
     ) -> Vec<(InstanceId, InstanceId)> {
         self.pull_from_world(world, listeners);
         self.sync_welds(world);
+        self.sync_hinges(world);
         self.sync_characters(world);
 
         self.accumulator = (self.accumulator + dt.max(0.0)).min(MAX_CATCH_UP);
@@ -289,7 +314,13 @@ impl Physics {
         }
         let mut wanted: HashMap<InstanceId, InstanceId> = HashMap::new();
         for members in groups.values() {
+            // A hinged part turns on its own, so it isn't welded; a hinged
+            // first part takes the rest of the Model with it (a door made
+            // of several parts).
             for &part in &members[1..] {
+                if self.parts.get(&part).is_some_and(|t| t.synced.hinge != Hinge::Off) {
+                    continue;
+                }
                 wanted.insert(part, members[0]);
             }
         }
@@ -323,6 +354,144 @@ impl Physics {
             let handle = self.impulse_joints.insert(body_a, body_b, joint, true);
             self.welds.insert(part, (to, handle));
         }
+    }
+
+    // --- hinges ---
+
+    /// Makes the hinge joints match the parts: each loose part with a hinge
+    /// is held, turning around its hinge line, to the part it touches
+    /// nearest its hinge point (or to where it is, touching nothing).
+    fn sync_hinges(&mut self, world: &DataModel) {
+        let wanted: HashMap<InstanceId, PartProps> = self
+            .parts
+            .iter()
+            .filter(|(_, t)| t.synced.hinge != Hinge::Off && !t.synced.anchored)
+            .map(|(id, t)| (*id, t.synced))
+            .collect();
+        let stale: Vec<InstanceId> = self
+            .hinges
+            .iter()
+            .filter(|(id, h)| {
+                let Some(p) = wanted.get(*id) else { return true };
+                h.built_from != (p.hinge, p.hinge_at, p.size)
+                    || self.impulse_joints.get(h.joint).is_none()
+                    || h.to.is_some_and(|to| !self.parts.contains_key(&to))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stale {
+            self.drop_hinge(id);
+        }
+        let mut ids: Vec<InstanceId> = wanted.keys().copied().collect();
+        ids.sort_by_key(|id| id.raw());
+        for id in ids {
+            let props = wanted[&id];
+            if !self.hinges.contains_key(&id) {
+                self.build_hinge(world, id, &props);
+            }
+            let Some(h) = self.hinges.get_mut(&id) else { continue };
+            let motor = (props.motor_speed, props.swing_to);
+            if h.motor != motor {
+                h.motor = motor;
+                let joint = h.joint;
+                if let Some(j) = self.impulse_joints.get_mut(joint, true) {
+                    set_motor(&mut j.data, motor);
+                }
+            }
+            // A running motor keeps its part awake (a sleeping body ignores it).
+            if props.motor_speed != 0.0 || props.swing_to.is_some() {
+                if let Some(b) = self.parts.get(&id).and_then(|t| self.bodies.get_mut(t.body)) {
+                    b.wake_up(true);
+                }
+            }
+        }
+    }
+
+    fn drop_hinge(&mut self, id: InstanceId) {
+        let Some(h) = self.hinges.remove(&id) else { return };
+        if let Some(b) = self.parts.get(&id).and_then(|t| self.bodies.get_mut(t.body)) {
+            b.set_angular_damping(0.0);
+        }
+        self.impulse_joints.remove(h.joint, true);
+        if let Some(anchor) = h.anchor {
+            self.bodies.remove(anchor, &mut self.islands, &mut self.colliders, &mut self.impulse_joints, &mut self.multibody_joints, true);
+        }
+    }
+
+    fn build_hinge(&mut self, world: &DataModel, id: InstanceId, props: &PartProps) {
+        let Some(axis) = props.hinge.axis() else { return };
+        let Some(body) = self.parts.get(&id).map(|t| t.body) else { return };
+        let Some(pose) = self.bodies.get(body).map(|b| *b.position()) else { return };
+        let pivot_local = to_glam(props.hinge_at.point(props.size));
+        // The joint's free axis is its X: turn X onto the hinge line.
+        let frame2 = Pose::from_parts(pivot_local, Quat::from_rotation_arc(Vec3::X, to_glam(axis)));
+        let pivot_world = pose * frame2;
+        let to = self.hinge_partner(world, id, props, pivot_world.translation);
+        let (body1, anchor, frame1) = match to.and_then(|t| self.parts.get(&t)).map(|t| t.body) {
+            Some(b1) => {
+                let p1 = *self.bodies.get(b1).unwrap().position();
+                (b1, None, p1.inverse() * pivot_world)
+            }
+            None => {
+                let a = self.bodies.insert(RigidBodyBuilder::fixed().build());
+                (a, Some(a), pivot_world)
+            }
+        };
+        let mut data: GenericJoint = GenericJointBuilder::new(JointAxesMask::LOCKED_REVOLUTE_AXES)
+            .local_frame1(frame1)
+            .local_frame2(frame2)
+            .contacts_enabled(false)
+            .build();
+        let motor = (props.motor_speed, props.swing_to);
+        set_motor(&mut data, motor);
+        let joint = self.impulse_joints.insert(body1, body, data, true);
+        if let Some(b) = self.bodies.get_mut(body) {
+            b.set_angular_damping(HINGE_DAMPING);
+        }
+        self.hinges.insert(id, HingeJoint { joint, to: if anchor.is_some() { None } else { to }, anchor, built_from: (props.hinge, props.hinge_at, props.size), motor });
+    }
+
+    /// What a hinged part hangs on: of the parts it touches, the one
+    /// nearest its hinge point. Not the parts welded to it (they turn
+    /// with it), and not its own Model's other hinged parts (a car's
+    /// wheels hang on the car, not on each other).
+    fn hinge_partner(&self, world: &DataModel, id: InstanceId, props: &PartProps, pivot: Vec3) -> Option<InstanceId> {
+        let (lo, hi) = world_box(props);
+        let mine: HashSet<InstanceId> = self.welds.iter().filter(|(_, (to, _))| *to == id).map(|(p, _)| *p).collect();
+        let group = world.weld_group(id);
+        let mut best: Option<(f32, InstanceId)> = None;
+        for (&other, t) in &self.parts {
+            if other == id || mine.contains(&other) || !t.synced.can_collide && t.synced.transparency >= 1.0 {
+                continue;
+            }
+            if t.synced.hinge != Hinge::Off && group.is_some() && world.weld_group(other) == group {
+                continue;
+            }
+            let (olo, ohi) = world_box(&t.synced);
+            let gap = 0.05;
+            let touching = lo.x <= ohi.x + gap && hi.x + gap >= olo.x && lo.y <= ohi.y + gap && hi.y + gap >= olo.y && lo.z <= ohi.z + gap && hi.z + gap >= olo.z;
+            if !touching {
+                continue;
+            }
+            let d = pivot.clamp(olo, ohi).distance(pivot);
+            if best.is_none_or(|(bd, bid)| d < bd - 1e-4 || (d - bd).abs() <= 1e-4 && other.raw() < bid.raw()) {
+                best = Some((d, other));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    /// Each hinged part's angle right now, in degrees from where it started.
+    pub fn hinge_angles(&self) -> HashMap<InstanceId, f32> {
+        let mut out = HashMap::new();
+        for (id, h) in &self.hinges {
+            let Some(j) = self.impulse_joints.get(h.joint) else { continue };
+            let (Some(b1), Some(b2)) = (self.bodies.get(j.body1()), self.bodies.get(j.body2())) else { continue };
+            if let Some(r) = j.data.as_revolute() {
+                out.insert(*id, r.angle(b1.rotation(), b2.rotation()).to_degrees());
+            }
+        }
+        out
     }
 
     // --- the player's character ---
@@ -838,6 +1007,10 @@ impl Physics {
             body.set_position(pose_of(&props), true);
         }
         body.wake_up(true);
+        // A hinged part a script moved hangs from where it now is.
+        if moved && self.hinges.contains_key(&id) {
+            self.drop_hinge(id);
+        }
 
         // Loose parts resting on or leaning against this one would otherwise
         // stay asleep, floating where it used to be.
@@ -912,6 +1085,45 @@ fn collider_for(props: &PartProps, listening: bool) -> ColliderBuilder {
         .sensor(!props.can_collide)
         .active_events(events)
         .active_collision_types(types)
+}
+
+/// Sets a hinge's motor: swing to an angle and hold, keep turning, or
+/// nothing (swings freely).
+fn set_motor(data: &mut GenericJoint, (speed, swing_to): (f32, Option<f32>)) {
+    match swing_to {
+        Some(angle) => {
+            data.set_motor_position(JointAxis::AngX, angle.to_radians(), MOTOR_STIFFNESS, MOTOR_DAMPING);
+            data.set_motor_max_force(JointAxis::AngX, f32::MAX);
+        }
+        None if speed != 0.0 => {
+            data.set_motor_velocity(JointAxis::AngX, speed.to_radians(), MOTOR_FACTOR);
+            data.set_motor_max_force(JointAxis::AngX, f32::MAX);
+        }
+        // Free (the part's own damping slows it, see HINGE_DAMPING).
+        None => {
+            data.set_motor(JointAxis::AngX, 0.0, 0.0, 0.0, 0.0);
+            data.set_motor_max_force(JointAxis::AngX, 0.0);
+        }
+    }
+}
+
+/// A part's box in the world (around it, however it's turned).
+fn world_box(props: &PartProps) -> (Vec3, Vec3) {
+    let q = rotation_of(props);
+    let h = to_glam(props.size) / 2.0;
+    let c = to_glam(props.position);
+    let mut lo = Vec3::splat(f32::MAX);
+    let mut hi = Vec3::splat(f32::MIN);
+    for sx in [-1.0, 1.0] {
+        for sy in [-1.0, 1.0] {
+            for sz in [-1.0, 1.0] {
+                let p = c + q * Vec3::new(sx * h.x, sy * h.y, sz * h.z);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+        }
+    }
+    (lo, hi)
 }
 
 fn to_glam(v: BVec3) -> Vec3 {

@@ -295,3 +295,41 @@ fn a_message_the_server_doesnt_know_is_skipped_not_fatal() {
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(server.player_count(), 1, "still connected after an unknown message");
 }
+
+#[test]
+fn the_leaderboard_and_players_stats_reach_everyone() {
+    let mut dm = arena();
+    let root = dm.root();
+    let s = dm.create(Class::Script, "Stats", root).unwrap();
+    dm.script_mut(s).unwrap().source = "leaderboard(\"coins\", \"wins\")\non player_joined(p)\n    p.coins = 10\n    p.team = \"Red\"\nend".into();
+    let server = brixo_server::start(dm, 0).unwrap();
+    let addr = server.local_addr();
+    let mut ann = NetClient::connect(&addr, "Ann").unwrap();
+    wait_for(&mut [&mut ann], "Ann to join", |cs| cs[0].me.is_some());
+    let mut bob = NetClient::connect(&addr, "Bob").unwrap();
+    wait_for(&mut [&mut ann, &mut bob], "both on the board with their coins", |cs| {
+        cs.iter().all(|c| {
+            let b = brixo_client_board(c);
+            b.len() == 2 && b.iter().all(|(_, coins)| coins == "10")
+        })
+    });
+    assert_eq!(brixo_core::leaderboard_columns(&bob.world), ["coins", "wins"]);
+}
+
+/// (name, coins) on a client's copy of the world, from the fields the
+/// leaderboard reads.
+fn brixo_client_board(c: &NetClient) -> Vec<(String, String)> {
+    let w = &c.world;
+    w.walk()
+        .into_iter()
+        .filter(|id| w.player(*id).is_some())
+        .map(|id| {
+            let i = w.get(id).unwrap();
+            let coins = match i.attributes.get("coins") {
+                Some(brixo_core::Attribute::Num(n)) => format!("{n}"),
+                _ => "-".into(),
+            };
+            (i.name.clone(), coins)
+        })
+        .collect()
+}

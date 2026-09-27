@@ -1,4 +1,4 @@
-Coins to collect, a counter on each player's screen, and a leaderboard everyone can see.
+Coins to collect, a counter on each player's screen, and the leaderboard in the corner.
 
 ![Coins spinning over the map, a coin counter on the left, and the leaderboard on the right](img/howto-coins.png)
 
@@ -75,42 +75,15 @@ end
 
 ## 4. A leaderboard
 
-A shared TextLabel shows everyone's coins, the richest first. Add a TextLabel with **Add GUI**, name it **Leaderboard**, put it on the right (x `0.8`, y `0.12`, width `0.18`, height `0.3`), turn its background on, and add this script in the Workspace:
+Put this line at the top of the **Coins** script:
 
-```rovik run with=textlabel:Leaderboard
--- Everyone who has coins, most first.
-fn ranked()
-    left = []
-    for p in players() do
-        if p.coins != nil then
-            push(left, p)
-        end
-    end
-    sorted = []
-    while len(left) > 0 do
-        best = 1
-        for i in 1..len(left) do
-            if left[i].coins > left[best].coins then
-                best = i
-            end
-        end
-        push(sorted, remove(left, best))
-    end
-    return sorted
-end
-
-every 1 seconds
-    board = "COINS"
-    place = 1
-    for p in ranked() do
-        board = board + "\n" + place + ". " + p.name + "   " + p.coins
-        place += 1
-    end
-    find("Leaderboard").text = board
-end
+```rovik run
+leaderboard("coins")
 ```
 
-`ranked` sorts the players by picking the richest one left, again and again. `"\n"` starts a new line in the label.
+That's the classic leaderboard: a box in the top right corner listing everyone in the game, the richest first, with their coins. It shows each player's `p.coins`, so it stays up to date by itself. Players fold it away (and back) with **Tab**, or the arrow on its title bar.
+
+Show more than one thing by naming more fields, up to 5: `leaderboard("coins", "wins")`. The first one decides the order. Headings come from the names: `best_time` shows as *Best Time*, and short ones as capitals (`xp` is *XP*). Players on teams are listed under their team, in its color, with the team's total. `leaderboard()` takes it away.
 
 ## Spending coins
 

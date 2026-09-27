@@ -17,12 +17,12 @@ pub const KEYWORDS: &[&str] = &[
 
 /// Functions Brixo gives scripts, on top of Rovik's own built-ins.
 pub const BRIXO_FUNCTIONS: &[&str] =
-    &["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load"];
+    &["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load", "leaderboard"];
 
 /// Fields scripts use on objects (after a `.`).
 pub const FIELDS: &[&str] = &[
     "name", "parent", "children", "class", "position", "size", "rotation", "color", "anchored", "can_collide",
-    "transparency", "material", "shape", "velocity", "floating", "bounce", "health", "max_health", "walk_speed",
+    "transparency", "material", "shape", "velocity", "floating", "bounce", "hinge", "hinge_at", "motor_speed", "swing_to", "hinge_angle", "time_of_day", "brightness", "fog_start", "fog_end", "fog_color", "sky_color", "health", "max_health", "walk_speed",
     "jump_power", "face", "look", "swinging", "equipped", "team", "text", "visible", "text_color", "text_size",
     "background", "background_color", "attached_to", "volume", "shirt_color", "pants_color", "skin_color", "x", "y",
     "z", "r", "g", "b",
@@ -277,7 +277,7 @@ pub fn surface_hit(model: &DataModel, origin: Vec3, dir: Vec3, skip: &HashSet<In
 /// `point` facing `normal`: pushed out along the surface's main axis by
 /// half its size that way, centred on the point otherwise. With `snap`,
 /// the other two axes land on whole studs.
-pub fn rest_on(point: Vec3, normal: Vec3, half: Vec3, snap: bool) -> Vec3 {
+pub fn rest_on(point: Vec3, normal: Vec3, half: Vec3, snap: Option<f32>) -> Vec3 {
     let axis = if normal.x.abs() >= normal.y.abs() && normal.x.abs() >= normal.z.abs() {
         0
     } else if normal.y.abs() >= normal.z.abs() {
@@ -289,8 +289,8 @@ pub fn rest_on(point: Vec3, normal: Vec3, half: Vec3, snap: bool) -> Vec3 {
     for i in 0..3 {
         if i == axis {
             c[i] = point[i] + normal[i].signum() * half[i];
-        } else if snap {
-            c[i] = c[i].round();
+        } else if let Some(step) = snap {
+            c[i] = (c[i] / step).round() * step;
         }
     }
     c
@@ -314,6 +314,116 @@ pub fn world_box(parts: &[PartProps]) -> Option<(Vec3, Vec3)> {
         }
     }
     (lo.x.is_finite()).then(|| ((lo + hi) / 2.0, (hi - lo) / 2.0))
+}
+
+// --- Lining things up ----------------------------------------------------------
+
+/// Which edge (or the middle) of each thing to line up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Min,
+    Middle,
+    Max,
+}
+
+/// How far to move each box (centre, half-size) so they line up along
+/// `axis` (0 = X, 1 = Y, 2 = Z): their low sides, middles or high sides
+/// all where the whole selection's is.
+pub fn align(boxes: &[(Vec3, Vec3)], axis: usize, how: Align) -> Vec<f32> {
+    if boxes.is_empty() {
+        return Vec::new();
+    }
+    let edge = |(c, h): &(Vec3, Vec3)| match how {
+        Align::Min => c[axis] - h[axis],
+        Align::Middle => c[axis],
+        Align::Max => c[axis] + h[axis],
+    };
+    let target = match how {
+        Align::Min => boxes.iter().map(edge).fold(f32::MAX, f32::min),
+        Align::Max => boxes.iter().map(edge).fold(f32::MIN, f32::max),
+        Align::Middle => {
+            let lo = boxes.iter().map(|(c, h)| c[axis] - h[axis]).fold(f32::MAX, f32::min);
+            let hi = boxes.iter().map(|(c, h)| c[axis] + h[axis]).fold(f32::MIN, f32::max);
+            (lo + hi) / 2.0
+        }
+    };
+    boxes.iter().map(|b| target - edge(b)).collect()
+}
+
+/// How far to move each box so they're evenly spaced along `axis`: the
+/// first and last stay put, and the gaps between neighbours come out equal.
+pub fn space_evenly(boxes: &[(Vec3, Vec3)], axis: usize) -> Vec<f32> {
+    let mut out = vec![0.0; boxes.len()];
+    if boxes.len() < 3 {
+        return out;
+    }
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|a, b| boxes[*a].0[axis].total_cmp(&boxes[*b].0[axis]));
+    let lo = boxes[order[0]].0[axis] - boxes[order[0]].1[axis];
+    let last = order[order.len() - 1];
+    let hi = boxes[last].0[axis] + boxes[last].1[axis];
+    let widths: f32 = boxes.iter().map(|(_, h)| h[axis] * 2.0).sum();
+    let gap = (hi - lo - widths) / (boxes.len() - 1) as f32;
+    let mut at = lo;
+    for i in order {
+        let (c, h) = boxes[i];
+        let want = at + h[axis];
+        out[i] = want - c[axis];
+        at += h[axis] * 2.0 + gap;
+    }
+    out
+}
+
+/// Whether a screen box holds all of a thing: every corner of its box
+/// (centre, half-size, turned by `turn`) projected by `to_screen`.
+pub fn fully_inside(lo: egui::Pos2, hi: egui::Pos2, corners: impl IntoIterator<Item = Option<egui::Pos2>>) -> bool {
+    let rect = egui::Rect::from_two_pos(lo, hi);
+    corners.into_iter().all(|c| c.is_some_and(|c| rect.contains(c)))
+}
+
+#[cfg(test)]
+mod line_up_tests {
+    use super::*;
+
+    fn b(x: f32, w: f32) -> (Vec3, Vec3) {
+        (Vec3::new(x, 0.0, 0.0), Vec3::new(w / 2.0, 0.5, 0.5))
+    }
+
+    #[test]
+    fn things_line_up_on_an_edge_or_the_middle() {
+        let boxes = [b(0.0, 2.0), b(5.0, 4.0), b(-3.0, 1.0)];
+        // Low sides: -1, 3, -3.5 -> all to -3.5.
+        assert_eq!(align(&boxes, 0, Align::Min), vec![-2.5, -6.5, 0.0]);
+        // High sides: 1, 7, -2.5 -> all to 7.
+        assert_eq!(align(&boxes, 0, Align::Max), vec![6.0, 0.0, 9.5]);
+        // Middles to the middle of the lot (-3.5..7 -> 1.75).
+        assert_eq!(align(&boxes, 0, Align::Middle), vec![1.75, -3.25, 4.75]);
+        assert!(align(&[], 0, Align::Min).is_empty());
+    }
+
+    #[test]
+    fn spacing_evenly_keeps_the_ends_and_evens_the_gaps() {
+        // Widths 2, 2, 4 between -1 and 12: 13 long, 8 of things, gaps of 2.5.
+        let boxes = [b(0.0, 2.0), b(10.0, 4.0), b(2.0, 2.0)];
+        let d = space_evenly(&boxes, 0);
+        let now: Vec<f32> = boxes.iter().zip(&d).map(|(bx, d)| bx.0.x + d).collect();
+        assert_eq!(now, vec![0.0, 10.0, 4.5]);
+        assert_eq!(space_evenly(&boxes[..2], 0), vec![0.0, 0.0], "two things are already even");
+    }
+
+    #[test]
+    fn a_box_select_takes_what_it_fully_holds() {
+        let (lo, hi) = (egui::pos2(10.0, 10.0), egui::pos2(100.0, 80.0));
+        assert!(fully_inside(lo, hi, [Some(egui::pos2(20.0, 20.0)), Some(egui::pos2(90.0, 70.0))]));
+        assert!(!fully_inside(lo, hi, [Some(egui::pos2(20.0, 20.0)), Some(egui::pos2(190.0, 70.0))]));
+        assert!(!fully_inside(hi, lo, [None]), "behind the camera doesn't count");
+    }
+
+    #[test]
+    fn resting_snaps_to_the_chosen_step() {
+        let c = rest_on(Vec3::new(1.3, 0.0, 2.8), Vec3::Y, Vec3::new(1.0, 0.5, 1.0), Some(0.5));
+        assert_eq!(c, Vec3::new(1.5, 0.5, 3.0));
+    }
 }
 
 #[cfg(test)]
@@ -398,13 +508,13 @@ mod tests {
         // Looking straight down at the floor: rests on top of it.
         let (hit, n) = surface_hit(&dm, Vec3::new(3.3, 20.0, -2.6), Vec3::NEG_Y, &skip).unwrap();
         assert!((hit.y - 1.0).abs() < 1e-4 && n.abs_diff_eq(Vec3::Y, 1e-4));
-        let c = rest_on(hit, n, Vec3::new(2.0, 0.5, 1.0), true);
+        let c = rest_on(hit, n, Vec3::new(2.0, 0.5, 1.0), Some(1.0));
         assert_eq!(c, Vec3::new(3.0, 1.5, -3.0), "on top, snapped to whole studs");
 
         // Looking at the wall from the side: rests against it.
         let (hit, n) = surface_hit(&dm, Vec3::new(-10.0, 4.0, 0.0), Vec3::X, &skip).unwrap();
         assert!((hit.x - 9.0).abs() < 1e-4 && n.abs_diff_eq(Vec3::NEG_X, 1e-4));
-        let c = rest_on(hit, n, Vec3::new(2.0, 0.5, 1.0), false);
+        let c = rest_on(hit, n, Vec3::new(2.0, 0.5, 1.0), None);
         assert!((c.x - 7.0).abs() < 1e-4, "against the wall: {c:?}");
 
         // A rotated slab is hit on its rotated face.

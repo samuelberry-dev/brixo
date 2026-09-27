@@ -83,6 +83,233 @@ impl Shape {
     }
 }
 
+/// Which of a part's own lines a hinge turns it around: its height (Y),
+/// its width (X) or its depth (Z). A door turns around its height; a
+/// cylinder wheel too (a cylinder's height is its axle).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Hinge {
+    #[default]
+    Off,
+    Y,
+    X,
+    Z,
+}
+
+impl Hinge {
+    pub const ALL: [Hinge; 4] = [Hinge::Off, Hinge::Y, Hinge::X, Hinge::Z];
+
+    /// The name scripts use: `door.hinge = "y"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Hinge::Off => "off",
+            Hinge::Y => "y",
+            Hinge::X => "x",
+            Hinge::Z => "z",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Hinge> {
+        Hinge::ALL.into_iter().find(|h| h.name() == name)
+    }
+
+    /// What Studio calls it.
+    pub fn title(self) -> &'static str {
+        match self {
+            Hinge::Off => "Off",
+            Hinge::Y => "Its height (Y)",
+            Hinge::X => "Its width (X)",
+            Hinge::Z => "Its depth (Z)",
+        }
+    }
+
+    /// The line in the part's own space, or None when off.
+    pub fn axis(self) -> Option<Vec3> {
+        match self {
+            Hinge::Off => None,
+            Hinge::Y => Some(Vec3::new(0.0, 1.0, 0.0)),
+            Hinge::X => Some(Vec3::new(1.0, 0.0, 0.0)),
+            Hinge::Z => Some(Vec3::new(0.0, 0.0, 1.0)),
+        }
+    }
+}
+
+/// Where on a part its hinge is: the middle, or the middle of one side
+/// (left is -X, right +X, bottom -Y, top +Y, back -Z, front +Z).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Side {
+    #[default]
+    Middle,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Front,
+    Back,
+}
+
+impl Side {
+    pub const ALL: [Side; 7] = [Side::Middle, Side::Left, Side::Right, Side::Top, Side::Bottom, Side::Front, Side::Back];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::Middle => "middle",
+            Side::Left => "left",
+            Side::Right => "right",
+            Side::Top => "top",
+            Side::Bottom => "bottom",
+            Side::Front => "front",
+            Side::Back => "back",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Side> {
+        Side::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// The point, in the part's own space, for a part of this size.
+    pub fn point(self, size: Vec3) -> Vec3 {
+        let (x, y, z) = (size.x / 2.0, size.y / 2.0, size.z / 2.0);
+        match self {
+            Side::Middle => Vec3::ZERO,
+            Side::Left => Vec3::new(-x, 0.0, 0.0),
+            Side::Right => Vec3::new(x, 0.0, 0.0),
+            Side::Top => Vec3::new(0.0, y, 0.0),
+            Side::Bottom => Vec3::new(0.0, -y, 0.0),
+            Side::Front => Vec3::new(0.0, 0.0, z),
+            Side::Back => Vec3::new(0.0, 0.0, -z),
+        }
+    }
+}
+
+/// The Workspace field that lists the leaderboard's columns (player fields,
+/// comma separated), set by `leaderboard("coins", "wins")`.
+pub const LEADERBOARD_FIELD: &str = "leaderboard";
+
+/// The player fields the game shows on its leaderboard, in order.
+pub fn leaderboard_columns(world: &DataModel) -> Vec<String> {
+    match world.get(world.root()).and_then(|w| w.attributes.get(LEADERBOARD_FIELD)) {
+        Some(Attribute::Str(list)) => list.split(',').map(str::trim).filter(|c| !c.is_empty()).map(String::from).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// How a column's field name reads as a heading: "best_time" is "Best
+/// Time"; short words are abbreviations, so "xp" is "XP" and "kos" "KOs".
+pub fn leaderboard_title(field: &str) -> String {
+    field
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            // Two letters (with a plural s): "xp", "hp", "kos".
+            let stem = if w.len() == 3 { w.strip_suffix('s') } else { None };
+            if w.chars().all(|c| c.is_ascii_alphabetic()) && (w.len() <= 2 || stem.is_some()) {
+                return match stem {
+                    Some(stem) => stem.to_uppercase() + "s",
+                    None => w.to_uppercase(),
+                };
+            }
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A game's lighting: the time of day (which moves the sun, and colours
+/// the sky from dawn to night), how bright it is, fog, and the sky's
+/// colour. Kept as fields on the Workspace, so it's saved with the game,
+/// reaches every player, and scripts change it:
+/// `find("Workspace").time_of_day = 19`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lighting {
+    /// Hours, 0 to 24: 6 is sunrise, 12 noon, 18 sunset. 14 by default.
+    pub time_of_day: f32,
+    /// 1 is normal; 0.5 gloomy; 2 dazzling.
+    pub brightness: f32,
+    /// Fog: things fade into `fog_color` from `fog_start` studs away until
+    /// they're gone at `fog_end`. A `fog_end` of 0 is no fog.
+    pub fog_start: f32,
+    pub fog_end: f32,
+    pub fog_color: Color,
+    /// The sky's colour overhead, instead of the time of day's.
+    pub sky_color: Option<Color>,
+}
+
+impl Default for Lighting {
+    fn default() -> Self {
+        Lighting { time_of_day: 14.0, brightness: 1.0, fog_start: 0.0, fog_end: 0.0, fog_color: Color::new(192, 204, 218), sky_color: None }
+    }
+}
+
+impl Lighting {
+    /// The Workspace fields it's kept in.
+    pub const FIELDS: [&'static str; 6] = ["time_of_day", "brightness", "fog_start", "fog_end", "fog_color", "sky_color"];
+
+    pub fn of(world: &DataModel) -> Lighting {
+        let mut l = Lighting::default();
+        let Some(ws) = world.get(world.root()) else { return l };
+        let num = |k: &str| match ws.attributes.get(k) {
+            Some(Attribute::Num(n)) if n.is_finite() => Some(*n as f32),
+            _ => None,
+        };
+        let color = |k: &str| match ws.attributes.get(k) {
+            Some(Attribute::Str(s)) => color_from_text(s),
+            _ => None,
+        };
+        if let Some(t) = num("time_of_day") {
+            l.time_of_day = t.rem_euclid(24.0);
+        }
+        if let Some(b) = num("brightness") {
+            l.brightness = b.clamp(0.0, 3.0);
+        }
+        if let Some(f) = num("fog_start") {
+            l.fog_start = f.max(0.0);
+        }
+        if let Some(f) = num("fog_end") {
+            l.fog_end = f.max(0.0);
+        }
+        if let Some(c) = color("fog_color") {
+            l.fog_color = c;
+        }
+        l.sky_color = color("sky_color");
+        l
+    }
+
+    /// Writes it into the Workspace's fields (leaving out what's default,
+    /// so a game that never touches lighting has no fields for it).
+    pub fn set(&self, world: &mut DataModel) {
+        let root = world.root();
+        let Some(ws) = world.get_mut(root) else { return };
+        let d = Lighting::default();
+        let a = &mut ws.attributes;
+        let mut put = |k: &str, v: Option<Attribute>| match v {
+            Some(v) => {
+                a.insert(k.into(), v);
+            }
+            None => {
+                a.remove(k);
+            }
+        };
+        let n = |v: f32, d: f32| (v != d).then(|| Attribute::Num((v as f64 * 1000.0).round() / 1000.0));
+        put("time_of_day", n(self.time_of_day, d.time_of_day));
+        put("brightness", n(self.brightness, d.brightness));
+        put("fog_start", n(self.fog_start, d.fog_start));
+        put("fog_end", n(self.fog_end, d.fog_end));
+        put("fog_color", (self.fog_color != d.fog_color).then(|| Attribute::Str(color_text(self.fog_color))));
+        put("sky_color", self.sky_color.map(|c| Attribute::Str(color_text(c))));
+    }
+}
+
+/// A colour as a Workspace field holds it: "r,g,b".
+pub fn color_text(c: Color) -> String {
+    format!("{},{},{}", c.r, c.g, c.b)
+}
+
+pub fn color_from_text(s: &str) -> Option<Color> {
+    let parts: Vec<u8> = s.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+    (parts.len() == 3).then(|| Color::new(parts[0], parts[1], parts[2]))
+}
+
 /// Where a character's right shoulder is, in its own space (facing +Z).
 pub const RIGHT_SHOULDER: Vec3 = Vec3 { x: -1.43, y: 0.97, z: 0.0 };
 /// From the shoulder to the middle of the hand.
@@ -203,6 +430,21 @@ pub struct PartProps {
     /// How bouncy, 0 (a thud) to 1 (a superball).
     #[serde(default)]
     pub bounce: f32,
+    /// A hinge: the (loose) part turns around this line of its own,
+    /// held to whatever it's touching nearest `hinge_at` (or to the spot
+    /// it's in, if it touches nothing).
+    #[serde(default)]
+    pub hinge: Hinge,
+    #[serde(default)]
+    pub hinge_at: Side,
+    /// A motor on the hinge: keeps turning at this many degrees a second
+    /// (a wheel, a spinner). 0 swings freely.
+    #[serde(default)]
+    pub motor_speed: f32,
+    /// Swings to this angle (degrees, from where it started) and holds
+    /// there (a door opening, a drawbridge). None swings freely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swing_to: Option<f32>,
 }
 
 fn yes() -> bool {
@@ -224,6 +466,10 @@ impl Default for PartProps {
             velocity: Vec3::ZERO,
             floating: false,
             bounce: 0.0,
+            hinge: Hinge::Off,
+            hinge_at: Side::Middle,
+            motor_speed: 0.0,
+            swing_to: None,
         }
     }
 }

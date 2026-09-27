@@ -58,7 +58,11 @@ While building, the camera flies freely:
 - **Rotate (2)**: drag a ring to turn the part.
 - **Scale (3)**: drag a handle to make the part bigger or smaller on that side.
 
-**Ctrl-click** selects more than one part, so you can move or copy them together. **Alt-click** picks a single part inside a Model.
+**Ctrl-click** selects more than one part, so you can move or copy them together. Or **drag a box** across empty space: everything fully inside it is selected (hold Ctrl to add to what's selected). **Alt-click** picks a single part inside a Model.
+
+**Snap** makes moves and turns jump in steps: pick how far next to it (¼ stud to 4 studs, and 5° to 90° for turning). Untick it to move freely.
+
+With several things selected, Properties can **line them up**: pick an axis (X, Y or Z), then line up their low sides, middles or high sides, or **space them evenly** so the gaps between them match.
 
 ## The Explorer
 
@@ -75,7 +79,7 @@ The Explorer lists **every object in your game** as a tree: things inside other 
 
 ![Properties: everything about the selected part, changeable](img/studio-properties.png)
 
-Properties shows **everything about the selected object**, and lets you change it: name, position, size, rotation, color, material, shape, and switches like **Anchored** (stays put instead of falling) and **Can Collide** (solid, or something you walk through). Hover over any of them for a hint. Every property here can also be read and changed by scripts, with the same names in lowercase: `anchored`, `can_collide`, `color` and so on. See [Parts](parts).
+Properties shows **everything about the selected object**, and lets you change it: name, position, size, rotation, color, material, shape, and switches like **Anchored** (stays put instead of falling) and **Can Collide** (solid, or something you walk through). Hover over any of them for a hint. Every property here can also be read and changed by scripts, with the same names in lowercase: `anchored`, `can_collide`, `color` and so on. See [Parts](parts). Parts can also have a [hinge](howto-hinges); select the **Workspace** for its [lighting](lighting).
 
 ## Scripts
 

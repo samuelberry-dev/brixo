@@ -205,6 +205,13 @@ struct Editor {
     update_hidden: bool,
     tool: Tool,
     snap: bool,
+    /// How far a move or resize snaps (studs), and a turn (degrees).
+    snap_step: f32,
+    turn_step: f32,
+    /// A box select in progress: where the drag started.
+    box_select: Option<egui::Pos2>,
+    /// The axis the Line up buttons work along (0 = X, 1 = Y, 2 = Z).
+    line_axis: usize,
     drag: Option<Drag>,
     history: History,
     /// True while a Properties edit is in progress (dragging a value,
@@ -279,6 +286,8 @@ struct Editor {
     /// 3D view again (so Stop and the panels stay reachable).
     shift_lock: bool,
     chat_open: bool,
+    /// The leaderboard is unfolded during Play (Tab folds it).
+    board_open: bool,
     chat_text: String,
     mouse_freed: bool,
     /// The mouse is locked right now (tools then aim at the middle).
@@ -295,6 +304,10 @@ impl Default for Editor {
         Self {
             tool: Tool::Move,
             snap: true,
+            snap_step: 1.0,
+            turn_step: 15.0,
+            box_select: None,
+            line_axis: 0,
             drag: None,
             history: History::default(),
             prop_session: false,
@@ -333,6 +346,7 @@ impl Default for Editor {
             started: std::time::Instant::now(),
             shift_lock: false,
             chat_open: false,
+            board_open: true,
             chat_text: String::new(),
             mouse_freed: false,
             mouse_locked: false,
@@ -531,6 +545,7 @@ impl Studio {
                 self.keys.clear();
             }
             KeyCode::Escape => e.mouse_freed = true,
+            KeyCode::Tab => e.board_open = !e.board_open,
             _ => {}
         }
     }
@@ -956,6 +971,141 @@ impl Studio {
                 *status = "Playing".to_string();
             }
         }
+    }
+}
+
+/// With several things selected: line them up along an axis, or space
+/// them out evenly.
+fn line_up_ui(ui: &mut egui::Ui, model: &mut DataModel, selection: Option<InstanceId>, editor: &mut Editor) {
+    use editing::Align;
+    let items = selected_items(model, selection, &editor.also);
+    let boxes: Vec<(InstanceId, Vec3, Vec3)> = items
+        .iter()
+        .filter_map(|id| bounds(model, &model.parts_under(*id)).map(|b| (*id, to_glam(b.position), to_glam(b.size) / 2.0)))
+        .collect();
+    if boxes.len() < 2 {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("Line up").strong().color(brixo_client::theme::site::NAVY));
+    let mut todo: Option<Vec<f32>> = None;
+    let only: Vec<(Vec3, Vec3)> = boxes.iter().map(|(_, c, h)| (*c, *h)).collect();
+    let axis = editor.line_axis;
+    ui.horizontal(|ui| {
+        ui.label("Along");
+        for (i, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+            ui.selectable_value(&mut editor.line_axis, i, name);
+        }
+    });
+    ui.horizontal(|ui| {
+        let low = ["Left", "Bottom", "Back"][axis];
+        let high = ["Right", "Top", "Front"][axis];
+        for (label, how, tip) in [(low, Align::Min, "Line up their low sides"), ("Middle", Align::Middle, "Line up their middles"), (high, Align::Max, "Line up their high sides")] {
+            if ui.button(label).on_hover_text(tip).clicked() {
+                todo = Some(editing::align(&only, axis, how));
+            }
+        }
+        if ui
+            .add_enabled(boxes.len() >= 3, egui::Button::new("Space evenly"))
+            .on_hover_text("Same gap between each, ends staying put (3 or more)")
+            .clicked()
+        {
+            todo = Some(editing::space_evenly(&only, axis));
+        }
+    });
+    if let Some(moves) = todo {
+        editor.history.checkpoint(model);
+        for ((id, _, _), d) in boxes.iter().zip(moves) {
+            if d.abs() > 1e-5 {
+                let mut by = Vec3::ZERO;
+                by[axis] = d;
+                shift(model, &[*id], by);
+            }
+        }
+        editor.prop_session = false;
+    }
+}
+
+/// The Workspace's Lighting section. True if anything changed.
+fn lighting_ui(ui: &mut egui::Ui, l: &mut brixo_core::Lighting) -> bool {
+    use brixo_client::theme::site;
+    let mut changed = false;
+    ui.label(egui::RichText::new("Lighting").strong().color(site::NAVY));
+    ui.horizontal(|ui| {
+        ui.label("Time of day").on_hover_text("0 to 24 hours: 6 is sunrise, 12 noon, 18 sunset, night after. Moves the sun and colours the sky.");
+        changed |= ui.add(egui::Slider::new(&mut l.time_of_day, 0.0..=24.0).custom_formatter(|v, _| {
+            let h = v.floor() as u32 % 24;
+            let m = ((v - v.floor()) * 60.0).round() as u32 % 60;
+            let (hh, ampm) = match h { 0 => (12, "am"), 1..=11 => (h, "am"), 12 => (12, "pm"), _ => (h - 12, "pm") };
+            format!("{hh}:{m:02} {ampm}")
+        })).changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("Brightness").on_hover_text("1 is normal: lower is gloomier, higher is dazzling");
+        changed |= ui.add(egui::Slider::new(&mut l.brightness, 0.0..=3.0).max_decimals(2)).changed();
+    });
+    ui.horizontal(|ui| {
+        let mut custom = l.sky_color.is_some();
+        if ui.checkbox(&mut custom, "Sky color").on_hover_text("The sky overhead by day, instead of blue").changed() {
+            l.sky_color = custom.then(|| Color::new(20, 85, 200));
+            changed = true;
+        }
+        if let Some(c) = l.sky_color.as_mut() {
+            let mut rgb = [c.r, c.g, c.b];
+            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                *c = Color::new(rgb[0], rgb[1], rgb[2]);
+                changed = true;
+            }
+        }
+    });
+    ui.separator();
+    ui.horizontal(|ui| {
+        let mut on = l.fog_end > 0.0;
+        if ui.checkbox(&mut on, "Fog").on_hover_text("Things fade into the fog colour, and are gone by the end distance").changed() {
+            (l.fog_start, l.fog_end) = if on { (30.0, 200.0) } else { (0.0, 0.0) };
+            changed = true;
+        }
+        if on {
+            let mut rgb = [l.fog_color.r, l.fog_color.g, l.fog_color.b];
+            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                l.fog_color = Color::new(rgb[0], rgb[1], rgb[2]);
+                changed = true;
+            }
+        }
+    });
+    if l.fog_end > 0.0 {
+        ui.horizontal(|ui| {
+            ui.label("Starts");
+            changed |= ui.add(egui::DragValue::new(&mut l.fog_start).speed(1.0).range(0.0..=5000.0).suffix(" studs")).changed();
+            ui.label("gone by");
+            changed |= ui.add(egui::DragValue::new(&mut l.fog_end).speed(1.0).range(1.0..=5000.0).suffix(" studs")).changed();
+        });
+        l.fog_start = l.fog_start.min(l.fog_end);
+    }
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("Scripts change these too: find(\"Workspace\").time_of_day = 19").small().color(site::DIM));
+    changed
+}
+
+fn stud_label(step: f32) -> String {
+    match step {
+        s if s == 0.25 => "¼ stud".into(),
+        s if s == 0.5 => "½ stud".into(),
+        s if s == 1.0 => "1 stud".into(),
+        s => format!("{s} studs"),
+    }
+}
+
+fn side_label(side: brixo_core::Side) -> &'static str {
+    use brixo_core::Side::*;
+    match side {
+        Middle => "Middle",
+        Left => "Left side (-X)",
+        Right => "Right side (+X)",
+        Top => "Top (+Y)",
+        Bottom => "Bottom (-Y)",
+        Front => "Front (+Z)",
+        Back => "Back (-Z)",
     }
 }
 
@@ -1561,6 +1711,28 @@ fn build_ui(
                 ui.selectable_value(&mut editor.tool, Tool::Rotate, "Rotate (2)");
                 ui.selectable_value(&mut editor.tool, Tool::Scale, "Scale (3)");
                 ui.checkbox(&mut editor.snap, "Snap");
+                ui.add_enabled_ui(editor.snap, |ui| {
+                    egui::ComboBox::from_id_salt("snap step")
+                        .width(64.0)
+                        .selected_text(stud_label(editor.snap_step))
+                        .show_ui(ui, |ui| {
+                            for step in [0.25, 0.5, 1.0, 2.0, 4.0] {
+                                ui.selectable_value(&mut editor.snap_step, step, stud_label(step));
+                            }
+                        })
+                        .response
+                        .on_hover_text("How far moving and resizing snap");
+                    egui::ComboBox::from_id_salt("turn step")
+                        .width(48.0)
+                        .selected_text(format!("{}°", editor.turn_step))
+                        .show_ui(ui, |ui| {
+                            for step in [5.0, 15.0, 45.0, 90.0] {
+                                ui.selectable_value(&mut editor.turn_step, step, format!("{step}°"));
+                            }
+                        })
+                        .response
+                        .on_hover_text("How far turning snaps");
+                });
                 ui.separator();
                 if ui
                     .add_enabled(!editor.history.undo.is_empty(), egui::Button::new("Undo"))
@@ -2383,6 +2555,7 @@ fn properties_panel(
 ) {
     if !editor.also.is_empty() {
         ui.label(format!("{} selected; showing the first", editor.also.len() + 1));
+        line_up_ui(ui, model, selection, editor);
         ui.separator();
     }
 
@@ -2403,6 +2576,7 @@ fn properties_panel(
     let mut name = inst.name.clone();
     let mut props = model.part(id).copied();
     let mut gui = model.gui(id).cloned();
+    let mut lighting = (class == Class::Workspace).then(|| brixo_core::Lighting::of(model));
     let mut changed = false;
 
     ui.horizontal(|ui| {
@@ -2470,6 +2644,54 @@ fn properties_panel(
                 changed |= ui.add(egui::Slider::new(&mut p.bounce, 0.0..=1.0)).changed();
             });
 
+            // Hinge and motor.
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Hinge")
+                    .on_hover_text("Turns the part around one of its own lines, held to whatever it touches nearest the hinge (or to where it is). Doors, wheels, drawbridges, spinners.");
+                let before = p.hinge;
+                egui::ComboBox::from_id_salt("hinge")
+                    .selected_text(p.hinge.title())
+                    .show_ui(ui, |ui| {
+                        for h in brixo_core::Hinge::ALL {
+                            changed |= ui.selectable_value(&mut p.hinge, h, h.title()).changed();
+                        }
+                    });
+                // A hinged part has to be loose to turn.
+                if before == brixo_core::Hinge::Off && p.hinge != brixo_core::Hinge::Off {
+                    p.anchored = false;
+                }
+            });
+            if p.hinge != brixo_core::Hinge::Off {
+                ui.horizontal(|ui| {
+                    ui.label("Hinge at");
+                    egui::ComboBox::from_id_salt("hinge_at")
+                        .selected_text(side_label(p.hinge_at))
+                        .show_ui(ui, |ui| {
+                            for side in brixo_core::Side::ALL {
+                                changed |= ui.selectable_value(&mut p.hinge_at, side, side_label(side)).changed();
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Motor speed").on_hover_text("Degrees a second it keeps turning (a wheel, a spinner). 0: no motor, it swings freely.");
+                    changed |= ui.add(egui::DragValue::new(&mut p.motor_speed).speed(5.0).range(-3600.0..=3600.0).suffix("°/s")).changed();
+                });
+                ui.horizontal(|ui| {
+                    let mut on = p.swing_to.is_some();
+                    if ui.checkbox(&mut on, "Swing to").on_hover_text("Turns to this angle (from where it starts) and holds it: an open door, a lowered drawbridge.").changed() {
+                        p.swing_to = on.then_some(90.0);
+                        changed = true;
+                    }
+                    if let Some(a) = p.swing_to.as_mut() {
+                        changed |= ui.add(egui::DragValue::new(a).speed(1.0).range(-180.0..=180.0).suffix("°")).changed();
+                    }
+                });
+                if p.anchored {
+                    ui.colored_label(egui::Color32::from_rgb(200, 90, 20), "Anchored parts don't turn: untick Anchored.");
+                }
+            }
+
             p.size.x = p.size.x.max(0.01);
             p.size.y = p.size.y.max(0.01);
             p.size.z = p.size.z.max(0.01);
@@ -2530,6 +2752,10 @@ fn properties_panel(
                 }
                 ui.label(egui::RichText::new("Or double-click it in the Explorer.").small().color(brixo_client::theme::site::DIM));
             }
+            None if lighting.is_some() => {
+                let l = lighting.as_mut().unwrap();
+                changed |= lighting_ui(ui, l);
+            }
             None => {
                 ui.label("No editable properties.");
             }
@@ -2550,6 +2776,9 @@ fn properties_panel(
         }
         if let (Some(new), Some(g)) = (gui, model.gui_mut(id)) {
             *g = new;
+        }
+        if let Some(l) = lighting {
+            l.set(model);
         }
     } else {
         // The edit is over once nothing is held and no text field has focus.
@@ -2601,7 +2830,8 @@ fn viewport(
 
     let vp = camera.view_proj(aspect);
     let tool = editor.tool;
-    let snap = editor.snap;
+    // Snap steps (moves in studs, turns in degrees), or None.
+    let snap = editor.snap.then_some((editor.snap_step, editor.turn_step));
 
     // What's selected, and what the gizmo sits on: a single part, or (for
     // a Model or several things) the box around all their parts.
@@ -2651,6 +2881,10 @@ fn viewport(
             }
         }
     }
+    // Left-drag on anything else: a box select.
+    if response.drag_started_by(egui::PointerButton::Primary) && editor.drag.is_none() && editor.surface_drag.is_none() && !playing {
+        editor.box_select = ui.input(|i| i.pointer.press_origin());
+    }
     if let (Some(parts), true) = (editor.surface_drag.clone(), response.dragged_by(egui::PointerButton::Primary)) {
         if let Some(pos) = response.interact_pointer_pos() {
             let (nx, ny) = ndc(screen, pos);
@@ -2662,7 +2896,7 @@ fn viewport(
             if let (Some((point, normal)), Some((center, half))) =
                 (editing::surface_hit(model, near, (far - near).normalize(), &skip), editing::world_box(&props))
             {
-                let by = editing::rest_on(point, normal, half, snap) - center;
+                let by = editing::rest_on(point, normal, half, snap.map(|(m, _)| m)) - center;
                 if by.length() > 1e-4 {
                     shift(model, &parts, by);
                 }
@@ -2717,6 +2951,7 @@ fn viewport(
         if editor.mouse_freed && response.clicked() {
             editor.mouse_freed = false;
         }
+        brixo_client::leaderboard::draw(ui.ctx(), rect, model, editor.local_player, &mut editor.board_open);
         play_overlay(ui.ctx(), rect, editor);
     }
 
@@ -2754,6 +2989,74 @@ fn viewport(
                         editor.also.clear();
                     }
                 }
+            }
+        }
+    }
+
+    // The box select: drawn while dragging; on letting go, everything
+    // fully inside it is selected (Ctrl adds to what's selected already).
+    if let Some(start) = editor.box_select {
+        let now = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.hover_pos())).unwrap_or(start);
+        let r = egui::Rect::from_two_pos(start, now);
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(r, 0.0, egui::Color32::from_rgba_unmultiplied(77, 143, 214, 45));
+        painter.rect_stroke(r, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(37, 102, 176)), egui::StrokeKind::Inside);
+        if response.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+            editor.box_select = None;
+            if r.width() > 4.0 && r.height() > 4.0 {
+                let alt = ui.input(|i| i.modifiers.alt);
+                let mut picked: Vec<InstanceId> = Vec::new();
+                for id in model.walk() {
+                    if model.part(id).is_none() {
+                        continue;
+                    }
+                    let item = if alt { id } else { model.top_model(id) };
+                    if picked.contains(&item) {
+                        continue;
+                    }
+                    let Some(b) = bounds(model, &model.parts_under(item)) else { continue };
+                    let (c, h) = (to_glam(b.position), to_glam(b.size) / 2.0);
+                    let corners = [-1.0, 1.0].into_iter().flat_map(|x| [-1.0, 1.0].into_iter().flat_map(move |y| [-1.0, 1.0].into_iter().map(move |z| Vec3::new(x, y, z))));
+                    if editing::fully_inside(r.min, r.max, corners.map(|k| project(c + k * h))) {
+                        picked.push(item);
+                    }
+                }
+                let adding = ui.input(|i| i.modifiers.command || i.modifiers.shift);
+                let mut all: Vec<InstanceId> = if adding { selected_items(model, *selection, &editor.also) } else { Vec::new() };
+                for id in picked {
+                    if !all.contains(&id) {
+                        all.push(id);
+                    }
+                }
+                *selection = all.first().copied();
+                editor.also = all.iter().skip(1).copied().collect();
+                *status = match all.len() {
+                    0 => "Nothing fully inside the box".to_string(),
+                    n => format!("{} selected", plural(n, "thing")),
+                };
+            }
+        }
+    }
+
+    // Hinged parts in the selection: an orange line along each hinge.
+    if !playing {
+        let painter = ui.painter_at(rect);
+        for id in moving_parts(model, &items) {
+            let Some(p) = model.part(id) else { continue };
+            let Some(axis) = p.hinge.axis() else { continue };
+            let q = part_quat(p);
+            let pivot = to_glam(p.position) + q * to_glam(p.hinge_at.point(p.size));
+            let dir = q * to_glam(axis);
+            let reach = (to_glam(p.size) * to_glam(axis)).length() / 2.0 + 0.8;
+            let (Some(a), Some(b)) = (project(pivot - dir * reach), project(pivot + dir * reach)) else { continue };
+            let orange = egui::Color32::from_rgb(255, 150, 30);
+            painter.line_segment([a, b], egui::Stroke::new(5.0, egui::Color32::from_rgba_unmultiplied(40, 20, 0, 160)));
+            painter.line_segment([a, b], egui::Stroke::new(3.0, orange));
+            for end in [a, b] {
+                painter.circle_filled(end, 4.5, orange);
+            }
+            if let Some(c) = project(pivot) {
+                painter.circle_stroke(c, 6.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
             }
         }
     }
@@ -2927,20 +3230,20 @@ impl Drag {
         })
     }
 
-    fn apply(&mut self, pos: egui::Pos2, snap: bool, p: &mut PartProps) {
+    fn apply(&mut self, pos: egui::Pos2, snap: Option<(f32, f32)>, p: &mut PartProps) {
         match self.tool {
             Tool::Move => {
                 let mut amount = (pos - self.start_pointer).dot(self.screen_dir) * self.units_per_px;
-                if snap {
-                    amount = amount.round();
+                if let Some((step, _)) = snap {
+                    amount = (amount / step).round() * step;
                 }
                 p.position = from_glam(to_glam(self.start.position) + self.world_axis * amount);
             }
 
             Tool::Scale => {
                 let mut amount = (pos - self.start_pointer).dot(self.screen_dir) * self.units_per_px;
-                if snap {
-                    amount = amount.round();
+                if let Some((step, _)) = snap {
+                    amount = (amount / step).round() * step;
                 }
                 let start_size = component(self.start.size, self.axis);
                 let new_size = (start_size + amount).max(0.1);
@@ -2963,8 +3266,8 @@ impl Drag {
                 self.last_angle = angle;
 
                 let mut degrees = (self.accum * self.facing).to_degrees();
-                if snap {
-                    degrees = (degrees / 15.0).round() * 15.0;
+                if let Some((_, turn)) = snap {
+                    degrees = (degrees / turn).round() * turn;
                 }
 
                 // Rotate about the world axis as a quaternion, then store as Euler.

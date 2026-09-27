@@ -106,7 +106,7 @@ fn give_coins(p, n)
 end
 ```
 
-The full recipe, with a leaderboard for everyone, is in [Coins and a leaderboard](howto-coins). All about on-screen text: [On-screen interface](gui).
+To show everyone's coins in the leaderboard in the corner, it's one line: `leaderboard("coins")`. The full recipe is in [Coins and a leaderboard](howto-coins). All about on-screen text: [On-screen interface](gui).
 
 ## Faces and colors
 

@@ -110,6 +110,8 @@ pub struct WorldHost {
     pub blasts: Arc<Mutex<Vec<Blast>>>,
     /// Saved player data, for save() and load().
     pub saves: Arc<Mutex<crate::saves::Saves>>,
+    /// Each hinged part's angle as of the last physics step, for `hinge_angle`.
+    pub hinge_angles: Arc<Mutex<std::collections::HashMap<InstanceId, f32>>>,
 }
 
 /// Breakable parts: anchored parts with a custom field `breakable = true`.
@@ -277,7 +279,7 @@ fn fields_for(class: Class) -> Vec<&'static str> {
     match class {
         Class::Part | Class::SpawnLocation => f.extend([
             "position", "size", "rotation", "color", "anchored", "can_collide", "shape", "material",
-            "transparency", "velocity", "floating", "bounce",
+            "transparency", "velocity", "floating", "bounce", "hinge", "hinge_at", "motor_speed", "swing_to", "hinge_angle",
         ]),
         Class::Player => f.extend([
             "position", "size", "rotation", "velocity", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
@@ -288,6 +290,7 @@ fn fields_for(class: Class) -> Vec<&'static str> {
             "height", "attached_to",
         ]),
         Class::Sound => f.push("volume"),
+        Class::Workspace => f.extend(brixo_core::Lighting::FIELDS),
         _ => {}
     }
     f
@@ -462,6 +465,19 @@ impl Host for WorldHost {
             FACET_SELF => match name {
                 "name" => Ok(Value::str(inst.name.as_str())),
                 "class" => Ok(Value::str(class_name(inst.class))),
+                // Lighting lives on the Workspace.
+                "time_of_day" | "brightness" | "fog_start" | "fog_end" | "fog_color" | "sky_color" if inst.class == Class::Workspace => {
+                    let l = brixo_core::Lighting::of(&world);
+                    let color = |c: Color| Value::map([("r", c.r), ("g", c.g), ("b", c.b)].into_iter().map(|(k, v)| (k.to_string(), Value::Num(v as f64))).collect());
+                    Ok(match name {
+                        "time_of_day" => Value::Num(l.time_of_day as f64),
+                        "brightness" => Value::Num(l.brightness as f64),
+                        "fog_start" => Value::Num(l.fog_start as f64),
+                        "fog_end" => Value::Num(l.fog_end as f64),
+                        "fog_color" => color(l.fog_color),
+                        _ => l.sky_color.map(color).unwrap_or(Value::Nil),
+                    })
+                }
                 "parent" => Ok(inst.parent.map(object).unwrap_or(Value::Nil)),
                 "children" => Ok(Value::list(inst.children.iter().map(|c| object(*c)).collect())),
                 "camera_mode" => match world.player(id) {
@@ -504,6 +520,15 @@ impl Host for WorldHost {
                     })
                 }
                 "floating" if world.part(id).is_some() => Ok(Value::Bool(world.part(id).unwrap().floating)),
+                "hinge" if world.part(id).is_some() => Ok(Value::str(world.part(id).unwrap().hinge.name())),
+                "hinge_at" if world.part(id).is_some() => Ok(Value::str(world.part(id).unwrap().hinge_at.name())),
+                "motor_speed" if world.part(id).is_some() => Ok(Value::Num(world.part(id).unwrap().motor_speed as f64)),
+                "swing_to" if world.part(id).is_some() => Ok(world.part(id).unwrap().swing_to.map(|a| Value::Num(a as f64)).unwrap_or(Value::Nil)),
+                // Read-only: how far it has turned (0 until it has a hinge).
+                "hinge_angle" if world.part(id).is_some() => {
+                    let a = self.hinge_angles.lock().unwrap().get(&id).copied().unwrap_or(0.0);
+                    Ok(Value::Num(((a * 10.0).round() / 10.0) as f64))
+                }
                 "bounce" if world.part(id).is_some() => Ok(Value::Num(world.part(id).unwrap().bounce as f64)),
                 "material" | "transparency" => match world.part(id) {
                     Some(p) if name == "material" => Ok(Value::str(p.material.name())),
@@ -612,6 +637,25 @@ impl Host for WorldHost {
                     other => Err(format!("name has to be text, not a {}", other.type_name())),
                 },
                 "class" => Err("class can't be changed".to_string()),
+                "time_of_day" | "brightness" | "fog_start" | "fog_end" | "fog_color" | "sky_color" if class == Class::Workspace => {
+                    let mut l = brixo_core::Lighting::of(&world);
+                    let d = brixo_core::Lighting::default();
+                    match name {
+                        "time_of_day" => l.time_of_day = if matches!(value, Value::Nil) { d.time_of_day } else { number(&value, name)?.rem_euclid(24.0) },
+                        "brightness" => l.brightness = if matches!(value, Value::Nil) { d.brightness } else { number(&value, name)?.clamp(0.0, 3.0) },
+                        "fog_start" => l.fog_start = if matches!(value, Value::Nil) { 0.0 } else { number(&value, name)?.max(0.0) },
+                        "fog_end" => l.fog_end = if matches!(value, Value::Nil) { 0.0 } else { number(&value, name)?.max(0.0) },
+                        "fog_color" => l.fog_color = if matches!(value, Value::Nil) { d.fog_color } else { self.to_color(&world, &value, l.fog_color)? },
+                        _ => {
+                            l.sky_color = match value {
+                                Value::Nil => None,
+                                v => Some(self.to_color(&world, &v, l.sky_color.unwrap_or(Color::new(20, 85, 200)))?),
+                            }
+                        }
+                    }
+                    l.set(&mut world);
+                    Ok(())
+                }
                 "mouse" | "look" | "swinging" if world.player(id).is_some() => Err(format!("{name} can't be changed")),
                 "x" | "y" | "width" | "height" | "text_size" | "text" | "background" | "visible" | "text_color"
                 | "background_color"
@@ -661,6 +705,46 @@ impl Host for WorldHost {
                 "bounce" if world.part(id).is_some() => {
                     world.part_mut(id).unwrap().bounce = number(&value, name)?.clamp(0.0, 1.0);
                     Ok(())
+                }
+                "hinge" if world.part(id).is_some() => {
+                    let names = brixo_core::Hinge::ALL.iter().map(|h| format!("\"{}\"", h.name())).collect::<Vec<_>>().join(", ");
+                    let h = match &value {
+                        Value::Str(t) => brixo_core::Hinge::from_name(&t.to_lowercase()),
+                        Value::Nil | Value::Bool(false) => Some(brixo_core::Hinge::Off),
+                        _ => None,
+                    }
+                    .ok_or_else(|| format!("a hinge turns a part around its \"y\" (height), \"x\" (width) or \"z\" (depth), or \"off\": one of {names}"))?;
+                    let p = world.part_mut(id).unwrap();
+                    p.hinge = h;
+                    // A hinged part has to be loose to turn.
+                    if h != brixo_core::Hinge::Off {
+                        p.anchored = false;
+                    }
+                    Ok(())
+                }
+                "hinge_at" if world.part(id).is_some() => {
+                    let names = brixo_core::Side::ALL.iter().map(|s| format!("\"{}\"", s.name())).collect::<Vec<_>>().join(", ");
+                    let side = match &value {
+                        Value::Str(t) => brixo_core::Side::from_name(&t.to_lowercase()),
+                        _ => None,
+                    }
+                    .ok_or_else(|| format!("hinge_at is where on the part its hinge is: one of {names}"))?;
+                    world.part_mut(id).unwrap().hinge_at = side;
+                    Ok(())
+                }
+                "motor_speed" if world.part(id).is_some() => {
+                    world.part_mut(id).unwrap().motor_speed = number(&value, name)?.clamp(-3600.0, 3600.0);
+                    Ok(())
+                }
+                "swing_to" if world.part(id).is_some() => {
+                    world.part_mut(id).unwrap().swing_to = match value {
+                        Value::Nil => None,
+                        v => Some(number(&v, name)?.clamp(-180.0, 180.0)),
+                    };
+                    Ok(())
+                }
+                "hinge_angle" if world.part(id).is_some() => {
+                    Err("hinge_angle is how far the hinge has turned, so it can't be set: to turn it, set swing_to".into())
                 }
                 "volume" if world.sound(id).is_some() => {
                     world.sound_mut(id).unwrap().volume = number(&value, name)?.clamp(0.0, 1.0);
@@ -910,7 +994,7 @@ impl Host for WorldHost {
     }
 
     fn function_names(&self) -> Vec<&'static str> {
-        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load"]
+        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load", "leaderboard"]
     }
 
     fn call(&self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -1064,6 +1148,42 @@ impl Host for WorldHost {
                 } else {
                     saves.load(player, key)
                 }
+            }
+            // leaderboard("coins", "wins"): these player fields become the
+            // leaderboard's columns (sorted by the first). leaderboard()
+            // takes it away.
+            "leaderboard" => {
+                if args.len() > 5 {
+                    return Err("a leaderboard can show up to 5 things: leaderboard(\"coins\", \"wins\")".into());
+                }
+                let mut columns = Vec::new();
+                for a in args {
+                    let Value::Str(field) = a else {
+                        return Err(format!(
+                            "leaderboard needs the names of player fields, in quotes: leaderboard(\"coins\") shows each player's p.coins (not a {})",
+                            a.type_name()
+                        ));
+                    };
+                    let ok = !field.is_empty()
+                        && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        && !field.chars().next().unwrap().is_ascii_digit();
+                    if !ok {
+                        return Err(format!("'{field}' isn't a field name: use the name you give it on the player, like \"coins\" for p.coins"));
+                    }
+                    if field.chars().count() > 20 {
+                        return Err(format!("'{field}' is too long for a leaderboard heading (20 letters at most)"));
+                    }
+                    columns.push(field.to_string());
+                }
+                let mut world = self.world.lock();
+                let root = world.root();
+                let attrs = &mut world.get_mut(root).unwrap().attributes;
+                if columns.is_empty() {
+                    attrs.remove(brixo_core::LEADERBOARD_FIELD);
+                } else {
+                    attrs.insert(brixo_core::LEADERBOARD_FIELD.into(), brixo_core::Attribute::Str(columns.join(",")));
+                }
+                Ok(Value::Nil)
             }
             "players" => {
                 need(0)?;

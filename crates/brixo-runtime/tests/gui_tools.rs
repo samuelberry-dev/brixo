@@ -220,3 +220,45 @@ fn swords_are_held_straight_up_and_chop_forward() {
     let (_, h, b) = at(&game);
     assert!((b.y - h.y - 2.5).abs() < 0.05, "back up");
 }
+
+#[test]
+fn scripts_choose_the_leaderboards_columns() {
+    let mut dm = brixo_core::DataModel::new();
+    let root = dm.root();
+    let s = dm.create(brixo_core::Class::Script, "Board", root).unwrap();
+    dm.script_mut(s).unwrap().source = "leaderboard(\"coins\", \"best_time\")\nwait(0.2)\nleaderboard()\nwait(0.2)\nleaderboard(\"coins\")\nleaderboard(5)\n".into();
+    let bad = dm.create(brixo_core::Class::Script, "Bad", root).unwrap();
+    dm.script_mut(bad).unwrap().source = "leaderboard(\"my coins\")\n".into();
+    let mut game = brixo_runtime::Game::start(dm);
+    game.step(0.05);
+    assert_eq!(brixo_core::leaderboard_columns(&game.world()), ["coins", "best_time"]);
+    for _ in 0..5 {
+        game.step(0.05);
+    }
+    assert!(brixo_core::leaderboard_columns(&game.world()).is_empty(), "leaderboard() takes it away");
+    for _ in 0..8 {
+        game.step(0.05);
+    }
+    assert_eq!(brixo_core::leaderboard_columns(&game.world()), ["coins"]);
+    let log: Vec<String> = game.take_log().into_iter().map(|l| l.text).collect();
+    assert!(log.iter().any(|l| l.contains("isn't a field name")), "{log:?}");
+    assert!(log.iter().any(|l| l.contains("names of player fields")), "{log:?}");
+}
+
+#[test]
+fn scripts_change_the_lighting() {
+    let mut dm = brixo_core::DataModel::new();
+    let root = dm.root();
+    let s = dm.create(brixo_core::Class::Script, "Sky", root).unwrap();
+    dm.script_mut(s).unwrap().source = "w = find(\"Workspace\")\nprint(w.time_of_day)\nw.time_of_day = 25.5\nw.fog_end = 80\nw.fog_color = {r = 10, g = 20, b = 30}\nw.sky_color = {r = 255}\nprint(w.time_of_day + \" \" + w.fog_color.g + \" \" + w.sky_color.r)\nw.sky_color = nil\nw.brightness = \"lots\"\n".into();
+    let mut game = brixo_runtime::Game::start(dm);
+    game.step(0.05);
+    let l = brixo_core::Lighting::of(&game.world());
+    assert_eq!(l.time_of_day, 1.5, "wraps round the clock");
+    assert_eq!((l.fog_end, l.fog_color), (80.0, brixo_core::Color::new(10, 20, 30)));
+    assert_eq!(l.sky_color, None);
+    let log: Vec<String> = game.take_log().into_iter().map(|l| l.text).collect();
+    assert_eq!(log[0], "14");
+    assert_eq!(log[1], "1.5 20 255");
+    assert!(log.iter().any(|l| l.contains("brightness has to be a number")), "{log:?}");
+}

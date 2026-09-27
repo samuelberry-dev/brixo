@@ -5,6 +5,7 @@ pub mod filming;
 pub mod gui;
 pub mod install;
 pub mod installer;
+pub mod leaderboard;
 pub mod library;
 pub mod play;
 pub mod predict;

@@ -127,6 +127,8 @@ struct Session {
     lost: bool,
     paused: bool,
     console: bool,
+    /// The leaderboard is unfolded (Tab folds it).
+    board_open: bool,
     output: Vec<LogLine>,
     follow: FollowCamera,
     /// Shift lock is on (Shift toggles it).
@@ -228,6 +230,7 @@ impl Player {
             lost: false,
             paused: false,
             console: false,
+            board_open: true,
             output,
             follow: FollowCamera::default(),
             shift_lock: false,
@@ -306,6 +309,7 @@ impl Player {
                     self.audio.sound("click");
                 }
                 KeyCode::F9 => s.console = !s.console,
+                KeyCode::Tab if !s.lost => s.board_open = !s.board_open,
                 _ => {}
             }
         }

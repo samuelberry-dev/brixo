@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>New password &middot; Brixo</title>
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content"><div class="box navy" style="width:360px;margin:30px auto"><h2>Choose a new password</h2><div class="inner" id="inner">
+  <p class="hint">Checking your link&hellip;</p>
+</div></div></div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  await shell(null);
+  // The link's secret is after the # so it never reaches server logs.
+  const token = location.hash.slice(1);
+  const inner = document.getElementById("inner");
+  const broken = (msg) => { inner.innerHTML = `<p class="error">${esc(msg)}</p><p class="hint">Reset links work once, for an hour. Ask an admin for a new one.</p><a class="btn" href="/login">Log in</a>`; };
+  if (!token) return broken("This link is missing its code.");
+  let who;
+  try { who = (await api("/api/reset/check", "POST", { token })).username; }
+  catch (err) { return broken(err.message); }
+  inner.innerHTML = `<form id="form">
+    <p>Setting a new password for <b>${esc(who)}</b>.</p>
+    <input type="text" name="username" autocomplete="username" value="${esc(who)}" hidden>
+    <div class="field"><label for="password">New password</label><input id="password" type="password" autocomplete="new-password" required minlength="8" maxlength="128"></div>
+    <div class="field"><label for="again">Type it again</label><input id="again" type="password" autocomplete="new-password" required></div>
+    <div class="error" id="error"></div>
+    <button class="btn gold big" type="submit" style="width:100%">Save and log in</button>
+    <p class="hint" style="margin-top:8px">At least 8 characters. Anywhere else you're logged in gets logged out.</p>
+  </form>`;
+  const f = document.getElementById("form");
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("error");
+    if (f.password.value !== f.again.value) { err.textContent = "those two don't match"; return; }
+    try {
+      await api("/api/reset", "POST", { token, password: f.password.value });
+      history.replaceState(null, "", "/reset");
+      location.href = `/users/${encodeURIComponent(who)}`;
+    } catch (e2) { err.textContent = e2.message; }
+  };
+})();
+</script></body></html>

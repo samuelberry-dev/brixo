@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 pub const LOGIN_FAILS: (usize, Duration) = (10, Duration::from_secs(15 * 60));
 pub const SIGNUPS: (usize, Duration) = (5, Duration::from_secs(60 * 60));
 pub const BAD_INVITES: (usize, Duration) = (10, Duration::from_secs(15 * 60));
+pub const BAD_RESETS: (usize, Duration) = (10, Duration::from_secs(15 * 60));
 pub const PLAYS: (usize, Duration) = (30, Duration::from_secs(60));
 pub const PUBLISHES: (usize, Duration) = (30, Duration::from_secs(60 * 60));
 

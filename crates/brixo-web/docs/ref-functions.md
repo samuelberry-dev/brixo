@@ -12,6 +12,7 @@ Every function built into Brixo. For events (`on ...`) see [Events](ref-events).
 | `time()` | Seconds since the game started. |
 | `explode(position, radius)` | An explosion: knocks out players within `radius` (0.5 to 100), throws loose parts, breaks `breakable` parts, and shows a fireball. Gives back a list of the players it knocked out. |
 | `explode(position, radius, power)` | The same, throwing things with `power` (0 to 400; 70 if left out). |
+| `leaderboard("coins", "wins", ...)` | The leaderboard in the top right corner, showing these player fields (up to 5), sorted by the first. `leaderboard()` takes it away. See [Coins and a leaderboard](howto-coins#4-a-leaderboard). |
 
 ## Sound
 

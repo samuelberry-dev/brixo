@@ -102,6 +102,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/admin", get(admin_overview))
         .route("/api/admin/ban", post(admin_ban))
         .route("/api/admin/hide", post(admin_hide))
+        .route("/api/admin/reset", post(admin_reset))
+        .route("/api/reset/check", post(reset_check))
+        .route("/api/reset", post(reset_password))
+        .route("/api/me/password", put(change_password))
         .route("/files/:name", get(download_file))
         .route("/", get(|| async { Html(include_str!("web/index.html")) }))
         .route("/games", get(|| async { Html(include_str!("web/games.html")) }))
@@ -120,6 +124,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/signup", get(|| async { Html(include_str!("web/signup.html")) }))
         .route("/avatar", get(|| async { Html(include_str!("web/avatar.html")) }))
         .route("/admin", get(|| async { Html(include_str!("web/admin.html")) }))
+        .route("/reset", get(|| async { Html(include_str!("web/reset.html")) }))
         .route("/favicon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("web/favicon.svg")) }))
         .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("web/app.css")) }))
         .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript")], include_str!("web/app.js")) }))
@@ -328,6 +333,93 @@ async fn login(
         return Err(ApiError(StatusCode::FORBIDDEN, "this account has been banned".into()));
     }
     let u = app.db.user(id).map_err(oops)?.ok_or_else(wrong)?;
+    let token = app.db.new_session(id).map_err(oops)?;
+    Ok(with_session(&app, &token, Json(u)))
+}
+
+#[derive(Deserialize)]
+struct NewPassword {
+    current: String,
+    password: String,
+}
+
+/// Changes your own password (you have to know the current one). Your
+/// other logins are logged out; this one stays.
+async fn change_password(State(app): State<Arc<App>>, headers: HeaderMap, Json(p): Json<NewPassword>) -> Result<StatusCode> {
+    let u = user(&app, &headers)?;
+    let token = session(&headers).ok_or_else(not_logged_in)?;
+    let key = format!("login-user:{}", u.username.to_ascii_lowercase());
+    if !app.limits.ok(&key, limits::LOGIN_FAILS) {
+        return Err(slow_down());
+    }
+    check_password(&p.password).map_err(bad)?;
+    let h = app.db.password_hash(u.id).map_err(oops)?.ok_or_else(not_logged_in)?;
+    let current = p.current;
+    if current.chars().count() > 128 || !tokio::task::spawn_blocking(move || verify(&current, &h)).await.map_err(oops)? {
+        app.limits.hit(&key);
+        return Err(bad("your current password isn't right"));
+    }
+    let hashed = hash_off_thread(p.password).await?;
+    app.db.change_password(u.id, &hashed, &token).map_err(oops)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ResetToken {
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct ResetRequest {
+    token: String,
+    password: String,
+}
+
+fn bad_link() -> ApiError {
+    bad("this reset link has expired or been used: ask an admin for a new one")
+}
+
+/// Whose reset link this is (the reset page shows the name).
+async fn reset_check(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    Json(r): Json<ResetToken>,
+) -> Result<Json<serde_json::Value>> {
+    let key = format!("reset:{}", client_ip(&app, &headers, peer));
+    if !app.limits.ok(&key, limits::BAD_RESETS) {
+        return Err(slow_down());
+    }
+    match app.db.reset_user(r.token.trim()).map_err(oops)? {
+        Some(name) => Ok(Json(serde_json::json!({ "username": name }))),
+        None => {
+            app.limits.hit(&key);
+            Err(bad_link())
+        }
+    }
+}
+
+/// Uses a reset link: new password, logged out everywhere else, logged in here.
+async fn reset_password(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    Json(r): Json<ResetRequest>,
+) -> Result<Response> {
+    let key = format!("reset:{}", client_ip(&app, &headers, peer));
+    if !app.limits.ok(&key, limits::BAD_RESETS) {
+        return Err(slow_down());
+    }
+    check_password(&r.password).map_err(bad)?;
+    if app.db.reset_user(r.token.trim()).map_err(oops)?.is_none() {
+        app.limits.hit(&key);
+        return Err(bad_link());
+    }
+    let hashed = hash_off_thread(r.password).await?;
+    let Some(id) = app.db.use_reset(r.token.trim(), &hashed).map_err(oops)? else {
+        return Err(bad_link());
+    };
+    let u = app.db.user(id).map_err(oops)?.ok_or_else(bad_link)?;
     let token = app.db.new_session(id).map_err(oops)?;
     Ok(with_session(&app, &token, Json(u)))
 }
@@ -747,6 +839,21 @@ async fn admin_ban(State(app): State<Arc<App>>, headers: HeaderMap, Json(b): Jso
             }
             Ok(StatusCode::NO_CONTENT)
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct ResetFor {
+    username: String,
+}
+
+/// Makes a one-time password reset link for an account (good for an
+/// hour). The admin sends it to them however they like.
+async fn admin_reset(State(app): State<Arc<App>>, headers: HeaderMap, Json(r): Json<ResetFor>) -> Result<Json<serde_json::Value>> {
+    admin(&app, &headers)?;
+    match app.db.new_reset(&r.username).map_err(oops)? {
+        None => Err(ApiError(StatusCode::NOT_FOUND, "no such account".into())),
+        Some((token, name)) => Ok(Json(serde_json::json!({ "token": token, "username": name, "minutes": crate::db::RESET_SECONDS / 60 }))),
     }
 }
 

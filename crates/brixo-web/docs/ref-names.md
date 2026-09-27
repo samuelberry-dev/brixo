@@ -21,6 +21,10 @@ Built-in tracks for `play_music`: `sunny` (bright and bouncy), `rush` (fast, for
 
 `block`, `wedge`, `cylinder`, `ball`
 
+## Hinges
+
+`hinge`: `"off"`, `"y"`, `"x"`, `"z"`. `hinge_at`: `"middle"`, `"left"`, `"right"`, `"top"`, `"bottom"`, `"front"`, `"back"`. See [Hinges](howto-hinges).
+
 ## Faces
 
 `smile`, `happy`, `surprised`, `determined`

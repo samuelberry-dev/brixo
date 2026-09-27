@@ -211,6 +211,7 @@ pub struct Game {
     /// Saved player data (see saves.rs), and when it was last written out.
     saves: Arc<Mutex<crate::saves::Saves>>,
     last_save: f64,
+    hinge_angles: Arc<Mutex<HashMap<InstanceId, f32>>>,
     /// Explosion fireballs on screen: the part, when it started, its radius.
     fireballs: Vec<(InstanceId, f64, f32)>,
     scripts: Vec<ScriptInfo>,
@@ -281,6 +282,7 @@ impl Game {
             blasts: Arc::new(Mutex::new(Vec::new())),
             saves: Arc::new(Mutex::new(crate::saves::Saves::new(Arc::new(crate::saves::MemoryStore::default())))),
             last_save: 0.0,
+            hinge_angles: Arc::new(Mutex::new(HashMap::new())),
             fireballs: Vec::new(),
             log: Arc::new(Mutex::new(Vec::new())),
             scripts: Vec::new(),
@@ -939,6 +941,7 @@ impl Game {
             sounds: self.sounds.clone(),
             blasts: self.blasts.clone(),
             saves: self.saves.clone(),
+            hinge_angles: self.hinge_angles.clone(),
         }));
         let log = self.log.clone();
         let source_label = label.clone();
@@ -1241,6 +1244,7 @@ impl Game {
             let mut world = self.world.lock();
             self.physics.step(&mut world, dt as f32, &listeners, &self.inputs)
         };
+        *self.hinge_angles.lock().unwrap() = self.physics.hinge_angles();
         for (a, b) in touches {
             self.fire_touched(a, b);
             self.fire_touched(b, a);

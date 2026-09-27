@@ -26,6 +26,11 @@ Every kind of object, and everything scripts can read and change on it. **Vector
 | `velocity` | vector, studs/s | Its speed. On an anchored part: a conveyor, carrying what's on it. |
 | `floating` | true/false | A loose part with no gravity. |
 | `bounce` | 0 to 1 | Bounciness. |
+| `hinge` | text | What it turns around: `"off"`, `"y"` (its height), `"x"` (its width), `"z"` (its depth). Setting one loosens the part. See [Hinges](howto-hinges). |
+| `hinge_at` | text | Where the hinge is: `"middle"`, `"left"`, `"right"`, `"top"`, `"bottom"`, `"front"`, `"back"`. |
+| `motor_speed` | degrees/s | Keeps it turning. 0 swings freely. |
+| `swing_to` | degrees or `nil` | Turns to this angle and holds it. `nil` swings freely. |
+| `hinge_angle` | degrees (read) | How far it's turned from where it started. |
 
 A **SpawnLocation** is a part players appear on. Give it a `team` custom field and players on that team respawn on it.
 
@@ -81,7 +86,7 @@ Made by dropping an audio file on Studio. Play it with `play_sound(sound)` or `p
 
 ## Model, Folder, Script, Workspace
 
-These have just the properties every object has. The **Workspace** is the top of everything: `find("Workspace")`. A script's `self` is the object it's inside.
+These have just the properties every object has, except the **Workspace**, which also holds the [lighting](lighting): `time_of_day`, `brightness`, `fog_start`, `fog_end`, `fog_color` and `sky_color`. The Workspace is the top of everything: `find("Workspace")`. A script's `self` is the object it's inside.
 
 ## Custom fields Brixo understands
 

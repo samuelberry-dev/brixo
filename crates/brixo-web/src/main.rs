@@ -9,6 +9,7 @@
 //!   brixo-web unadmin NAME          ...or not
 //!   brixo-web ban NAME / unban NAME ban an account, or lift the ban
 //!   brixo-web hide GAME_ID          take a game down (show GAME_ID: put it back)
+//!   brixo-web reset NAME            a one-time link to choose a new password
 //!
 //! Settings (all optional; the defaults suit your own PC):
 //! - PORT: the website's port (7420).
@@ -82,6 +83,16 @@ fn main() {
                 }
             );
         }
+        Some("reset") => {
+            let name = args.get(1).unwrap_or_else(|| fail("usage: brixo-web reset NAME"));
+            let db = brixo_web::db::Db::open(&db_path).unwrap_or_else(|e| fail(e));
+            let Some((token, name)) = db.new_reset(name).unwrap_or_else(|e| fail(e)) else {
+                fail(format!("there's no one called {name}"));
+            };
+            let site = std::env::var("BRIXO_SITE").unwrap_or_else(|_| "https://playbrixo.com".into());
+            println!("Send {name} this link (it works once, for {} minutes):", brixo_web::db::RESET_SECONDS / 60);
+            println!("{site}/reset#{token}");
+        }
         Some(cmd @ ("hide" | "show")) => {
             let id: i64 = args.get(1).and_then(|n| n.parse().ok()).unwrap_or_else(|| fail(format!("usage: brixo-web {cmd} GAME_ID (the number in the game's address)")));
             let db = brixo_web::db::Db::open(&db_path).unwrap_or_else(|e| fail(e));
@@ -90,7 +101,7 @@ fn main() {
             }
             println!("{}", if cmd == "hide" { format!("Game {id} is taken down.") } else { format!("Game {id} is back.") });
         }
-        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite, invites, admin, ban, unban, hide or show")),
+        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite, invites, admin, ban, unban, hide, show or reset")),
     }
 }
 

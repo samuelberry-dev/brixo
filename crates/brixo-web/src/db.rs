@@ -102,6 +102,8 @@ fn game_from_row(r: &rusqlite::Row) -> rusqlite::Result<GameRow> {
 
 /// How long a login lasts before you have to log in again.
 pub const SESSION_DAYS: i64 = 30;
+/// How long a password reset link works, in seconds.
+pub const RESET_SECONDS: i64 = 3600;
 
 /// Invite codes use letters and digits that can't be mixed up (no O/0,
 /// I/1/L), shown as XXXX-XXXX-XXXX.
@@ -207,6 +209,14 @@ impl Db {
         add_column(&conn, "users", "banned", "INTEGER NOT NULL DEFAULT 0")?;
         add_column(&conn, "users", "admin", "INTEGER NOT NULL DEFAULT 0")?;
         add_column(&conn, "games", "hidden", "INTEGER NOT NULL DEFAULT 0")?;
+        // Password reset links an admin makes (one per account, one use).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS resets (
+                 token TEXT PRIMARY KEY,
+                 user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+                 created INTEGER NOT NULL
+             );",
+        )?;
         Ok(Db(Mutex::new(conn)))
     }
 
@@ -284,6 +294,68 @@ impl Db {
         conn.execute("UPDATE users SET password_hash = ?1 WHERE id = ?2", params![password_hash, id])?;
         conn.execute("DELETE FROM sessions WHERE user_id = ?1", [id])?;
         Ok(true)
+    }
+
+    /// A password reset link for someone (replacing any earlier one).
+    /// None if there's no such account.
+    pub fn new_reset(&self, username: &str) -> rusqlite::Result<Option<(String, String)>> {
+        let conn = self.0.lock().unwrap();
+        let Some((id, name)) = conn
+            .query_row("SELECT id, username FROM users WHERE username = ?1", [username], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let token = random_token();
+        conn.execute("DELETE FROM resets WHERE user_id = ?1 OR created < ?2", params![id, now() - RESET_SECONDS])?;
+        conn.execute("INSERT INTO resets (token, user_id, created) VALUES (?1, ?2, ?3)", params![token, id, now()])?;
+        Ok(Some((token, name)))
+    }
+
+    /// Whose reset link this is, if it's still good.
+    pub fn reset_user(&self, token: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(
+            "SELECT u.username FROM resets r JOIN users u ON u.id = r.user_id WHERE r.token = ?1 AND r.created >= ?2 AND u.banned = 0",
+            params![token, now() - RESET_SECONDS],
+            |r| r.get(0),
+        )
+        .optional()
+    }
+
+    /// Uses a reset link: sets the new password, logs the account out
+    /// everywhere, and uses the link up. Gives back the account's id.
+    pub fn use_reset(&self, token: &str, password_hash: &str) -> rusqlite::Result<Option<i64>> {
+        let conn = self.0.lock().unwrap();
+        let Some(id) = conn
+            .query_row(
+                "SELECT r.user_id FROM resets r JOIN users u ON u.id = r.user_id WHERE r.token = ?1 AND r.created >= ?2 AND u.banned = 0",
+                params![token, now() - RESET_SECONDS],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        conn.execute("UPDATE users SET password_hash = ?1 WHERE id = ?2", params![password_hash, id])?;
+        conn.execute("DELETE FROM sessions WHERE user_id = ?1", [id])?;
+        conn.execute("DELETE FROM resets WHERE user_id = ?1", [id])?;
+        Ok(Some(id))
+    }
+
+    /// Changes a logged-in account's password and logs out its other
+    /// sessions (every one but `keep`).
+    pub fn change_password(&self, user_id: i64, password_hash: &str, keep: &str) -> rusqlite::Result<()> {
+        let conn = self.0.lock().unwrap();
+        conn.execute("UPDATE users SET password_hash = ?1 WHERE id = ?2", params![password_hash, user_id])?;
+        conn.execute("DELETE FROM sessions WHERE user_id = ?1 AND token != ?2", params![user_id, keep])?;
+        conn.execute("DELETE FROM resets WHERE user_id = ?1", [user_id])?;
+        Ok(())
+    }
+
+    pub fn password_hash(&self, user_id: i64) -> rusqlite::Result<Option<String>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row("SELECT password_hash FROM users WHERE id = ?1", [user_id], |r| r.get(0)).optional()
     }
 
     pub fn login_info(&self, username: &str) -> rusqlite::Result<Option<(i64, String)>> {

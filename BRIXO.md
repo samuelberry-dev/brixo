@@ -409,7 +409,12 @@ buffering, variable jumps; riding moving ground; respawn.
 player interfaces, matching the website: navy panels, Brixo-blue selection, gold
 accents; the Explorer shows a coloured badge per class.
 
-**Studio editing:** drag parts over surfaces in the 3D view (a left-drag
+**Studio editing:** left-drag on empty space box-selects (everything
+fully inside; Ctrl/Shift adds; Alt picks parts inside Models); Snap has a
+step (¼ to 4 studs) and a turn step (5° to 90°); with several things
+selected, Properties' **Line up** aligns low sides / middles / high sides
+along X, Y or Z, or spaces them evenly (`editing::align`,
+`space_evenly`). Drag parts over surfaces in the 3D view (a left-drag
 starting on a selected part, away from the gizmo: it rests on whatever's under
 the mouse, snapped to whole studs); the Explorer has drag-and-drop to move
 things between folders and models, rename in place (double-click or F2) and a
@@ -533,7 +538,19 @@ games and accounts with search, Take down / Put back, Ban / Unban; API
 `/api/admin`, `/api/admin/ban`, `/api/admin/hide`). Admins can't ban
 themselves or the Brixo account. On the server:
 `brixo-admin admin NAME` / `unadmin`, `ban` / `unban NAME`,
-`hide` / `show GAME_ID`.
+`hide` / `show GAME_ID`, `reset NAME` (prints a reset link; `BRIXO_SITE`
+sets its address, playbrixo.com by default).
+
+**Passwords:** no email yet, so resets go through an admin. The Admin
+page's **Reset** (or `brixo-admin reset NAME`) makes a one-time link,
+`/reset#TOKEN`, good for an hour (`RESET_SECONDS`; the `resets` table, one
+per account, a new one replaces the old). The token is after the `#` so it
+never reaches server or Caddy logs; `web/reset.html` posts it to
+`/api/reset/check` and `/api/reset` (both rate-limited per address,
+`BAD_RESETS`). Using it sets the password, logs the account out
+everywhere and logs this browser in. Logged-in people change their own
+password on their profile (`PUT /api/me/password`, needs the current one;
+logs out their other sessions, keeps this one).
 
 **Client prediction** (`brixo_client::Predictor`, Brixo Player online):
 your own character runs on a local copy of the physics with the keys as
@@ -572,6 +589,49 @@ Studio: arrows and Page Up/Down steer the fly camera, scroll/pinch fly it.
 **Sky:** a per-pixel shader sky (gradient, sun disc, flat two-tone clouds) and
 distance haze toward the horizon colour.
 
+**Lighting** (`brixo_core::Lighting`, `brixo_render::Sky`): kept as
+Workspace custom fields (`time_of_day`, `brightness`, `fog_start`,
+`fog_end`, `fog_color`/`sky_color` as "r,g,b" text), so it saves and
+replicates with no protocol change; default values leave no fields.
+Scripts get typed access on the Workspace (`find("Workspace").time_of_day
+= 19`, colours as `{r, g, b}`, `nil` resets). `Sky::of` works out the
+shader's colours on the CPU (tested): the sun follows the clock (rises at
+6 in -X, sets at 18 in +X), dusk turns the horizon orange, night is a
+dark sky with hashed stars and a dim blue moonlight (kept very low: the
+screen is sRGB). **Time 14 reproduces the classic look exactly** (the old
+`SUN_DIR`, colours and 0.45 + 0.7 lambert), so screenshots stay valid.
+Fog mixes to `fog_color` from start to end, and thick fog hides the
+horizon. Studio: select the Workspace for the Lighting section.
+
+**Hinges and motors** (`PartProps.hinge`/`hinge_at`/`motor_speed`/
+`swing_to`; `Physics::sync_hinges`): a loose part with a hinge gets a
+Rapier revolute joint (generic joint, free AngX turned onto the hinge
+line) at `Side::point` on its hinge line. What it hangs on is picked when
+the joint is built: of the parts its world box touches, the one nearest
+the hinge point, skipping parts welded to it and its Model's other hinged
+parts; nothing touching means a fixed anchor body in the world. Contacts
+between the two are off (a wheel sits against its car). Motors are
+acceleration-based: `swing_to` a position motor (stiffness 300, damping
+40), else `motor_speed` a velocity motor, else no motor; hinged bodies get
+angular damping 3.0 so free hinges settle. A change to hinge, side or size
+(or a script teleport) rebuilds the joint. In a Model, hinged parts aren't
+welded, except a hinged **first** part, which carries the rest (a
+multi-part door). Anchored parts ignore hinges (Studio and scripts
+unanchor when a hinge is turned on). `hinge_angle` (read-only) comes from
+`Physics::hinge_angles` via `WorldHost.hinge_angles` each step. Studio
+draws an orange line along a selected part's hinge. Remember: all wheels
+share one axle direction, so the same `motor_speed` drives straight.
+
+**Leaderboard** (`brixo_client::leaderboard`): `leaderboard("coins",
+"wins")` sets the Workspace field `leaderboard` ("coins,wins"); the board
+shows those player custom fields (up to 5), sorted by the first, grouped
+under teams (`team` field, coloured from its name, with the team's total).
+Headings from field names (`best_time` "Best Time"; one or two letters,
+plus a plural s, are capitals: `kos` "KOs"). Drawn top-right in Brixo
+Player and Studio's Play, shown when a game asks or there are 2+ players;
+Tab or the title bar's arrow folds it. Flagfall shows captures/returns/
+KOs, Coin Tycoon cash.
+
 **Sample games:** Spire Wars (a Doomspire-style remake: four team towers of
 breakable bricks that collapse, six weapons (sword, rocket launcher,
 superball, slingshot, trowel, timebomb), auto-balanced teams, timed rounds with
@@ -604,9 +664,9 @@ carrying home, returning, chasing the carrier or escorting as needed. The
 `bots` server example uses it automatically on a Flagfall server, and
 `tests/flagbots.rs` plays a 5-minute bots-only match headless.
 
-**Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 37 pages of
+**Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 39 pages of
 Markdown in `crates/brixo-web/docs/` (getting started, Rovik, building,
-players and GUI, 12 how-tos, reference), compiled into the binary
+players and GUI, lighting, 13 how-tos, reference), compiled into the binary
 (`pages!`/`images!` lists: a new page or picture must be added there) and
 rendered with pulldown-cmark. Routes: `/learn/:slug`, `/learn/img/:file`,
 `/learn/search.json` (the sidebar search), `/learn/samples/<name>.brixo`
@@ -627,14 +687,15 @@ tests: they catch the guide going stale.
 
 ## 8. Known gaps / limits
 
-- Website: no email or password reset, no report button (admins find
-  problems themselves on `/admin`), no age rules yet.
+- Website: no email (password resets are admin-made links), no report
+  button (admins find problems themselves on `/admin`), no age rules yet.
 - JSON over TCP every tick (fine for a few players; a compact protocol
   later). Only your own character is predicted.
 - No client scripts or RemoteEvents (server-driven GUI covers current needs).
 - A held tool doesn't follow the arm's swing. Animations are poses, not blended.
-- Studio: no box select, terrain, meshes, unions, lighting settings, or
-  hinges/motors.
+- Studio: no terrain, meshes or unions. Hinges are the only joint (no
+  sliders, springs or ropes); a hinged part picks its partner once, when
+  the joint is built.
 - GUI positions are absolute (not relative to a parent Frame); no image GUI.
 - Scripts can't create scripts; behaviour is cloned from templates.
 - The chat filter is a word list: it catches the obvious and the usual
@@ -649,12 +710,13 @@ tests: they catch the guide going stale.
 
 ## 9. Roadmap (agreed direction)
 
-1. **Growing the platform** (playbrixo.com is live): a report button,
-   age rules and password reset before a wide launch; a compact protocol.
+1. **Growing the platform** (playbrixo.com is live): server hardening
+   (per-game limits on scripts, memory and parts), a report button, age
+   rules and email before a wide launch; a compact protocol.
 2. **Second sample game:** Brick Obby (moving platforms, checkpoints,
    leaderboard) to stress different systems.
-3. **Creator tools:** box select, hinges and motors, lighting settings,
-   client scripts when a game needs them.
+3. **Creator tools:** more joints (sliders, springs), terrain, client
+   scripts when a game needs them.
 4. **Polish:** tool follows the swing, animation blending, more faces and
    accessories (face, back slots).
 

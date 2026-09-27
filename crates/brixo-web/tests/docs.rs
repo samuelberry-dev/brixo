@@ -379,3 +379,37 @@ fn the_shop_takes_coins_and_gives_the_upgrade() {
     run(&mut game, 0.2);
     assert_eq!(game.world().player(me).unwrap().walk_speed, 20.0);
 }
+
+#[test]
+fn the_hinged_door_opens_when_touched_and_the_spinner_spins() {
+    let mut w = World::new();
+    // A door frame post, and the door against it, hanging a little above
+    // the ground so only its hinge holds it.
+    w.part("Post", (-3.0, 4.0, 20.0), (1.0, 8.0, 1.0));
+    let door = w.part("Door", (0.0, 4.2, 20.0), (5.0, 7.0, 0.4));
+    w.script(Some(door), &recipe("howto-hinges", "open_at = time()"));
+    w.part("Hub", (40.0, 1.5, 0.0), (1.0, 3.0, 1.0));
+    let bar = w.part("Spinner", (40.0, 3.5, 0.0), (14.0, 1.0, 1.0));
+    w.script(Some(bar), &recipe("howto-hinges", "self.motor_speed = -self.motor_speed"));
+    let mut game = Game::start(w.dm);
+    run(&mut game, 0.5);
+    let me = game.player_id().unwrap();
+    teleport(&game, me, 0.0, 3.0, 19.0);
+    run(&mut game, 2.0);
+    no_errors(&game);
+    let world = game.world();
+    let d = world.part(door).unwrap();
+    assert!(d.position.z > 21.5, "swung open, away from the player: {:?}", d.position);
+    assert!((d.position.x - -2.5).abs() < 1.0, "turning on its left edge: {:?}", d.position);
+    assert!(world.part(bar).unwrap().rotation.y.abs() > 20.0, "the spinner turned: {:?}", world.part(bar).unwrap().rotation);
+}
+
+#[test]
+fn the_leaderboard_line_shows_coins() {
+    let mut w = World::new();
+    w.script(None, &recipe("howto-coins", "leaderboard(\"coins\")"));
+    let mut game = Game::start(w.dm);
+    run(&mut game, 0.2);
+    no_errors(&game);
+    assert_eq!(brixo_core::leaderboard_columns(&game.world()), ["coins"]);
+}

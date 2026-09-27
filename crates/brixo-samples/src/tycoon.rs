@@ -55,6 +55,7 @@ end
 
 const GAME: &str = r#"-- Coin Tycoon: music, cash and hints for every player.
 play_music("sunny")
+leaderboard("cash")
 
 on player_joined(p)
     p.cash = 0

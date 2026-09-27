@@ -195,10 +195,98 @@ struct CameraUniform {
     /// The camera's position (xyz) and seconds since start (w), for the
     /// distance haze and drifting clouds.
     eye: [f32; 4],
+    /// The lighting (see `Sky`).
+    zenith: [f32; 4],
+    horizon: [f32; 4],
+    light: [f32; 4],
+    ambient: [f32; 4],
+    disc: [f32; 4],
+    fog: [f32; 4],
+    fog_color: [f32; 4],
 }
 
-/// Toward the sun: high, and a little off to one side.
-const SUN_DIR: Vec3 = Vec3::new(0.45, 1.0, 0.3);
+/// What a game's Lighting works out to, for the shader: sky colours, the
+/// light (sun by day, moon by night), the disc in the sky, stars and fog.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sky {
+    /// Toward the light that shines on things (and casts shadows).
+    pub light_dir: Vec3,
+    /// Overhead and horizon colours of the sky.
+    pub zenith: Vec3,
+    pub horizon: Vec3,
+    /// The light's colour times its strength, and the flat ambient light.
+    pub light: Vec3,
+    pub ambient: Vec3,
+    /// The disc in the sky: its direction, and 1 for the sun, 2 the moon, 0 none.
+    pub disc_dir: Vec3,
+    pub disc: f32,
+    /// How many stars show (0 by day, 1 at night).
+    pub stars: f32,
+    /// Clouds' brightness and tint.
+    pub cloud: Vec3,
+    /// Fog: start, end (0 for none), and colour.
+    pub fog_start: f32,
+    pub fog_end: f32,
+    pub fog_color: Vec3,
+}
+
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn color_vec(c: brixo_core::Color) -> Vec3 {
+    Vec3::new(c.r as f32, c.g as f32, c.b as f32) / 255.0
+}
+
+impl Sky {
+    /// The sky and light for some Lighting. The default (2 in the
+    /// afternoon) is Brixo's classic look, exactly as it always was.
+    pub fn of(l: &brixo_core::Lighting) -> Sky {
+        // The sun rises in the east at 6, is highest at 12, sets at 18.
+        let a = (l.time_of_day - 6.0) / 12.0 * std::f32::consts::PI;
+        let sun = Vec3::new(-a.cos() * 0.9, a.sin() * 1.1547, 0.3).normalize();
+        let moon = Vec3::new(-sun.x, -sun.y, sun.z).normalize();
+        let h = sun.y;
+        let day = smoothstep(-0.12, 0.3, h);
+        let dusk = 1.0 - smoothstep(0.0, 0.42, h.abs());
+
+        let day_zenith = l.sky_color.map(color_vec).unwrap_or(Vec3::new(0.08, 0.33, 0.78));
+        let day_horizon = l.sky_color.map(|c| color_vec(c).lerp(Vec3::ONE, 0.6)).unwrap_or(Vec3::new(0.66, 0.84, 0.98));
+        let night_zenith = Vec3::new(0.01, 0.02, 0.07);
+        let night_horizon = Vec3::new(0.06, 0.09, 0.19);
+        let zenith = night_zenith.lerp(day_zenith, day).lerp(Vec3::new(0.24, 0.27, 0.55), dusk * 0.55);
+        let horizon = night_horizon.lerp(day_horizon, day).lerp(Vec3::new(1.0, 0.56, 0.32), dusk * 0.85);
+
+        // By day the sun lights things; at night a dim, blue moon. Light
+        // never comes from right down at the horizon (flat, shadowless).
+        let from = if h >= -0.02 { sun } else { moon };
+        let light_dir = Vec3::new(from.x, from.y.max(0.25), from.z).normalize();
+        let warm = Vec3::ONE.lerp(Vec3::new(1.0, 0.72, 0.5), dusk);
+        let moonlight = Vec3::new(0.5, 0.6, 1.0);
+        // (The screen is sRGB, so small numbers show brighter than they look.)
+        let light = (moonlight * 0.1).lerp(warm * 0.7, day) * l.brightness;
+        let ambient = (moonlight * 0.045).lerp(Vec3::splat(0.45), day) * l.brightness;
+
+        let (disc_dir, disc) = if h > -0.06 { (sun, 1.0) } else { (moon, 2.0) };
+        let cloud = (Vec3::new(0.06, 0.07, 0.12)).lerp(Vec3::ONE, day).lerp(Vec3::new(1.0, 0.7, 0.55), dusk * 0.7);
+        Sky {
+            light_dir,
+            zenith,
+            horizon,
+            light,
+            ambient,
+            disc_dir,
+            disc,
+            stars: 1.0 - smoothstep(-0.3, -0.02, h),
+            cloud,
+            fog_start: l.fog_start.min(l.fog_end),
+            fog_end: l.fog_end,
+            fog_color: color_vec(l.fog_color),
+        }
+    }
+}
+
 /// Shadows cover this far around the camera, in studs.
 const SHADOW_RANGE: f32 = 70.0;
 const SHADOW_MAP_SIZE: u32 = 2048;
@@ -845,7 +933,8 @@ impl SceneRenderer {
         let aspect = width as f32 / height.max(1) as f32;
         // The sun's camera: looking down along the sun direction at the
         // area around where the camera is looking.
-        let sun = SUN_DIR.normalize();
+        let sky = Sky::of(&brixo_core::Lighting::of(model));
+        let sun = sky.light_dir;
         let focus = camera.position + camera.forward() * (SHADOW_RANGE * 0.4);
         let light_view = glam::camera::rh::view::look_at_mat4(focus + sun * 200.0, focus, Vec3::Y);
         let light_proj = glam::camera::rh::proj::directx::orthographic(
@@ -857,6 +946,13 @@ impl SceneRenderer {
             sun_dir: [sun.x, sun.y, sun.z, 0.0],
             inv_view_proj: camera.view_proj(aspect).inverse().to_cols_array_2d(),
             eye: [camera.position.x, camera.position.y, camera.position.z, self.time],
+            zenith: [sky.zenith.x, sky.zenith.y, sky.zenith.z, sky.stars],
+            horizon: [sky.horizon.x, sky.horizon.y, sky.horizon.z, 0.0],
+            light: [sky.light.x, sky.light.y, sky.light.z, 0.0],
+            ambient: [sky.ambient.x, sky.ambient.y, sky.ambient.z, 0.0],
+            disc: [sky.disc_dir.x, sky.disc_dir.y, sky.disc_dir.z, sky.disc],
+            fog: [sky.fog_start, sky.fog_end, sky.cloud.x, sky.cloud.y],
+            fog_color: [sky.fog_color.x, sky.fog_color.y, sky.fog_color.z, sky.cloud.z],
         };
         if !self.atlas_uploaded.get() {
             let size = self.atlas.size();
@@ -1048,6 +1144,13 @@ struct Camera {
     sun_dir: vec4<f32>,
     inv_view_proj: mat4x4<f32>,
     eye: vec4<f32>,
+    zenith: vec4<f32>,
+    horizon: vec4<f32>,
+    light: vec4<f32>,
+    ambient: vec4<f32>,
+    disc: vec4<f32>,
+    fog: vec4<f32>,
+    fog_color: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
@@ -1140,19 +1243,29 @@ fn cloud_density(p: vec2<f32>) -> f32 {
     return vnoise(p) * 0.6 + vnoise(p * 2.3 + vec2<f32>(17.0, 5.0)) * 0.3 + vnoise(p * 5.1) * 0.1;
 }
 
-const HORIZON = vec3<f32>(0.66, 0.84, 0.98);
-
 fn sky_color(dir: vec3<f32>) -> vec3<f32> {
     let up = dir.y;
-    let zenith = vec3<f32>(0.08, 0.33, 0.78);
-    var col = mix(HORIZON, zenith, pow(clamp(up, 0.0, 1.0), 0.5));
+    let horizon = camera.horizon.xyz;
+    var col = mix(horizon, camera.zenith.xyz, pow(clamp(up, 0.0, 1.0), 0.5));
     // Below the horizon: a soft haze, never black.
-    col = select(col, mix(HORIZON, vec3<f32>(0.52, 0.68, 0.84), clamp(-up * 3.0, 0.0, 1.0)), up < 0.0);
+    col = select(col, mix(horizon, horizon * vec3<f32>(0.79, 0.81, 0.86), clamp(-up * 3.0, 0.0, 1.0)), up < 0.0);
 
-    // The sun: a hard-edged disc and a tight, bright halo.
-    let s = dot(dir, normalize(camera.sun_dir.xyz));
-    col = col + vec3<f32>(1.0, 0.95, 0.75) * smoothstep(0.985, 0.9985, s) * 0.35;
-    col = select(col, vec3<f32>(1.0, 0.98, 0.88), s > 0.9988);
+    // Stars at night: tiny hard points, fixed in the sky.
+    if (camera.zenith.w > 0.0 && up > 0.0) {
+        let cell = floor(dir.xz / (up + 0.35) * 90.0 + dir.y * 7.0);
+        let star = step(0.9965, hash2(cell));
+        col = col + vec3<f32>(star * camera.zenith.w * smoothstep(0.0, 0.25, up) * 0.85);
+    }
+
+    // The sun (a hard-edged disc and a tight, bright halo), or the moon.
+    let s = dot(dir, normalize(camera.disc.xyz));
+    if (camera.disc.w > 1.5) {
+        col = select(col, vec3<f32>(0.9, 0.92, 0.98), s > 0.9993);
+    } else if (camera.disc.w > 0.5) {
+        let tint = mix(vec3<f32>(1.0, 0.95, 0.75), vec3<f32>(1.0, 0.7, 0.4), clamp(1.0 - camera.disc.y * 3.0, 0.0, 1.0));
+        col = col + tint * smoothstep(0.985, 0.9985, s) * 0.35;
+        col = select(col, vec3<f32>(1.0, 0.98, 0.88), s > 0.9988);
+    }
 
     // Clouds: on a flat layer above, drifting slowly. Crisp edges, a white
     // top and a cooler shaded underside, like a painted skybox.
@@ -1160,9 +1273,16 @@ fn sky_color(dir: vec3<f32>) -> vec3<f32> {
         let p = dir.xz / up * 0.9 + vec2<f32>(camera.eye.w * 0.012, camera.eye.w * 0.004);
         let n = cloud_density(p);
         let cover = smoothstep(0.585, 0.605, n);
-        let shade = smoothstep(0.585, 0.70, cloud_density(p - normalize(camera.sun_dir.xz + vec2<f32>(0.001)) * 0.08));
-        let cloud = mix(vec3<f32>(0.80, 0.86, 0.95), vec3<f32>(1.0, 1.0, 1.0), shade);
+        let shade = smoothstep(0.585, 0.70, cloud_density(p - normalize(camera.disc.xz + vec2<f32>(0.001)) * 0.08));
+        let tint = vec3<f32>(camera.fog.z, camera.fog.w, camera.fog_color.w);
+        let cloud = mix(vec3<f32>(0.80, 0.86, 0.95), vec3<f32>(1.0, 1.0, 1.0), shade) * tint;
         col = mix(col, cloud, cover * smoothstep(0.015, 0.12, up));
+    }
+
+    // Thick fog hides the horizon too.
+    if (camera.fog.y > 0.0) {
+        let thick = 1.0 - smoothstep(150.0, 1500.0, camera.fog.y);
+        col = mix(col, camera.fog_color.xyz, thick * (1.0 - smoothstep(-0.1, 0.45, up)));
     }
     return col;
 }
@@ -1222,7 +1342,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Old-school lighting: flat ambient plus one hard sun. Neon ignores it.
     let n = normalize(in.normal);
     let lambert = max(dot(n, normalize(camera.sun_dir.xyz)), 0.0);
-    let shade = select(0.45 + 0.7 * lambert * lit, 1.15, in.extra.y > 0.5);
+    let shade = select(camera.ambient.xyz + camera.light.xyz * lambert * lit, vec3<f32>(1.15), in.extra.y > 0.5);
     // Far away, a texture's pixels are smaller than the screen's and would
     // shimmer like static: fade the detail to the material's average shade.
     let texels_per_pixel = length(fwidth(plane)) * 16.0;
@@ -1237,6 +1357,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let to_eye = in.world - camera.eye.xyz;
     let haze = smoothstep(160.0, 520.0, length(to_eye)) * 0.6;
     rgb = mix(rgb, sky_color(normalize(to_eye)), haze);
+    // Fog: things fade into it, and are gone by its end.
+    if (camera.fog.y > 0.0) {
+        rgb = mix(rgb, camera.fog_color.xyz, smoothstep(camera.fog.x, camera.fog.y, length(to_eye)));
+    }
     // Selected parts get tinted toward orange.
     rgb = mix(rgb, vec3<f32>(1.0, 0.55, 0.1), in.highlight * 0.45);
     // See-through parts are blended over what's behind them (they're drawn
@@ -1385,5 +1509,53 @@ mod shader_tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .unwrap_or_else(|e| panic!("the shader doesn't validate: {e:?}"));
+    }
+}
+
+#[cfg(test)]
+mod sky_tests {
+    use super::Sky;
+    use brixo_core::{Color, Lighting};
+    use glam::Vec3;
+
+    fn near(a: Vec3, b: Vec3) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn the_default_is_the_classic_afternoon() {
+        let s = Sky::of(&Lighting::default());
+        assert!(near(s.light_dir, Vec3::new(0.45, 1.0, 0.3).normalize()), "{:?}", s.light_dir);
+        assert!(near(s.zenith, Vec3::new(0.08, 0.33, 0.78)) && near(s.horizon, Vec3::new(0.66, 0.84, 0.98)));
+        assert!(near(s.light, Vec3::splat(0.7)) && near(s.ambient, Vec3::splat(0.45)));
+        assert!(near(s.cloud, Vec3::ONE));
+        assert_eq!((s.disc, s.stars, s.fog_end), (1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn the_day_goes_round() {
+        let at = |t: f32| Sky::of(&Lighting { time_of_day: t, ..Lighting::default() });
+        let (noon, sunset, night) = (at(12.0), at(18.2), at(0.0));
+        assert!(noon.light_dir.y > 0.9, "noon sun overhead");
+        assert!(sunset.horizon.x > sunset.horizon.z, "sunset horizon is orange: {:?}", sunset.horizon);
+        assert!(night.zenith.length() < 0.1 && night.stars > 0.99 && night.disc == 2.0, "night: dark, stars, moon");
+        assert!(night.light.length() < noon.light.length() * 0.5 && night.light.z > night.light.x, "moonlight is dim and blue");
+        let morning = at(8.0);
+        assert!(morning.light_dir.x < 0.0 && at(16.0).light_dir.x > 0.0, "the sun crosses the sky");
+    }
+
+    #[test]
+    fn brightness_sky_colour_and_fog() {
+        let s = Sky::of(&Lighting { brightness: 2.0, sky_color: Some(Color::new(255, 0, 0)), fog_start: 20.0, fog_end: 80.0, ..Lighting::default() });
+        assert!(near(s.light, Vec3::splat(1.4)));
+        assert!(near(s.zenith, Vec3::new(1.0, 0.0, 0.0)));
+        assert_eq!((s.fog_start, s.fog_end), (20.0, 80.0));
+        // Written into the Workspace and read back.
+        let mut dm = brixo_core::DataModel::new();
+        let l = Lighting { time_of_day: 19.5, fog_end: 120.0, fog_color: Color::new(10, 20, 30), sky_color: Some(Color::new(1, 2, 3)), ..Lighting::default() };
+        l.set(&mut dm);
+        assert_eq!(Lighting::of(&dm), l);
+        Lighting::default().set(&mut dm);
+        assert!(dm.get(dm.root()).unwrap().attributes.is_empty(), "the default leaves no fields behind");
     }
 }

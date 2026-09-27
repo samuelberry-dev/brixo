@@ -41,6 +41,8 @@ const GAME: &str = r#"-- Flagfall: capture the flag.
 -- Grab the enemy flag, bring it to your own stand while your flag is home.
 TEAMS = ["Red", "Blue"]
 GEAR = ["Sword", "Slingshot", "Rocket Launcher", "Superball", "Trowel", "Paintball Gun"]
+-- Top right: everyone by team, with their captures, returns and knockouts.
+leaderboard("captures", "returns", "kos")
 
 -- Tunables. (Tests shorten the match by setting match_seconds on the
 -- Workspace; caps_to_win works the same way.)

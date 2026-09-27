@@ -447,3 +447,51 @@ fn admins_ban_accounts_and_take_games_down() {
     assert!(listed(bad_game));
     assert_eq!(status(browser().post(&format!("{site}/api/login")).send_json(serde_json::json!({"username": "Troll", "password": "abcdefgh"}))), 200);
 }
+
+#[test]
+fn admins_make_reset_links_and_people_change_their_own_password() {
+    let (site, app) = start_site();
+    let boss = browser();
+    boss.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Boss", "password": "abcdefgh"})).unwrap();
+    app.db.set_admin("Boss", true).unwrap();
+    let kid = browser();
+    kid.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Forgetful", "password": "oldpassword"})).unwrap();
+    let login = |pw: &str| status(browser().post(&format!("{site}/api/login")).send_json(serde_json::json!({"username": "Forgetful", "password": pw})));
+
+    // Only admins make links.
+    assert_eq!(status(kid.post(&format!("{site}/api/admin/reset")).send_json(serde_json::json!({"username": "Forgetful"}))), 403);
+    assert_eq!(status(boss.post(&format!("{site}/api/admin/reset")).send_json(serde_json::json!({"username": "Nobody"}))), 404);
+    let link = |who: &str| -> String {
+        let r: serde_json::Value = boss.post(&format!("{site}/api/admin/reset")).send_json(serde_json::json!({"username": who})).unwrap().into_json().unwrap();
+        r["token"].as_str().unwrap().to_string()
+    };
+    let first = link("forgetful");
+    let token = link("Forgetful");
+    // A new link replaces the old one.
+    assert_eq!(status(browser().post(&format!("{site}/api/reset/check")).send_json(serde_json::json!({"token": first}))), 400);
+    let who: serde_json::Value = browser().post(&format!("{site}/api/reset/check")).send_json(serde_json::json!({"token": token})).unwrap().into_json().unwrap();
+    assert_eq!(who["username"], "Forgetful");
+
+    // Using it: too short is refused (and the link still works), then it works once.
+    let fresh = browser();
+    assert_eq!(status(fresh.post(&format!("{site}/api/reset")).send_json(serde_json::json!({"token": token, "password": "short"}))), 400);
+    assert_eq!(status(fresh.post(&format!("{site}/api/reset")).send_json(serde_json::json!({"token": token, "password": "brandnew123"}))), 200);
+    let me: serde_json::Value = fresh.get(&format!("{site}/api/me")).call().unwrap().into_json().unwrap();
+    assert_eq!(me["username"], "Forgetful", "logged in by the reset");
+    assert_eq!(status(kid.get(&format!("{site}/api/me")).call()), 401, "other logins are logged out");
+    assert_eq!(status(fresh.post(&format!("{site}/api/reset")).send_json(serde_json::json!({"token": token, "password": "again12345"}))), 400, "used up");
+    assert_eq!(login("oldpassword"), 400);
+    assert_eq!(login("brandnew123"), 200);
+
+    // Changing your own password needs the current one, and keeps you logged in here only.
+    let other = browser();
+    other.post(&format!("{site}/api/login")).send_json(serde_json::json!({"username": "Forgetful", "password": "brandnew123"})).unwrap();
+    assert_eq!(status(fresh.put(&format!("{site}/api/me/password")).send_json(serde_json::json!({"current": "wrong", "password": "another123"}))), 400);
+    assert_eq!(status(fresh.put(&format!("{site}/api/me/password")).send_json(serde_json::json!({"current": "brandnew123", "password": "another123"}))), 204);
+    assert_eq!(status(fresh.get(&format!("{site}/api/me")).call()), 200, "still logged in here");
+    assert_eq!(status(other.get(&format!("{site}/api/me")).call()), 401, "but not elsewhere");
+    assert_eq!(login("another123"), 200);
+    assert_eq!(status(browser().put(&format!("{site}/api/me/password")).send_json(serde_json::json!({"current": "x", "password": "another123"}))), 401);
+    // The page itself is there.
+    assert_eq!(status(browser().get(&format!("{site}/reset")).call()), 200);
+}

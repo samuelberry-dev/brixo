@@ -294,6 +294,15 @@ pub fn game_ui(ctx: &egui::Context, hud: Hud) {
         shift_lock_hud(ctx);
     }
 
+    // The leaderboard, top right (if the game has one, or company).
+    if !s.lost {
+        let me = match &s.backend {
+            Backend::Local(game) => game.player_id(),
+            Backend::Online(net) => net.me,
+        };
+        brixo_client::leaderboard::draw(ctx, ctx.screen_rect(), &s.view, me, &mut s.board_open);
+    }
+
     if s.console {
         let output = &s.output;
         site_box(ctx, "console", egui::Align2::RIGHT_BOTTOM, [-12.0, -44.0], 540.0, "Console (F9)", |ui| {
@@ -405,6 +414,7 @@ pub fn game_ui(ctx: &egui::Context, hud: Hud) {
                         (&["1", "…", "9"], "Hold a tool; click to use it"),
                         (&["/", "Enter"], "Chat"),
                         (&["F9"], "Console"),
+                        (&["Tab"], "Fold the leaderboard away (and back)"),
                         (&["Esc"], "This menu"),
                     ]);
                 }
