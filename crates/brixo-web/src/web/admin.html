@@ -1,0 +1,73 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Admin &middot; Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content"></div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  const me = await shell("admin");
+  const content = document.getElementById("content");
+  if (!me || !me.admin) {
+    content.innerHTML = `<div class="box"><h2>Admins only</h2><div class="inner"><p>This page is for Brixo's admins.</p>
+      <a class="btn" href="/">Home</a></div></div>`;
+    return;
+  }
+  const filter = { users: "", games: "" };
+  let data = null;
+  const load = async () => { data = await api("/api/admin"); draw(); };
+  const act = async (path, body, what) => {
+    try { await api(path, "POST", body); await load(); }
+    catch (err) { alert(`Couldn't ${what}: ${err.message}`); }
+  };
+  const draw = () => {
+    const users = data.users.filter((u) => u.username.toLowerCase().includes(filter.users.toLowerCase()));
+    const games = data.games.filter((g) => (g.name + " " + g.owner).toLowerCase().includes(filter.games.toLowerCase()));
+    content.innerHTML = `<div class="cols"><div class="main">
+      <div class="box navy"><h2>Games <span style="font-weight:normal">newest first</span></h2><div class="inner">
+        <input class="find" id="gfind" placeholder="Find a game or maker" value="${esc(filter.games)}">
+        <table class="admin"><tr><th>Game</th><th>By</th><th>Visits</th><th>Published</th><th></th></tr>
+        ${games.map((g) => `<tr class="${g.hidden || g.owner_banned ? "off" : ""}">
+          <td>${g.hidden || g.owner_banned ? esc(g.name) : `<a href="/games/${g.id}">${esc(g.name)}</a>`}
+              ${g.hidden ? `<span class="tag">taken down</span>` : ""}${g.owner_banned ? `<span class="tag">maker banned</span>` : ""}</td>
+          <td>${esc(g.owner)}</td><td>${num(g.visits)}</td><td>${when(g.created)}</td>
+          <td>${g.hidden
+            ? `<button class="btn small gray" data-show="${g.id}">Put back</button>`
+            : `<button class="btn small" data-hide="${g.id}" data-name="${esc(g.name)}" style="background:linear-gradient(180deg,#f7a59c 0%,#e0574a 50%,#c4281c 51%,#d23a2d 100%);border-color:#8a1d14">Take down</button>`}</td>
+        </tr>`).join("") || `<tr><td colspan="5" class="hint">No games match.</td></tr>`}
+        </table>
+      </div></div>
+    </div><div class="side" style="width:340px">
+      <div class="box navy"><h2>Accounts <span style="font-weight:normal">newest first</span></h2><div class="inner">
+        <input class="find" id="ufind" placeholder="Find an account" value="${esc(filter.users)}">
+        <table class="admin"><tr><th>Name</th><th>Games</th><th></th></tr>
+        ${users.map((u) => `<tr class="${u.banned ? "off" : ""}">
+          <td>${u.banned ? esc(u.username) : `<a href="/users/${encodeURIComponent(u.username)}">${esc(u.username)}</a>`}
+              ${u.admin ? `<span class="tag gold">admin</span>` : ""}${u.banned ? `<span class="tag">banned</span>` : ""}
+              <div class="hint">${when(u.created) || "early days"}</div></td>
+          <td>${num(u.games)}</td>
+          <td>${u.admin || u.username === "Brixo" ? "" : u.banned
+            ? `<button class="btn small gray" data-unban="${esc(u.username)}">Unban</button>`
+            : `<button class="btn small" data-ban="${esc(u.username)}" style="background:linear-gradient(180deg,#f7a59c 0%,#e0574a 50%,#c4281c 51%,#d23a2d 100%);border-color:#8a1d14">Ban</button>`}</td>
+        </tr>`).join("") || `<tr><td colspan="3" class="hint">No accounts match.</td></tr>`}
+        </table>
+        <p class="hint" style="margin-top:8px">A ban logs them out, sends them out of any game they're in, keeps them from logging in or playing, and hides their profile and games. Unban puts it all back.</p>
+      </div></div>
+    </div></div>`;
+    const keep = (id, key) => {
+      const box = document.getElementById(id);
+      box.oninput = () => { filter[key] = box.value; draw(); document.getElementById(id).focus(); const b = document.getElementById(id); b.setSelectionRange(b.value.length, b.value.length); };
+    };
+    keep("gfind", "games");
+    keep("ufind", "users");
+    content.querySelectorAll("[data-hide]").forEach((b) => b.onclick = () => {
+      if (confirm(`Take down "${b.dataset.name}"? It disappears from the site, and anyone playing it is sent home.`)) act("/api/admin/hide", { id: Number(b.dataset.hide), hidden: true }, "take it down");
+    });
+    content.querySelectorAll("[data-show]").forEach((b) => b.onclick = () => act("/api/admin/hide", { id: Number(b.dataset.show), hidden: false }, "put it back"));
+    content.querySelectorAll("[data-ban]").forEach((b) => b.onclick = () => {
+      if (confirm(`Ban ${b.dataset.ban}?`)) act("/api/admin/ban", { username: b.dataset.ban, banned: true }, "ban them");
+    });
+    content.querySelectorAll("[data-unban]").forEach((b) => b.onclick = () => act("/api/admin/ban", { username: b.dataset.unban, banned: false }, "unban them"));
+  };
+  load().catch((err) => { content.innerHTML = `<div class="box"><h2>Admin</h2><div class="inner"><p class="error">${esc(err.message)}</p></div></div>`; });
+})();
+</script></body></html>

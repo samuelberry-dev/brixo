@@ -17,7 +17,10 @@ use brixo_client::{draw_beacons, keyboard_look, projector, trackpad_look, Audio,
 use brixo_client::install::{self, App};
 
 mod mac_links;
+mod menus;
 mod protocol;
+mod settings;
+use settings::Settings;
 use brixo_core::DataModel;
 use brixo_render::{Camera, SceneRenderer};
 use brixo_runtime::{Game, LogLine, PlayerInput};
@@ -32,6 +35,8 @@ use winit::window::{Window, WindowId};
 const CONSOLE_LIMIT: usize = 500;
 /// Radians the camera turns per pixel of right-drag.
 const LOOK_SPEED: f32 = 0.005;
+/// Turning with the mouse locked (first person, shift lock), per pixel.
+const LOCKED_LOOK_SPEED: f32 = 0.003;
 
 // --- gpu + egui ------------------------------------------------------------
 
@@ -85,7 +90,7 @@ impl Gpu {
 
         let scene = SceneRenderer::new(&device, format, config.width, config.height);
         let egui_ctx = egui::Context::default();
-        brixo_client::theme::apply(&egui_ctx);
+        brixo_client::theme::apply_site(&egui_ctx);
         let egui_state = egui_winit::State::new(egui_ctx.clone(), egui::ViewportId::ROOT, &window, None, None, None);
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
@@ -124,6 +129,11 @@ struct Session {
     console: bool,
     output: Vec<LogLine>,
     follow: FollowCamera,
+    /// Shift lock is on (Shift toggles it).
+    shift_lock: bool,
+    /// Online: your own character, moved at once instead of waiting for
+    /// the server (see brixo_client::Predictor).
+    predictor: brixo_client::Predictor,
 }
 
 enum Screen {
@@ -135,6 +145,8 @@ enum Screen {
 /// What the UI asked for this frame, applied once it's done.
 enum Action {
     Leave,
+    /// Knock yourself out, to come back at a spawn (when stuck).
+    Reset,
 }
 
 struct Player {
@@ -163,6 +175,13 @@ struct Player {
     /// A newer Brixo Player on the website, once the check finds one.
     update: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     update_hidden: bool,
+    /// Your settings, and what's in the file (saved when they differ and
+    /// the menu's closed).
+    settings: Settings,
+    saved_settings: Settings,
+    pause_tab: menus::PauseTab,
+    /// The volumes last given to the speakers.
+    levels: Option<(f32, f32)>,
 }
 
 impl Player {
@@ -185,6 +204,10 @@ impl Player {
             locked: false,
             confined: false,
             started: Instant::now(),
+            settings: Settings::load(),
+            saved_settings: Settings::load(),
+            pause_tab: menus::PauseTab::default(),
+            levels: None,
         }
     }
 
@@ -207,6 +230,8 @@ impl Player {
             console: false,
             output,
             follow: FollowCamera::default(),
+            shift_lock: false,
+            predictor: brixo_client::Predictor::default(),
         }));
     }
 
@@ -275,6 +300,11 @@ impl Player {
                     self.keys.clear();
                 }
                 KeyCode::Escape => s.paused = !s.paused,
+                // Shift lock, like Roblox: Shift switches it on and off.
+                KeyCode::ShiftLeft | KeyCode::ShiftRight if self.settings.shift_lock && !s.paused && !s.lost => {
+                    s.shift_lock = !s.shift_lock;
+                    self.audio.sound("click");
+                }
                 KeyCode::F9 => s.console = !s.console,
                 _ => {}
             }
@@ -344,8 +374,14 @@ impl Player {
                     };
                 }
             }
+            // Shift lock: face where the camera looks, and look from over
+            // the shoulder.
+            let shift = s.shift_lock && !s.paused && !s.lost;
+            s.follow.shoulder = shift;
+            let facing = shift.then(|| brixo_client::shift_lock_yaw(&self.camera));
             match &mut s.backend {
                 Backend::Local(game) => {
+                    game.set_facing(facing);
                     if let Some(me) = game.player_id() {
                         if let Some(slot) = queued_equip {
                             game.equip(me, Some(slot));
@@ -371,6 +407,7 @@ impl Player {
                     first_person = s.follow.first_person(&s.view, game.player_id());
                 }
                 Backend::Online(net) => {
+                    net.send_facing(facing);
                     if let Some(slot) = queued_equip {
                         net.equip(slot);
                     }
@@ -395,7 +432,14 @@ impl Player {
                         self.chat.push(from, name, text);
                     }
                     s.lost |= !net.connected;
+                    // Your own character: predicted, so it moves the moment
+                    // you press a key (BRIXO_NO_PREDICT turns this off, to
+                    // compare).
+                    if std::env::var_os("BRIXO_NO_PREDICT").is_none() {
+                        s.predictor.step(&net.world, net.me, input, facing, dt);
+                    }
                     s.view = self.smoother.view(&net.world);
+                    s.predictor.apply(&mut s.view);
                     hidden = s.follow.update(&mut self.camera, &s.view, net.me);
                     write_position(&s.view, net.me);
                     write_watch(&s.view);
@@ -423,8 +467,10 @@ impl Player {
         let locked = self.locked;
         let update = self.update.lock().unwrap().clone();
         let update_hidden = &mut self.update_hidden;
+        let settings = &mut self.settings;
+        let pause_tab = &mut self.pause_tab;
         let full_output = gpu.egui_ctx.run(raw_input, |ctx| { match &mut self.screen {
-            Screen::Home { message } => home_ui(ctx, message.as_deref()),
+            Screen::Home { message } => menus::home_ui(ctx, message.as_deref()),
             Screen::Playing(s) => {
                 // The game's own GUI and the hotbar, under our menus. The
                 // world is read in its own scope: game_ui reads it again.
@@ -454,7 +500,15 @@ impl Player {
                     events.hotbar = events.hotbar.or_else(|| hotbar_key(ctx));
                 }
                 if !cinematic() {
-                    game_ui(ctx, s, &mut action);
+                    let players: Vec<String> = s
+                        .view
+                        .walk()
+                        .into_iter()
+                        .filter(|id| s.view.player(*id).is_some())
+                        .filter_map(|id| s.view.get(id).map(|i| i.name.clone()))
+                        .collect();
+                    let shift_locked = s.shift_lock;
+                    menus::game_ui(ctx, menus::Hud { session: s, action: &mut action, settings, tab: pause_tab, shift_locked, players });
                 }
                 if *chat_open {
                     egui::Area::new(egui::Id::new("chat input"))
@@ -497,11 +551,11 @@ impl Player {
                 });
                 gui_input = live.then_some((events, aim));
                 if live && !ctx.wants_pointer_input() {
-                    look_around(ctx, camera, &mut s.follow);
+                    look_around(ctx, camera, &mut s.follow, settings.camera_speed);
                 }
             }
         }
-        update_notice(ctx, update.as_deref(), update_hidden);
+        menus::update_notice(ctx, update.as_deref(), update_hidden);
         });
         gpu.egui_state.handle_platform_output(&gpu.window, full_output.platform_output);
 
@@ -517,9 +571,27 @@ impl Player {
                 Backend::Online(net) => net.chat(&text),
             }
         }
-        // First person locks the mouse to the window, and the mouse turns
-        // the camera; anything else (pause, chat, zooming out) frees it.
-        let want_lock = first_person
+        // Your settings: the speakers' volumes follow them, and they're
+        // saved once the menu's closed.
+        let levels = (self.settings.sounds, self.settings.music);
+        if self.levels != Some(levels) {
+            self.audio.set_levels(levels.0, levels.1);
+            self.levels = Some(levels);
+        }
+        let menu_open = matches!(&self.screen, Screen::Playing(s) if s.paused);
+        if self.settings != self.saved_settings && !menu_open {
+            self.settings.save();
+            self.saved_settings = self.settings;
+        }
+        if !self.settings.shift_lock {
+            if let Screen::Playing(s) = &mut self.screen {
+                s.shift_lock = false;
+            }
+        }
+        // First person and shift lock lock the mouse to the window, and the
+        // mouse turns the camera; anything else (pause, chat) frees it.
+        let shift_locked = matches!(&self.screen, Screen::Playing(s) if s.shift_lock);
+        let want_lock = (first_person || shift_locked)
             && !self.chat_open
             && matches!(&self.screen, Screen::Playing(s) if !s.paused && !s.lost);
         if want_lock != self.locked {
@@ -666,6 +738,20 @@ impl Player {
 
         match action {
             Some(Action::Leave) => self.leave(),
+            Some(Action::Reset) => {
+                if let Screen::Playing(s) = &mut self.screen {
+                    match &mut s.backend {
+                        Backend::Local(game) => {
+                            if let Some(me) = game.player_id() {
+                                if let Some(p) = game.world().player_mut(me) {
+                                    p.health = 0.0;
+                                }
+                            }
+                        }
+                        Backend::Online(net) => net.reset(),
+                    }
+                }
+            }
             None => {}
         }
     }
@@ -765,169 +851,14 @@ fn goto_target() -> Option<glam::Vec2> {
 
 // --- ui --------------------------------------------------------------------
 
-/// Shown when Brixo Player isn't in a game: games are opened from the
-/// website's Play buttons, so there's nothing to pick here.
-fn home_ui(ctx: &egui::Context, message: Option<&str>) {
-    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.3);
-            ui.label(egui::RichText::new("BRIXO").size(64.0).strong().color(egui::Color32::WHITE));
-            ui.add_space(8.0);
-            let text = message.unwrap_or("Games open from the Brixo website: find one you like and press Play.");
-            // Long messages wrap instead of running off the window.
-            ui.set_max_width((ui.available_width() - 40.0).min(760.0));
-            ui.add(egui::Label::new(egui::RichText::new(text).size(20.0).color(egui::Color32::WHITE)).wrap());
-            ui.add_space(16.0);
-            let site = install::site();
-            let label = format!("Open {}", site.trim_start_matches("https://").trim_start_matches("http://"));
-            if ui.add(egui::Button::new(egui::RichText::new(label).size(18.0)).min_size(egui::vec2(220.0, 40.0))).clicked() {
-                install::open_url(&site);
-            }
-        });
-    });
-}
-
-/// "A new Brixo Player is out" along the top, until dismissed.
-fn update_notice(ctx: &egui::Context, latest: Option<&str>, hidden: &mut bool) {
-    let Some(latest) = latest else { return };
-    if *hidden {
-        return;
-    }
-    egui::Area::new(egui::Id::new("update notice"))
-        .anchor(egui::Align2::CENTER_TOP, [0.0, 10.0])
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!("A new {} is out ({latest}).", App::Player.title()));
-                    if ui.button("Get it").clicked() {
-                        install::open_url(&format!("{}/download", install::site()));
-                    }
-                    if ui.small_button("x").clicked() {
-                        *hidden = true;
-                    }
-                });
-            });
-        });
-}
-
-fn game_ui(ctx: &egui::Context, s: &mut Session, action: &mut Option<Action>) {
-    // Game name, top left.
-    egui::Area::new(egui::Id::new("game name"))
-        .anchor(egui::Align2::LEFT_TOP, [12.0, 10.0])
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.label(egui::RichText::new(&s.name).size(16.0).strong());
-            });
-        });
-
-    // Health, bottom left.
-    let health = match &s.backend {
-        Backend::Local(game) => game.player_id().and_then(|id| game.world().player(id).map(|p| (p.health, p.max_health))),
-        Backend::Online(net) => net.me.and_then(|id| net.world.player(id).map(|p| (p.health, p.max_health))),
-    };
-    if let Some((hp, max)) = health {
-        egui::Area::new(egui::Id::new("health"))
-            .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -12.0])
-            .show(ctx, |ui| {
-                let fraction = if max > 0.0 { (hp / max).clamp(0.0, 1.0) } else { 0.0 };
-                let bar = egui::ProgressBar::new(fraction)
-                    .desired_width(220.0)
-                    .fill(egui::Color32::from_rgb(70, 180, 70))
-                    .text(format!("Health {} / {}", hp.round(), max.round()));
-                ui.add(bar);
-            });
-    }
-
-    if s.console {
-        egui::Window::new("Console (F9)")
-            .default_size([520.0, 260.0])
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -12.0])
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                    for line in &s.output {
-                        let text = format!("[{}] {}", line.source, line.text);
-                        if line.is_error {
-                            ui.colored_label(egui::Color32::from_rgb(255, 110, 100), text);
-                        } else {
-                            ui.label(text);
-                        }
-                    }
-                });
-            });
-    }
-
-    if !s.lost && matches!(&s.backend, Backend::Online(n) if n.me.is_none()) {
-        egui::Area::new(egui::Id::new("joining"))
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(egui::RichText::new("Joining game...").size(22.0).strong());
-                });
-            });
-    }
-
-    if s.lost {
-        egui::Window::new("Disconnected")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                let never_joined = matches!(&s.backend, Backend::Online(n) if n.me.is_none());
-                ui.label(if never_joined {
-                    "Couldn't join: that Play link expired or was already used. Press Play on the website again."
-                } else {
-                    "The server closed, or the connection was lost."
-                });
-                ui.add_space(6.0);
-                if ui.button(egui::RichText::new("Close").size(16.0)).clicked() {
-                    *action = Some(Action::Leave);
-                }
-            });
-        return;
-    }
-
-    if s.paused {
-        egui::Area::new(egui::Id::new("dim"))
-            .fixed_pos(egui::Pos2::ZERO)
-            .order(egui::Order::Middle)
-            .show(ctx, |ui| {
-                ui.painter().rect_filled(ctx.screen_rect(), 0.0, egui::Color32::from_black_alpha(120));
-            });
-        egui::Window::new("Paused")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.set_min_width(260.0);
-                ui.vertical_centered_justified(|ui| {
-                    if ui.button(egui::RichText::new("Resume").size(18.0)).clicked() {
-                        s.paused = false;
-                    }
-                    ui.add_space(4.0);
-                    if ui.button(egui::RichText::new("Leave game").size(18.0)).clicked() {
-                        *action = Some(Action::Leave);
-                    }
-                });
-                ui.add_space(8.0);
-                ui.label("WASD or Up/Down to move, Space to jump");
-                ui.label("1-9 hold a tool, click to use it");
-                ui.label("/ or Enter to chat");
-                ui.label("Turn: right-drag, Left/Right, or swipe sideways");
-                ui.label("Tilt: Page Up/Down (fn + Up/Down on a Mac)");
-                ui.label("Zoom: scroll, pinch, or I / O");
-                ui.label("F9 console, Esc to close this menu");
-            });
-    }
-}
-
 /// Right-drag turns the camera; the wheel zooms. (Keys and trackpads: see
 /// brixo_client::keyboard_look and trackpad_look.)
-fn look_around(ctx: &egui::Context, camera: &mut Camera, follow: &mut FollowCamera) {
+fn look_around(ctx: &egui::Context, camera: &mut Camera, follow: &mut FollowCamera, speed: f32) {
     let (dragging, delta, scroll, pinch) =
         ctx.input(|i| (i.pointer.secondary_down(), i.pointer.delta(), i.smooth_scroll_delta, i.zoom_delta()));
     if dragging {
-        camera.yaw += delta.x * LOOK_SPEED;
-        camera.pitch = (camera.pitch - delta.y * LOOK_SPEED).clamp(-1.5, 1.5);
+        camera.yaw += delta.x * LOOK_SPEED * speed;
+        camera.pitch = (camera.pitch - delta.y * LOOK_SPEED * speed).clamp(-1.5, 1.5);
     }
     follow.zoom(scroll.y);
     // Trackpads: pinch zooms, a two-finger swipe sideways turns.
@@ -978,8 +909,9 @@ impl ApplicationHandler for Player {
         // Raw mouse movement turns the camera while the mouse is locked.
         if let winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
             if self.locked && !self.confined {
-                self.camera.yaw += dx as f32 * 0.003;
-                self.camera.pitch = (self.camera.pitch - dy as f32 * 0.003).clamp(-1.5, 1.5);
+                let k = LOCKED_LOOK_SPEED * self.settings.camera_speed;
+                self.camera.yaw += dx as f32 * k;
+                self.camera.pitch = (self.camera.pitch - dy as f32 * k).clamp(-1.5, 1.5);
             }
         }
     }
@@ -1025,8 +957,9 @@ impl ApplicationHandler for Player {
                     let (cx, cy) = ((size.width / 2) as f64, (size.height / 2) as f64);
                     let (dx, dy) = (position.x - cx, position.y - cy);
                     if dx.abs() > 0.5 || dy.abs() > 0.5 {
-                        self.camera.yaw += dx as f32 * 0.003;
-                        self.camera.pitch = (self.camera.pitch - dy as f32 * 0.003).clamp(-1.5, 1.5);
+                        let k = LOCKED_LOOK_SPEED * self.settings.camera_speed;
+                        self.camera.yaw += dx as f32 * k;
+                        self.camera.pitch = (self.camera.pitch - dy as f32 * k).clamp(-1.5, 1.5);
                         let _ = gpu.window.set_cursor_position(winit::dpi::PhysicalPosition::new(cx, cy));
                     }
                 }

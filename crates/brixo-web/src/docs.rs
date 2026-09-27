@@ -71,6 +71,7 @@ pages! {
         ("howto-checkpoints", "An obby with checkpoints"),
         ("howto-pads", "Jump pads and speed pads"),
         ("howto-shop", "A shop"),
+        ("howto-saving", "Saving player data"),
         ("howto-rounds", "Timed rounds"),
         ("howto-teams", "A team game"),
         ("howto-gun", "Make your own gun"),

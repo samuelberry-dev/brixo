@@ -85,3 +85,7 @@ end
 ```
 
 Setting a custom field to `nil` removes it, so after a reset `p.checkpoint` is empty again and they come back at the normal spawn.
+
+## Remembering the stage next time
+
+To let players carry on where they left off another day, [save](howto-saving) `p.stage` and `p.checkpoint` when they leave, and load them when they join.

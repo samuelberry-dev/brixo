@@ -26,6 +26,8 @@ pub struct ServerHandle {
     log: Arc<Mutex<Vec<LogLine>>>,
     world: Arc<WorldMutex<DataModel>>,
     players: Arc<AtomicUsize>,
+    /// Players to send away (by name), picked up by the server's next tick.
+    kicks: Arc<Mutex<Vec<String>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -57,6 +59,11 @@ impl ServerHandle {
         self.shutdown();
     }
 
+    /// Sends a player away (a banned account), if they're in this game.
+    pub fn kick(&self, name: &str) {
+        self.kicks.lock().unwrap().push(name.to_string());
+    }
+
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
@@ -76,6 +83,9 @@ impl Drop for ServerHandle {
 pub struct Identity {
     pub name: String,
     pub look: brixo_runtime::Look,
+    /// Whose saved data (save/load) is theirs: their account. None keeps
+    /// it under their name.
+    pub save_key: Option<String>,
 }
 
 /// Checks a join ticket (and uses it up). None means "not allowed in".
@@ -84,16 +94,27 @@ pub type TicketCheck = std::sync::Arc<dyn Fn(&str) -> Option<Identity> + Send + 
 /// Starts serving `model` on `port` (0 picks any free port). Anyone can
 /// join, under the name they ask for: the local/LAN test server.
 pub fn start(model: DataModel, port: u16) -> io::Result<ServerHandle> {
-    start_inner(model, port, None)
+    start_inner(model, port, None, None)
 }
 
 /// A server that only lets in players with a valid ticket, who then join
 /// as their account (name and avatar). The website starts these.
 pub fn start_with_tickets(model: DataModel, port: u16, check: TicketCheck) -> io::Result<ServerHandle> {
-    start_inner(model, port, Some(check))
+    start_inner(model, port, Some(check), None)
 }
 
-fn start_inner(model: DataModel, port: u16, tickets: Option<TicketCheck>) -> io::Result<ServerHandle> {
+/// A website game server: ticketed, with players' saved data (save/load)
+/// kept in `store`.
+pub fn start_for_site(model: DataModel, port: u16, check: TicketCheck, store: std::sync::Arc<dyn brixo_runtime::SaveStore>) -> io::Result<ServerHandle> {
+    start_inner(model, port, Some(check), Some(store))
+}
+
+fn start_inner(
+    model: DataModel,
+    port: u16,
+    tickets: Option<TicketCheck>,
+    store: Option<std::sync::Arc<dyn brixo_runtime::SaveStore>>,
+) -> io::Result<ServerHandle> {
     let listener = TcpListener::bind(("0.0.0.0", port))?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
@@ -102,20 +123,26 @@ fn start_inner(model: DataModel, port: u16, tickets: Option<TicketCheck>) -> io:
     let log = Arc::new(Mutex::new(Vec::new()));
     let players = Arc::new(AtomicUsize::new(0));
     let (world_tx, world_rx) = mpsc::channel();
+    let kicks = Arc::new(Mutex::new(Vec::new()));
 
     let thread = {
-        let (stop, log, players) = (stop.clone(), log.clone(), players.clone());
+        let (stop, log, players, kicks) = (stop.clone(), log.clone(), players.clone(), kicks.clone());
         std::thread::Builder::new()
             .name("brixo server".into())
             .spawn(move || {
                 // Scripts start here, on the server's own thread.
-                let game = Game::start_server(model);
+                let mut game = Game::start_server(model);
+                if let Some(store) = store {
+                    game.set_save_store(store);
+                }
                 let _ = world_tx.send(game.shared_world());
-                Server::new(game, listener, log, players, tickets).run(&stop);
+                let mut server = Server::new(game, listener, log, players, tickets);
+                server.kicks = kicks;
+                server.run(&stop);
             })?
     };
     let world = world_rx.recv().map_err(|_| io::Error::other("the server failed to start"))?;
-    Ok(ServerHandle { port, stop, log, world, players, thread: Some(thread) })
+    Ok(ServerHandle { port, stop, log, world, players, kicks, thread: Some(thread) })
 }
 
 enum Event {
@@ -154,6 +181,8 @@ struct Server {
     sent: Sent,
     /// When set, players need a ticket to join (website servers).
     tickets: Option<TicketCheck>,
+    /// Names to send away (see ServerHandle::kick).
+    kicks: Arc<Mutex<Vec<String>>>,
 }
 
 impl Server {
@@ -177,6 +206,7 @@ impl Server {
             music: None,
             sent: Sent::default(),
             tickets,
+            kicks: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -190,6 +220,7 @@ impl Server {
         while !stop.load(Ordering::Relaxed) {
             self.accept();
             self.handle_events();
+            self.do_kicks();
             self.game.step(1.0 / TICK_RATE);
             self.log.lock().unwrap().extend(self.game.take_log());
             self.broadcast();
@@ -234,7 +265,10 @@ impl Server {
                             return;
                         }
                     }
-                    // Closed, broken, or sent garbage: either way, they're gone.
+                    // A message this server doesn't know (from a newer
+                    // Brixo Player): skip it rather than drop the player.
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
+                    // Closed or broken: they're gone.
                     Ok(None) | Err(_) => {
                         let _ = tx.send((id, Event::Closed));
                         return;
@@ -256,6 +290,18 @@ impl Server {
                         // Never trust a client: no moving faster than walking.
                         let (move_x, move_z) = if len > 1.0 { (move_x / len, move_z / len) } else { (move_x, move_z) };
                         self.game.set_input_for(player, PlayerInput { move_x, move_z, jump });
+                    }
+                }
+                Event::Message(ToServer::Reset) => {
+                    if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
+                        if let Some(p) = self.game.world().player_mut(player) {
+                            p.health = 0.0;
+                        }
+                    }
+                }
+                Event::Message(ToServer::Face { yaw }) => {
+                    if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
+                        self.game.set_facing_for(player, yaw.filter(|y| y.is_finite()));
                     }
                 }
                 Event::Message(ToServer::Chat { text }) => {
@@ -289,9 +335,9 @@ impl Server {
     /// who they are; anywhere else, they pick a name.
     fn hello(&mut self, conn: u64, requested: &str, ticket: Option<&str>) {
         match &self.tickets {
-            None => self.join(conn, requested, None),
+            None => self.join(conn, requested, None, None),
             Some(check) => match ticket.and_then(|t| check(t)) {
-                Some(who) => self.join(conn, &who.name, Some(who.look)),
+                Some(who) => self.join(conn, &who.name, Some(who.look), who.save_key.as_deref()),
                 None => {
                     self.log.lock().unwrap().push(LogLine {
                         source: "Server".into(),
@@ -304,13 +350,13 @@ impl Server {
         }
     }
 
-    fn join(&mut self, conn: u64, requested: &str, look: Option<brixo_runtime::Look>) {
+    fn join(&mut self, conn: u64, requested: &str, look: Option<brixo_runtime::Look>, save_key: Option<&str>) {
         let Some(c) = self.connections.get(&conn) else { return };
         if c.player.is_some() {
             return; // already joined
         }
         let name = self.unique_name(requested);
-        let player = self.game.add_player_as(&name, look);
+        let player = self.game.add_player_saved(&name, look, save_key);
         let welcome = ToClient::Welcome { you: player.raw(), world: client_view(&self.game.world()) };
         let c = self.connections.get_mut(&conn).unwrap();
         c.player = Some(player);
@@ -320,6 +366,24 @@ impl Server {
             return;
         }
         self.log.lock().unwrap().push(LogLine { source: "Server".into(), text: format!("{name} joined"), is_error: false });
+    }
+
+    /// Disconnects anyone the website asked to send away.
+    fn do_kicks(&mut self) {
+        let names: Vec<String> = std::mem::take(&mut *self.kicks.lock().unwrap());
+        for name in names {
+            let conns: Vec<u64> = {
+                let world = self.game.world();
+                self.connections
+                    .iter()
+                    .filter(|(_, c)| c.player.and_then(|p| world.get(p)).is_some_and(|i| i.name.eq_ignore_ascii_case(&name)))
+                    .map(|(id, _)| *id)
+                    .collect()
+            };
+            for c in conns {
+                self.disconnect(c);
+            }
+        }
     }
 
     fn disconnect(&mut self, conn: u64) {

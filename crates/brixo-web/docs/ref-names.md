@@ -41,11 +41,12 @@ Built-in tracks for `play_music`: `sunny` (bright and bouncy), `rush` (fast, for
 | Space | Jump (hold to jump higher) |
 | 1 to 9 | Hold a tool (again to put it away) |
 | Click | Use the tool in your hand, aimed where you click |
+| Shift | Shift lock (also in Studio's Play): the mouse turns you and the camera, over your shoulder, and tools aim at the middle of the screen |
 | Right-drag, or ← → | Turn the camera |
 | Page Up / Page Down | Tilt the camera |
 | Scroll, or I / O | Zoom (all the way in for first person) |
 | / or Enter | Chat |
-| Esc | Pause menu |
+| Esc | Pause menu: who's playing, Reset character, settings (shift lock, camera speed, volume) and these controls |
 | F9 | The game's log (prints and errors) |
 
 ## Numbers worth knowing

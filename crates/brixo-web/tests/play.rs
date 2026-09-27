@@ -64,7 +64,7 @@ fn sign_up_customize_press_play_and_join_as_yourself() {
     let body = serde_json::json!({"username": "Ann", "password": "correct horse"});
     ann.post(&format!("{site}/api/signup")).send_json(body).unwrap();
     assert_eq!(status(browser().post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "ann", "password": "whatever"}))), 400, "names are unique, whatever the case");
-    assert_eq!(status(browser().post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "noob", "password": "whatever"}))), 400, "no rude names");
+    assert_eq!(status(browser().post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "shithead", "password": "whatever"}))), 400, "no rude names");
 
     // Customize the avatar.
     let look = serde_json::json!({"skin": [204,142,105], "shirt": [196,40,28], "pants": [27,42,53], "shoes": [27,27,27], "face": "determined", "hats": ["top_hat", "headphones"]});
@@ -352,4 +352,98 @@ fn downloads_and_versions() {
         assert_eq!(status(get(sneaky)), 404, "{sneaky}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn saved_data_is_kept_per_game_and_account_between_visits() {
+    let (site, app) = start_site();
+    let me = browser();
+    me.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Saver", "password": "abcdefgh"})).unwrap();
+    // A game that counts your visits and keeps the count.
+    let mut dm = brixo_core::DataModel::new();
+    let root = dm.root();
+    let s = dm.create(brixo_core::Class::Script, "Visits", root).unwrap();
+    dm.script_mut(s).unwrap().source = "on player_joined(p)\n    p.visits = (load(p, \"visits\") or 0) + 1\n    save(p, \"visits\", p.visits)\nend\n".into();
+    let r: serde_json::Value = me
+        .post(&format!("{site}/api/games"))
+        .send_json(serde_json::json!({"name": "Visit Counter", "data": dm.to_json().unwrap()}))
+        .unwrap()
+        .into_json()
+        .unwrap();
+    let game_id = r["id"].as_i64().unwrap();
+    let visits = |c: &NetClient| match c.world.get(c.me?)?.attributes.get("visits") {
+        Some(brixo_core::Attribute::Num(n)) => Some(*n),
+        _ => None,
+    };
+    for expected in [1.0, 2.0] {
+        let pass: serde_json::Value = me.post(&format!("{site}/api/games/{game_id}/play")).call().unwrap().into_json().unwrap();
+        let mut c = NetClient::connect_with_ticket(pass["server"].as_str().unwrap(), pass["ticket"].as_str().unwrap()).unwrap();
+        wait_until(&mut c, "the visit count", |c| visits(c).is_some());
+        assert_eq!(visits(&c), Some(expected));
+        // Leave, and the game server closes (saving on the way out).
+        drop(c);
+        std::thread::sleep(Duration::from_millis(300));
+        app.servers.reap(Duration::ZERO);
+        assert!(!app.servers.is_running(game_id));
+    }
+    // It's in the website's database, under this game and account.
+    let user = app.db.user_by_name("Saver").unwrap().unwrap();
+    let saved = app.db.player_save(game_id, user.id).unwrap().unwrap();
+    assert_eq!(saved, "{\"visits\":2.0}");
+}
+
+#[test]
+fn admins_ban_accounts_and_take_games_down() {
+    let (site, app) = start_site();
+    let boss = browser();
+    boss.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Boss", "password": "abcdefgh"})).unwrap();
+    let troll = browser();
+    troll.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Troll", "password": "abcdefgh"})).unwrap();
+    let game = brixo_core::DataModel::new().to_json().unwrap();
+    let r: serde_json::Value = troll.post(&format!("{site}/api/games")).send_json(serde_json::json!({"name": "Bad Game", "data": game})).unwrap().into_json().unwrap();
+    let bad_game = r["id"].as_i64().unwrap();
+
+    // Not an admin yet: the admin API says no.
+    assert_eq!(status(boss.get(&format!("{site}/api/admin")).call()), 403);
+    assert!(app.db.set_admin("Boss", true).unwrap());
+    let me: serde_json::Value = boss.get(&format!("{site}/api/me")).call().unwrap().into_json().unwrap();
+    assert_eq!(me["admin"], true);
+    let overview: serde_json::Value = boss.get(&format!("{site}/api/admin")).call().unwrap().into_json().unwrap();
+    assert!(overview["users"].as_array().unwrap().iter().any(|u| u["username"] == "Troll"));
+    assert!(overview["games"].as_array().unwrap().iter().any(|g| g["id"] == bad_game));
+    // Regular people can't use it.
+    assert_eq!(status(troll.post(&format!("{site}/api/admin/ban")).send_json(serde_json::json!({"username": "Boss", "banned": true}))), 403);
+
+    // Take the game down: gone from the catalog and unplayable.
+    let listed = |id: i64| {
+        let games: serde_json::Value = browser().get(&format!("{site}/api/games")).call().unwrap().into_json().unwrap();
+        games.as_array().unwrap().iter().any(|g| g["id"] == id)
+    };
+    assert!(listed(bad_game));
+    boss.post(&format!("{site}/api/admin/hide")).send_json(serde_json::json!({"id": bad_game, "hidden": true})).unwrap();
+    assert!(!listed(bad_game));
+    assert_eq!(status(boss.post(&format!("{site}/api/games/{bad_game}/play")).call()), 404);
+    assert_eq!(status(browser().get(&format!("{site}/api/games/{bad_game}")).call()), 404);
+    boss.post(&format!("{site}/api/admin/hide")).send_json(serde_json::json!({"id": bad_game, "hidden": false})).unwrap();
+    assert!(listed(bad_game), "put back");
+
+    // Ban the troll while they're in a game: sent out, logged out, can't
+    // log back in, and their profile and games are hidden.
+    let tycoon = { let g: serde_json::Value = browser().get(&format!("{site}/api/games")).call().unwrap().into_json().unwrap();
+        g.as_array().unwrap().iter().find(|g| g["name"] == "Coin Tycoon").unwrap()["id"].as_i64().unwrap() };
+    let pass: serde_json::Value = troll.post(&format!("{site}/api/games/{tycoon}/play")).call().unwrap().into_json().unwrap();
+    let mut c = NetClient::connect_with_ticket(pass["server"].as_str().unwrap(), pass["ticket"].as_str().unwrap()).unwrap();
+    wait_until(&mut c, "joined", |c| c.me.is_some());
+    assert_eq!(status(boss.post(&format!("{site}/api/admin/ban")).send_json(serde_json::json!({"username": "Boss", "banned": true}))), 400, "not yourself");
+    boss.post(&format!("{site}/api/admin/ban")).send_json(serde_json::json!({"username": "Troll", "banned": true})).unwrap();
+    wait_until(&mut c, "sent out of the game", |c| !c.connected);
+    assert_eq!(status(troll.get(&format!("{site}/api/me")).call()), 401, "logged out");
+    let login = browser().post(&format!("{site}/api/login")).send_json(serde_json::json!({"username": "Troll", "password": "abcdefgh"}));
+    assert_eq!(status(login), 403);
+    assert_eq!(status(browser().get(&format!("{site}/api/users/Troll")).call()), 404);
+    assert!(!listed(bad_game), "a banned account's games are hidden too");
+    // Unban: all back.
+    boss.post(&format!("{site}/api/admin/ban")).send_json(serde_json::json!({"username": "Troll", "banned": false})).unwrap();
+    assert!(listed(bad_game));
+    assert_eq!(status(browser().post(&format!("{site}/api/login")).send_json(serde_json::json!({"username": "Troll", "password": "abcdefgh"}))), 200);
 }

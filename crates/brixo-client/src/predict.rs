@@ -1,0 +1,273 @@
+//! Client-side prediction: online, your own character moves the moment you
+//! press a key, instead of waiting for the server to hear about it and
+//! answer (a beat later on a far-away server).
+//!
+//! Brixo Player runs its own copy of the character physics for you alone,
+//! against the world the server sent, with the same keys it sends the
+//! server. It remembers where it put you over the last second. When the
+//! server says where you are, that should be somewhere on that recent path
+//! (the server is simply behind): if it is, nothing needs fixing but any
+//! small drift sideways, which is eased out. If it's nowhere near (the
+//! server moved you: a respawn, a teleporter, a jump pad), prediction gives
+//! way and starts again from where the server says.
+//!
+//! Everyone else, and every part, is still drawn from the server.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
+
+use brixo_core::{DataModel, InstanceId, Vec3};
+use brixo_runtime::physics::Physics;
+use brixo_runtime::PlayerInput;
+
+/// The server's word is off our recent path by more than this: it moved
+/// us itself, so start again from where it says.
+const SNAP: f32 = 3.0;
+/// How much of our path to remember, in seconds (more than any sane lag).
+const HISTORY: f64 = 1.0;
+/// Drift smaller than this isn't worth correcting.
+const DEAD_ZONE: f32 = 0.03;
+/// How fast drift is eased out, per second (of what's left).
+const EASE: f32 = 10.0;
+
+pub struct Predictor {
+    physics: Physics,
+    me: Option<InstanceId>,
+    /// Where we've put the character, and when: newest last.
+    history: VecDeque<(f64, Vec3)>,
+    /// What we predict now: position, facing (degrees), speed, in the air.
+    now: Option<(Vec3, f32, f32, bool)>,
+    /// Where the server last had us.
+    last_server: Option<Vec3>,
+    base: Instant,
+}
+
+impl Default for Predictor {
+    fn default() -> Self {
+        Predictor { physics: Physics::new(), me: None, history: VecDeque::new(), now: None, last_server: None, base: Instant::now() }
+    }
+}
+
+fn sub(a: Vec3, b: Vec3) -> Vec3 {
+    Vec3::new(a.x - b.x, a.y - b.y, a.z - b.z)
+}
+
+fn dist(a: Vec3, b: Vec3) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt()
+}
+
+impl Predictor {
+    /// Starts over (a new game, or rejoining).
+    pub fn reset(&mut self) {
+        *self = Predictor::default();
+    }
+
+    /// Moves your character `me` on by `dt` seconds with `input` (and
+    /// shift lock's `facing`), starting from the world the server last sent.
+    pub fn step(&mut self, server: &DataModel, me: Option<InstanceId>, input: PlayerInput, facing: Option<f32>, dt: f32) {
+        self.step_at(server, me, input, facing, dt, Instant::now());
+    }
+
+    pub fn step_at(&mut self, server: &DataModel, me: Option<InstanceId>, input: PlayerInput, facing: Option<f32>, dt: f32, at: Instant) {
+        let t = at.saturating_duration_since(self.base).as_secs_f64();
+        let Some(me) = me else {
+            self.me = None;
+            self.now = None;
+            return;
+        };
+        if self.me != Some(me) {
+            self.reset();
+            self.me = Some(me);
+        }
+        let Some(said) = server.player(me) else {
+            self.now = None;
+            return;
+        };
+        // Knocked out: the server's in charge until you're back.
+        if said.dead > 0.0 || said.health <= 0.0 {
+            self.now = None;
+            self.history.clear();
+            return;
+        }
+        let server_at = said.body.position;
+        let server_still = self.last_server.is_some_and(|l| dist(l, server_at) < 0.001);
+        self.last_server = Some(server_at);
+
+        // A copy of the world to run the physics on, with us where we
+        // predicted (so the capsule carries on from there).
+        let mut world = server.clone();
+        let here = match self.now {
+            Some((p, ..)) => p,
+            None => server_at,
+        };
+        if let Some(p) = world.player_mut(me) {
+            p.body.position = here;
+        }
+
+        // Where are we, going by the server? Find where on our recent path
+        // it has us.
+        let nearest = self.history.iter().map(|(_, p)| (*p, dist(*p, server_at))).min_by(|a, b| a.1.total_cmp(&b.1));
+        let idle = input.move_x == 0.0 && input.move_z == 0.0 && !input.jump;
+        let predicted_still = self.now.is_some_and(|(.., speed, airborne)| speed < 0.01 && !airborne);
+        let fix = match nearest {
+            // Nowhere near where we've been: the server moved us. Start
+            // again from there (a teleport, which also stops any fall).
+            Some((_, d)) if d > SNAP => {
+                if let Some(p) = world.player_mut(me) {
+                    p.body.position = server_at;
+                }
+                self.history.clear();
+                None
+            }
+            // Both standing still: we should be exactly where it says.
+            _ if idle && server_still && predicted_still && dist(here, server_at) > DEAD_ZONE => Some(sub(server_at, here)),
+            // On the path, give or take a little drift: ease that out.
+            Some((p, d)) if d > DEAD_ZONE => Some(sub(server_at, p)),
+            _ => None,
+        };
+        // Sync the physics with the world first (so a nudge moves the
+        // capsule that's really there).
+        self.physics.step(&mut world, 0.0, &HashSet::new(), &HashMap::new());
+        if let Some(off) = fix {
+            let k = (EASE * dt).min(1.0);
+            let off = Vec3::new(off.x * k, off.y * k, off.z * k);
+            self.physics.nudge(&mut world, me, off);
+            for (_, h) in self.history.iter_mut() {
+                *h = Vec3::new(h.x + off.x, h.y + off.y, h.z + off.z);
+            }
+        }
+
+        self.physics.hold_facing(me, facing);
+        let inputs: HashMap<InstanceId, PlayerInput> = [(me, input)].into_iter().collect();
+        self.physics.step(&mut world, dt, &HashSet::new(), &inputs);
+        let Some(p) = world.player(me) else { return };
+        let predicted = p.body.position;
+        self.now = Some((predicted, p.body.rotation.y, p.speed, p.airborne));
+        self.history.push_back((t, predicted));
+        while self.history.front().is_some_and(|(when, _)| t - when > HISTORY) {
+            self.history.pop_front();
+        }
+    }
+
+    /// Draws your character where we predict, in `view` (the smoothed copy
+    /// of the server's world that's about to be drawn).
+    pub fn apply(&self, view: &mut DataModel) {
+        let (Some(me), Some((position, yaw, speed, airborne))) = (self.me, self.now) else { return };
+        if let Some(p) = view.player_mut(me) {
+            p.body.position = position;
+            p.body.rotation.y = yaw;
+            p.speed = speed;
+            p.airborne = airborne;
+        }
+    }
+
+    /// Where we predict your character is right now.
+    pub fn position(&self) -> Option<Vec3> {
+        self.now.map(|(p, ..)| p)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brixo_core::Class;
+    use brixo_runtime::Game;
+    use std::time::Duration;
+
+    fn arena() -> DataModel {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let floor = dm.create(Class::Part, "Floor", root).unwrap();
+        let p = dm.part_mut(floor).unwrap();
+        p.size = Vec3::new(200.0, 1.0, 200.0);
+        p.position = Vec3::new(0.0, -0.5, 0.0);
+        let wall = dm.create(Class::Part, "Wall", root).unwrap();
+        let w = dm.part_mut(wall).unwrap();
+        w.size = Vec3::new(40.0, 10.0, 1.0);
+        w.position = Vec3::new(0.0, 5.0, 25.0);
+        let spawn = dm.create(Class::SpawnLocation, "Spawn", root).unwrap();
+        dm.part_mut(spawn).unwrap().position = Vec3::new(0.0, 0.5, 0.0);
+        dm
+    }
+
+    /// A server that hears our keys `lag` frames late, and a predictor
+    /// that hears them straight away. Returns (predicted, server) each frame.
+    fn play(game: &mut Game, me: InstanceId, pred: &mut Predictor, frames: usize, lag: usize, keys: impl Fn(usize) -> PlayerInput) -> Vec<(Vec3, Vec3)> {
+        let start = Instant::now();
+        let mut out = Vec::new();
+        let mut queue: VecDeque<PlayerInput> = VecDeque::from(vec![PlayerInput::default(); lag]);
+        for f in 0..frames {
+            let input = keys(f);
+            queue.push_back(input);
+            game.set_input_for(me, queue.pop_front().unwrap());
+            game.step(1.0 / 60.0);
+            let server = game.world().clone();
+            pred.step_at(&server, Some(me), input, None, 1.0 / 60.0, start + Duration::from_secs_f64(f as f64 / 60.0));
+            out.push((pred.position().unwrap(), server.player(me).unwrap().body.position));
+        }
+        out
+    }
+
+    #[test]
+    fn your_character_moves_at_once_and_ends_up_where_the_server_says() {
+        let mut game = Game::start_server(arena());
+        let me = game.add_player("Ann");
+        for _ in 0..30 {
+            game.step(1.0 / 60.0);
+        }
+        let mut pred = Predictor::default();
+        let forward = PlayerInput { move_z: 1.0, ..Default::default() };
+        // 12 frames (200 ms) of lag: walk for a second, then stop.
+        let frames = play(&mut game, me, &mut pred, 150, 12, |f| if f < 60 { forward } else { PlayerInput::default() });
+        let (p5, s5) = frames[5];
+        assert!(p5.z > s5.z + 0.5, "moving at once, ahead of the server: predicted {p5:?}, server {s5:?}");
+        let (p_end, s_end) = *frames.last().unwrap();
+        assert!(dist(p_end, s_end) < 0.2, "both agree once stopped: predicted {p_end:?}, server {s_end:?}");
+        // Smooth all the way: never pulled back while walking.
+        for w in frames[..60].windows(2) {
+            assert!(w[1].0.z >= w[0].0.z - 1e-3, "pulled back: {:?} then {:?}", w[0].0, w[1].0);
+        }
+    }
+
+    #[test]
+    fn jumps_are_predicted_and_land_in_the_same_place() {
+        let mut game = Game::start_server(arena());
+        let me = game.add_player("Ann");
+        for _ in 0..30 {
+            game.step(1.0 / 60.0);
+        }
+        let mut pred = Predictor::default();
+        let jump = |f: usize| PlayerInput { move_x: 1.0, jump: f < 10, ..Default::default() };
+        let frames = play(&mut game, me, &mut pred, 120, 9, jump);
+        let (p8, s8) = frames[8];
+        assert!(p8.y > s8.y + 0.3, "up at once: {p8:?} vs {s8:?}");
+        let tail = play(&mut game, me, &mut pred, 60, 9, |_| PlayerInput::default());
+        let (p, s) = *tail.last().unwrap();
+        assert!(dist(p, s) < 0.2, "landed together: {p:?} {s:?}");
+    }
+
+    #[test]
+    fn walls_stop_the_predicted_character_too() {
+        let mut game = Game::start_server(arena());
+        let me = game.add_player("Ann");
+        let mut pred = Predictor::default();
+        let forward = PlayerInput { move_z: 1.0, ..Default::default() };
+        let frames = play(&mut game, me, &mut pred, 240, 6, |_| forward);
+        let (p, s) = *frames.last().unwrap();
+        assert!(p.z < 24.0 && s.z < 24.0, "neither walked through the wall: {p:?} {s:?}");
+        assert!(dist(p, s) < 0.3, "and they agree at the wall: {p:?} {s:?}");
+    }
+
+    #[test]
+    fn when_the_server_moves_you_prediction_follows() {
+        let mut game = Game::start_server(arena());
+        let me = game.add_player("Ann");
+        let mut pred = Predictor::default();
+        play(&mut game, me, &mut pred, 30, 6, |_| PlayerInput::default());
+        // A teleporter (a script) moves us far away.
+        game.world().player_mut(me).unwrap().body.position = Vec3::new(60.0, 3.5, -40.0);
+        let frames = play(&mut game, me, &mut pred, 10, 6, |_| PlayerInput::default());
+        let (p, s) = *frames.last().unwrap();
+        assert!(dist(p, s) < 0.5, "followed the teleport: {p:?} {s:?}");
+    }
+}

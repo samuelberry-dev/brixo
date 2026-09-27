@@ -28,7 +28,8 @@ function when(secs) {
 }
 
 const TABS = [["home", "/", "Home"], ["games", "/games", "Games"], ["avatar", "/avatar", "Character"],
-              ["profile", null, "Profile"], ["learn", "/learn", "Learn"], ["download", "/download", "Get Brixo"]];
+              ["profile", null, "Profile"], ["learn", "/learn", "Learn"], ["download", "/download", "Get Brixo"],
+              ["admin", "/admin", "Admin"]];
 
 // Draws the banner, tab bar and footer around the page. Returns the
 // logged-in user, or null.
@@ -54,6 +55,7 @@ async function shell(page) {
       href = `/users/${encodeURIComponent(me.username)}`;
     }
     if (key === "avatar" && !me) return "";
+    if (key === "admin" && !(me && me.admin)) return "";
     return `<a class="tab ${page === key ? "on" : ""}" href="${href}">${label}</a>`;
   }).join("");
   document.getElementById("nav").innerHTML = `<div class="tabs">${tabs}</div><div class="online" id="online"></div>`;

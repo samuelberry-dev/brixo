@@ -8,7 +8,9 @@
       "children": [
         1,
         2,
-        3
+        10,
+        11,
+        12
       ],
       "props": "Workspace"
     },
@@ -101,36 +103,36 @@
     {
       "id": 3,
       "class": "Part",
-      "name": "Part",
-      "parent": 0,
+      "name": "Coin",
+      "parent": 11,
       "children": [
         4
       ],
       "props": {
         "Part": {
           "position": {
-            "x": 0.0,
-            "y": 1.0,
-            "z": -8.0
+            "x": 6.0,
+            "y": 0.99999905,
+            "z": -11.0
           },
           "size": {
             "x": 2.0,
-            "y": 2.0,
+            "y": 0.5,
             "z": 2.0
           },
           "rotation": {
-            "x": 0.0,
+            "x": 90.0,
             "y": 0.0,
             "z": 0.0
           },
           "color": {
-            "r": 160,
-            "g": 160,
-            "b": 160
+            "r": 206,
+            "g": 174,
+            "b": 41
           },
           "anchored": false,
-          "can_collide": true,
-          "shape": "Block",
+          "can_collide": false,
+          "shape": "Cylinder",
           "material": "Plastic",
           "transparency": 0.0,
           "velocity": {
@@ -151,12 +153,48 @@
       "children": [],
       "props": {
         "Script": {
-          "source": "-- This script runs when you press Play.\n-- 'self' is the part it's inside.\n\nprint(\"Hello from \" + self.name)\n",
+          "source": "gone = false\n\non touched(other)\n    if other.class == \"player\" and not gone and other.coins != nil then\n        gone = true\n        other.coins += 1\n        for c in other.children do\n            if c.name == \"Coin Label\" then\n                c.text = \"Coins: \" + other.coins\n            end\n        end\n        play_sound(\"coin\", other)\n        destroy(self)\n    end\nend\n\nevery 0.03 seconds\n    self.rotation.y += 4\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 10,
+      "class": "Script",
+      "name": "Script",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- Coins: every player's coin count, and their label.\non player_joined(p)\n    p.coins = 0\n    label = create(\"TextLabel\", p)\n    label.name = \"Coin Label\"\n    label.text = \"Coins: 0\"\n    label.x = 0.02\n    label.y = 0.12\n    label.width = 0.14\n    label.height = 0.06\n    label.text_size = 24\n    label.background = true\n    label.background_color = {r = 30, g = 30, b = 30}\n    label.text_color = {r = 245, g = 205, b = 48}\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 11,
+      "class": "Folder",
+      "name": "Storage",
+      "parent": 0,
+      "children": [
+        3
+      ],
+      "props": "Folder"
+    },
+    {
+      "id": 12,
+      "class": "Script",
+      "name": "Script",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- A new coin at a random spot every 2 seconds, up to 25 at a time.\ncoins_folder = create(\"Folder\", find(\"Workspace\"))\ncoins_folder.name = \"Coins\"\n\nevery 2 seconds\n    if len(coins_folder.children) < 25 then\n        coin = clone(find(\"Coin Template\"))\n        coin.name = \"Coin\"\n        coin.position = {x = random(-50, 50), y = 3, z = random(-50, 50)}\n        coin.parent = coins_folder\n    end\nend",
           "enabled": true
         }
       }
     }
   ],
-  "next_id": 5,
+  "next_id": 13,
   "root": 0
 }

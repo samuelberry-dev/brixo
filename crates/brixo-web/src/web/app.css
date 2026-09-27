@@ -243,3 +243,14 @@ ol.steps { margin: 4px 0 8px 18px; padding: 0; } ol.steps li { margin-bottom: 4p
 .doc .toc ul { padding-left: 16px; margin: 4px 0 0; }
 .doc .pager { clear: both; display: flex; justify-content: space-between; border-top: 1px solid #dbe7f4; margin-top: 20px; padding-top: 10px; font-weight: bold; }
 .doc .pager .next { margin-left: auto; }
+
+/* --- admin ------------------------------------------------------------------ */
+table.admin { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 6px; }
+table.admin th { background: var(--soft); color: var(--navy); text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+table.admin td { padding: 5px 6px; border-bottom: 1px dotted #c3d4e8; vertical-align: middle; }
+table.admin tr.off td { color: var(--dim); background: #f6f7f9; }
+table.admin td:last-child { text-align: right; white-space: nowrap; }
+.tag { display: inline-block; font-size: 9.5px; font-weight: bold; text-transform: uppercase; padding: 0 5px; margin-left: 4px;
+  border-radius: 2px; background: #c4281c; color: #fff; vertical-align: 1px; }
+.tag.gold { background: var(--gold); color: #3b2c00; }
+input.find { width: 100%; font: 12px Verdana, sans-serif; padding: 5px; border: 1px solid #9ab3cd; border-radius: 2px; }

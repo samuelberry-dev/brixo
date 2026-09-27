@@ -115,3 +115,7 @@ end
 ## Spending coins
 
 Coins are just a custom field, `p.coins`, so spending them is subtraction. See [A shop](howto-shop).
+
+## Keeping coins between visits
+
+Coins reset every time a player leaves. To keep them, [save them](howto-saving): load them in `on player_joined`, save them in `on player_left`.

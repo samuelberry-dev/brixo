@@ -311,3 +311,67 @@ fn disabled_scripts_do_not_run() {
 fn script_log(game: &Game) -> Vec<LogLine> {
     game.take_log().into_iter().filter(|l| l.source != "Brixo").collect()
 }
+
+#[test]
+fn saved_data_survives_leaving_and_coming_back() {
+    use std::sync::Arc;
+    let store = Arc::new(brixo_runtime::MemoryStore::default());
+    let scene = || {
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let s = dm.create(Class::Script, "Coins", root).unwrap();
+        dm.script_mut(s).unwrap().source = "on player_joined(p)\n    p.coins = load(p, \"coins\") or 0\n    p.visits = (load(p, \"stats\") or {visits = 0}).visits + 1\n    save(p, \"stats\", {visits = p.visits, best = [1, 2, 3], name = p.name})\nend\non player_left(p)\n    save(p, \"coins\", p.coins)\nend\n".into();
+        dm
+    };
+    let coins = |g: &Game, p| match g.world().get(p).unwrap().attributes.get("coins") {
+        Some(brixo_core::Attribute::Num(n)) => *n,
+        other => panic!("coins: {other:?}"),
+    };
+    // First visit: nothing saved yet.
+    let mut game = Game::start_server(scene());
+    game.set_save_store(store.clone());
+    let ann = game.add_player_saved("Ann", None, Some("user-7"));
+    game.step(0.1);
+    assert_eq!(coins(&game, ann), 0.0);
+    game.world().get_mut(ann).unwrap().attributes.insert("coins".into(), brixo_core::Attribute::Num(42.0));
+    game.remove_player(ann);
+    let errors: Vec<String> = game.take_log().into_iter().filter(|l| l.is_error).map(|l| l.text).collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    drop(game);
+    // A new server later: Ann (the same account, another name) has her coins.
+    let mut game = Game::start_server(scene());
+    game.set_save_store(store.clone());
+    let ann = game.add_player_saved("Ann2", None, Some("user-7"));
+    game.step(0.1);
+    assert_eq!(coins(&game, ann), 42.0);
+    let visits = match game.world().get(ann).unwrap().attributes.get("visits") {
+        Some(brixo_core::Attribute::Num(n)) => *n,
+        other => panic!("visits: {other:?}"),
+    };
+    assert_eq!(visits, 2.0, "maps and lists come back too");
+    // Someone else's data is their own.
+    let bob = game.add_player_saved("Bob", None, Some("user-9"));
+    game.step(0.1);
+    assert_eq!(coins(&game, bob), 0.0);
+}
+
+#[test]
+fn save_explains_what_it_cant_keep() {
+    let mut dm = DataModel::new();
+    let root = dm.root();
+    let s = dm.create(Class::Script, "Bad", root).unwrap();
+    dm.script_mut(s).unwrap().source = "on player_joined(p)\n    save(p, \"where\", p)\nend\n".into();
+    let mut game = Game::start(dm);
+    game.step(0.1);
+    let errors: Vec<String> = game.take_log().into_iter().filter(|l| l.is_error).map(|l| l.text).collect();
+    assert!(errors.iter().any(|e| e.contains("can't save a part or a player")), "{errors:?}");
+    // Too much: one player gets 64 KB in a game.
+    let mut dm = DataModel::new();
+    let root = dm.root();
+    let s = dm.create(Class::Script, "Big", root).unwrap();
+    dm.script_mut(s).unwrap().source = "on player_joined(p)\n    big = \"\"\n    for i in 1..700 do\n        big = big + \"0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\"\n    end\n    save(p, \"big\", big)\nend\n".into();
+    let mut game = Game::start(dm);
+    game.step(0.1);
+    let errors: Vec<String> = game.take_log().into_iter().filter(|l| l.is_error).map(|l| l.text).collect();
+    assert!(errors.iter().any(|e| e.contains("too much to save")), "{errors:?}");
+}

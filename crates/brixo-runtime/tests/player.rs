@@ -369,3 +369,25 @@ fn setting_a_players_velocity_launches_them_like_a_jump_pad() {
     assert!((end.y - start.y).abs() < 1.0, "landed again: y = {}", end.y);
     assert!(log_texts(&game).iter().all(|l| !l.contains("error")));
 }
+
+#[test]
+fn shift_lock_keeps_you_facing_the_camera_while_you_walk_sideways() {
+    let mut game = Game::start(arena());
+    idle(&mut game, 0.3);
+    let me = game.player_id().unwrap();
+    let facing = |game: &Game| game.world().player(me).unwrap().body.rotation.y;
+    // Walking sideways (+x) normally turns you to face +x (90 degrees)...
+    run(&mut game, 0.3, PlayerInput { move_x: 1.0, ..Default::default() });
+    assert!((facing(&game) - 90.0).abs() < 1.0, "faces where it walks: {}", facing(&game));
+    // ...but with shift lock it keeps facing the camera's way (here +z, 0)
+    // and strafes.
+    game.set_facing(Some(0.0));
+    let x0 = pos(&game).x;
+    run(&mut game, 0.5, PlayerInput { move_x: 1.0, ..Default::default() });
+    assert!(facing(&game).abs() < 1.0, "still faces +z: {}", facing(&game));
+    assert!(pos(&game).x > x0 + 3.0, "and still walks sideways");
+    // Off again: back to facing where it walks.
+    game.set_facing(None);
+    run(&mut game, 0.3, PlayerInput { move_x: -1.0, ..Default::default() });
+    assert!((facing(&game).rem_euclid(360.0) - 270.0).abs() < 1.0, "faces -x: {}", facing(&game));
+}

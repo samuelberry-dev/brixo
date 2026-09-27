@@ -39,6 +39,31 @@ pub struct User {
     pub blurb: String,
     /// When they joined (Unix seconds; 0 for accounts from before this was kept).
     pub created: i64,
+    /// Can use the admin page (ban accounts, take games down).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub admin: bool,
+}
+
+/// An account, as the admin page lists it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminUser {
+    pub username: String,
+    pub created: i64,
+    pub banned: bool,
+    pub admin: bool,
+    pub games: i64,
+}
+
+/// A game, as the admin page lists it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminGame {
+    pub id: i64,
+    pub name: String,
+    pub owner: String,
+    pub visits: i64,
+    pub created: i64,
+    pub hidden: bool,
+    pub owner_banned: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +82,9 @@ pub struct GameRow {
 pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
+
+/// Games anyone can see and play: not taken down, and not by a banned account.
+const LISTED: &str = "g.hidden = 0 AND u.banned = 0";
 
 const GAME_COLUMNS: &str = "g.id, g.name, u.username, g.description, g.visits, g.created, g.thumbnail IS NOT NULL";
 
@@ -99,7 +127,7 @@ pub fn random_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-const USER_COLUMNS: &str = "id, username, avatar, blurb, created";
+const USER_COLUMNS: &str = "id, username, avatar, blurb, created, admin";
 
 fn user_from_row(r: &rusqlite::Row) -> rusqlite::Result<User> {
     let avatar: String = r.get(2)?;
@@ -109,6 +137,7 @@ fn user_from_row(r: &rusqlite::Row) -> rusqlite::Result<User> {
         avatar: serde_json::from_str(&avatar).unwrap_or_default(),
         blurb: r.get(3)?,
         created: r.get(4)?,
+        admin: r.get::<_, i64>(5)? != 0,
     })
 }
 
@@ -152,6 +181,13 @@ impl Db {
                  data TEXT NOT NULL,
                  UNIQUE(name, owner_id)
              );
+             CREATE TABLE IF NOT EXISTS saves (
+                 game_id INTEGER NOT NULL REFERENCES games(id),
+                 user_id INTEGER NOT NULL REFERENCES users(id),
+                 data TEXT NOT NULL,
+                 updated INTEGER NOT NULL,
+                 PRIMARY KEY (game_id, user_id)
+             );
              CREATE TABLE IF NOT EXISTS invites (
                  code TEXT PRIMARY KEY,
                  created INTEGER NOT NULL,
@@ -167,6 +203,10 @@ impl Db {
         add_column(&conn, "games", "visits", "INTEGER NOT NULL DEFAULT 0")?;
         add_column(&conn, "games", "created", "INTEGER NOT NULL DEFAULT 0")?;
         add_column(&conn, "games", "thumbnail", "BLOB")?;
+        // Moderation: banned accounts, site admins, and games taken down.
+        add_column(&conn, "users", "banned", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&conn, "users", "admin", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&conn, "games", "hidden", "INTEGER NOT NULL DEFAULT 0")?;
         Ok(Db(Mutex::new(conn)))
     }
 
@@ -179,7 +219,7 @@ impl Db {
             "INSERT INTO users (username, password_hash, avatar, created) VALUES (?1, ?2, ?3, ?4)",
             params![username, password_hash, serde_json::to_string(&avatar).unwrap(), created],
         )?;
-        Ok(User { id: conn.last_insert_rowid(), username: username.to_string(), avatar, blurb: String::new(), created })
+        Ok(User { id: conn.last_insert_rowid(), username: username.to_string(), avatar, blurb: String::new(), created, admin: false })
     }
 
     /// Makes an account with an invite code, using the code up. Ok(None)
@@ -205,7 +245,7 @@ impl Db {
         let id = tx.last_insert_rowid();
         tx.execute("UPDATE invites SET used_by = ?1, used_at = ?2 WHERE code = ?3", params![id, created, code])?;
         tx.commit()?;
-        Ok(Some(User { id, username: username.to_string(), avatar, blurb: String::new(), created }))
+        Ok(Some(User { id, username: username.to_string(), avatar, blurb: String::new(), created, admin: false }))
     }
 
     /// Makes `count` new invite codes.
@@ -259,7 +299,72 @@ impl Db {
 
     pub fn user_by_name(&self, name: &str) -> rusqlite::Result<Option<User>> {
         let conn = self.0.lock().unwrap();
-        conn.query_row(&format!("SELECT {USER_COLUMNS} FROM users WHERE username = ?1"), [name], user_from_row).optional()
+        conn.query_row(&format!("SELECT {USER_COLUMNS} FROM users WHERE username = ?1 AND banned = 0"), [name], user_from_row).optional()
+    }
+
+    pub fn is_banned(&self, id: i64) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn.query_row("SELECT banned FROM users WHERE id = ?1", [id], |r| r.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0)
+    }
+
+    /// Bans or unbans an account (a ban also logs them out everywhere).
+    /// Gives back their id, or None if there's no such account.
+    pub fn set_banned(&self, username: &str, banned: bool) -> rusqlite::Result<Option<i64>> {
+        let conn = self.0.lock().unwrap();
+        let Some(id) = conn.query_row("SELECT id FROM users WHERE username = ?1", [username], |r| r.get::<_, i64>(0)).optional()? else {
+            return Ok(None);
+        };
+        conn.execute("UPDATE users SET banned = ?1 WHERE id = ?2", params![banned as i64, id])?;
+        if banned {
+            conn.execute("DELETE FROM sessions WHERE user_id = ?1", [id])?;
+        }
+        Ok(Some(id))
+    }
+
+    /// Makes someone a site admin (or not). False if there's no such account.
+    pub fn set_admin(&self, username: &str, admin: bool) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn.execute("UPDATE users SET admin = ?1 WHERE username = ?2", params![admin as i64, username])? > 0)
+    }
+
+    /// Takes a game down (or puts it back). False if there's no such game.
+    pub fn set_hidden(&self, game_id: i64, hidden: bool) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn.execute("UPDATE games SET hidden = ?1 WHERE id = ?2", params![hidden as i64, game_id])? > 0)
+    }
+
+    /// For the admin page: the newest accounts, with their game counts.
+    pub fn admin_users(&self, limit: i64) -> rusqlite::Result<Vec<AdminUser>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare(
+            "SELECT u.username, u.created, u.banned, u.admin, (SELECT COUNT(*) FROM games g WHERE g.owner_id = u.id)
+             FROM users u ORDER BY u.id DESC LIMIT ?1",
+        )?;
+        let rows = q.query_map([limit], |r| {
+            Ok(AdminUser { username: r.get(0)?, created: r.get(1)?, banned: r.get::<_, i64>(2)? != 0, admin: r.get::<_, i64>(3)? != 0, games: r.get(4)? })
+        })?;
+        rows.collect()
+    }
+
+    /// For the admin page: the newest games, taken down or not.
+    pub fn admin_games(&self, limit: i64) -> rusqlite::Result<Vec<AdminGame>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare(
+            "SELECT g.id, g.name, u.username, g.visits, g.created, g.hidden, u.banned FROM games g JOIN users u ON u.id = g.owner_id
+             ORDER BY g.id DESC LIMIT ?1",
+        )?;
+        let rows = q.query_map([limit], |r| {
+            Ok(AdminGame {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                owner: r.get(2)?,
+                visits: r.get(3)?,
+                created: r.get(4)?,
+                hidden: r.get::<_, i64>(5)? != 0,
+                owner_banned: r.get::<_, i64>(6)? != 0,
+            })
+        })?;
+        rows.collect()
     }
 
     pub fn new_session(&self, user_id: i64) -> rusqlite::Result<String> {
@@ -274,8 +379,8 @@ impl Db {
     pub fn session_user(&self, token: &str) -> rusqlite::Result<Option<User>> {
         let conn = self.0.lock().unwrap();
         conn.query_row(
-            "SELECT u.id, u.username, u.avatar, u.blurb, u.created FROM sessions s JOIN users u ON u.id = s.user_id
-             WHERE s.token = ?1 AND s.created >= ?2",
+            "SELECT u.id, u.username, u.avatar, u.blurb, u.created, u.admin FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.token = ?1 AND s.created >= ?2 AND u.banned = 0",
             params![token, now() - SESSION_DAYS * 86400],
             user_from_row,
         )
@@ -314,21 +419,21 @@ impl Db {
 
     pub fn games(&self) -> rusqlite::Result<Vec<GameRow>> {
         let conn = self.0.lock().unwrap();
-        let mut q = conn.prepare(&format!("SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id ORDER BY g.id"))?;
+        let mut q = conn.prepare(&format!("SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id WHERE {LISTED} ORDER BY g.id"))?;
         let rows = q.query_map([], game_from_row)?;
         rows.collect()
     }
 
     pub fn game(&self, id: i64) -> rusqlite::Result<Option<GameRow>> {
         let conn = self.0.lock().unwrap();
-        conn.query_row(&format!("SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id WHERE g.id = ?1"), [id], game_from_row)
+        conn.query_row(&format!("SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id WHERE g.id = ?1 AND {LISTED}"), [id], game_from_row)
             .optional()
     }
 
     pub fn games_by(&self, owner_id: i64) -> rusqlite::Result<Vec<GameRow>> {
         let conn = self.0.lock().unwrap();
         let mut q = conn.prepare(&format!(
-            "SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id WHERE g.owner_id = ?1 ORDER BY g.id"
+            "SELECT {GAME_COLUMNS} FROM games g JOIN users u ON u.id = g.owner_id WHERE g.owner_id = ?1 AND {LISTED} ORDER BY g.id"
         ))?;
         let rows = q.query_map([owner_id], game_from_row)?;
         rows.collect()
@@ -362,8 +467,23 @@ impl Db {
     pub fn counts(&self) -> rusqlite::Result<(i64, i64)> {
         let conn = self.0.lock().unwrap();
         let users: i64 = conn.query_row("SELECT COUNT(*) FROM users WHERE username != 'Brixo'", [], |r| r.get(0))?;
-        let games: i64 = conn.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0))?;
+        let games: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM games g JOIN users u ON u.id = g.owner_id WHERE {LISTED}"), [], |r| r.get(0))?;
         Ok((users, games))
+    }
+
+    /// A player's saved data in a game (what its scripts save()d), as JSON.
+    pub fn player_save(&self, game_id: i64, user_id: i64) -> rusqlite::Result<Option<String>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row("SELECT data FROM saves WHERE game_id = ?1 AND user_id = ?2", [game_id, user_id], |r| r.get(0)).optional()
+    }
+
+    pub fn set_player_save(&self, game_id: i64, user_id: i64, data: &str) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO saves (game_id, user_id, data, updated) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(game_id, user_id) DO UPDATE SET data = excluded.data, updated = excluded.updated",
+            params![game_id, user_id, data, now()],
+        )?;
+        Ok(())
     }
 
     /// The saved game itself. Only the website and its game servers read

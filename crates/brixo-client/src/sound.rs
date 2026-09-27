@@ -33,6 +33,13 @@ impl Audio {
         Audio { speaker: brixo_audio::Speaker::new(), pending_music: None, log, start: Instant::now() }
     }
 
+    /// The player's volume settings (0 to 1) for sound effects and music.
+    pub fn set_levels(&mut self, sounds: f32, music: f32) {
+        if let Some(s) = &mut self.speaker {
+            s.set_levels(sounds, music);
+        }
+    }
+
     /// Plays a cue that may name one of the game's own Sounds ("#id").
     pub fn cue_with(&mut self, cue: &Cue, lookup: SoundLookup) {
         let custom = |name: &str| name.strip_prefix('#').and_then(|id| id.parse::<u64>().ok());

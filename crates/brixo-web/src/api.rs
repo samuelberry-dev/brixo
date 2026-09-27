@@ -99,6 +99,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/games/:id/play", post(play))
         .route("/api/users/:name", get(profile))
         .route("/api/version", get(version))
+        .route("/api/admin", get(admin_overview))
+        .route("/api/admin/ban", post(admin_ban))
+        .route("/api/admin/hide", post(admin_hide))
         .route("/files/:name", get(download_file))
         .route("/", get(|| async { Html(include_str!("web/index.html")) }))
         .route("/games", get(|| async { Html(include_str!("web/games.html")) }))
@@ -116,6 +119,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/login", get(|| async { Html(include_str!("web/login.html")) }))
         .route("/signup", get(|| async { Html(include_str!("web/signup.html")) }))
         .route("/avatar", get(|| async { Html(include_str!("web/avatar.html")) }))
+        .route("/admin", get(|| async { Html(include_str!("web/admin.html")) }))
         .route("/favicon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("web/favicon.svg")) }))
         .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("web/app.css")) }))
         .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript")], include_str!("web/app.js")) }))
@@ -319,6 +323,9 @@ async fn login(
     let right = tokio::task::spawn_blocking(move || verify(&password, &h)).await.map_err(oops)?;
     if !right {
         return Err(failed());
+    }
+    if app.db.is_banned(id).map_err(oops)? {
+        return Err(ApiError(StatusCode::FORBIDDEN, "this account has been banned".into()));
     }
     let u = app.db.user(id).map_err(oops)?.ok_or_else(wrong)?;
     let token = app.db.new_session(id).map_err(oops)?;
@@ -565,12 +572,16 @@ async fn play(State(app): State<Arc<App>>, headers: HeaderMap, Path(game_id): Pa
     if !app.limits.take(&format!("play:{}", u.id), limits::PLAYS) {
         return Err(slow_down());
     }
+    // Taken down (or by a banned account): as if it isn't there.
+    if app.db.game(game_id).map_err(oops)?.is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "no such game".into()));
+    }
     let data = app.db.game_data(game_id).map_err(oops)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such game".into()))?;
     let port = app
         .servers
         .port_for(game_id, app.network.ports, |port| {
             let model = DataModel::from_json(&data).map_err(std::io::Error::other)?;
-            brixo_server::start_with_tickets(model, port, ticket_check(app.clone(), game_id))
+            brixo_server::start_for_site(model, port, ticket_check(app.clone(), game_id), Arc::new(SiteSaves { app: app.clone(), game_id }))
         })
         .map_err(|e| {
             if crate::servers::all_busy(&e) {
@@ -589,9 +600,31 @@ async fn play(State(app): State<Arc<App>>, headers: HeaderMap, Path(game_id): Pa
 fn ticket_check(app: Arc<App>, game_id: i64) -> brixo_server::TicketCheck {
     Arc::new(move |ticket: &str| {
         let user_id = app.tickets.redeem(ticket, game_id)?;
+        if app.db.is_banned(user_id).unwrap_or(true) {
+            return None;
+        }
         let u = app.db.user(user_id).ok()??;
-        Some(brixo_server::Identity { name: u.username, look: look_of(&u.avatar) })
+        Some(brixo_server::Identity { name: u.username, look: look_of(&u.avatar), save_key: Some(u.id.to_string()) })
     })
+}
+
+/// Where a website game keeps its players' saved data (save/load): the
+/// saves table, one row per game and account (the key is the account id).
+struct SiteSaves {
+    app: Arc<App>,
+    game_id: i64,
+}
+
+impl brixo_runtime::SaveStore for SiteSaves {
+    fn load(&self, key: &str) -> Option<String> {
+        let user: i64 = key.parse().ok()?;
+        self.app.db.player_save(self.game_id, user).ok().flatten()
+    }
+    fn save(&self, key: &str, data: &str) {
+        if let Ok(user) = key.parse::<i64>() {
+            let _ = self.app.db.set_player_save(self.game_id, user, data);
+        }
+    }
 }
 
 pub fn look_of(a: &Avatar) -> brixo_runtime::Look {
@@ -656,8 +689,10 @@ mod tests {
 
     #[test]
     fn usernames_are_checked() {
-        assert!(check_username("Ann_2").is_ok());
-        for bad in ["ab", "has space", "way_too_long_for_a_username", "noob", "shut_up"] {
+        for fine in ["Ann_2", "NoobSlayer", "noob", "Dickens", "Classy_Bass"] {
+            assert!(check_username(fine).is_ok(), "{fine} was refused");
+        }
+        for bad in ["ab", "has space", "way_too_long_for_a_username", "shithead", "fuck_you", "k_y_s"] {
             assert!(check_username(bad).is_err(), "{bad} was allowed");
         }
     }
@@ -668,3 +703,69 @@ mod tests {
         assert!(verify("correct horse", &h) && !verify("wrong", &h));
     }
 }
+
+// --- admin -----------------------------------------------------------------
+
+/// Only site admins (`brixo-web admin NAME` makes one).
+fn admin(app: &App, headers: &HeaderMap) -> Result<User> {
+    let u = user(app, headers)?;
+    if !u.admin {
+        return Err(ApiError(StatusCode::FORBIDDEN, "admins only".into()));
+    }
+    Ok(u)
+}
+
+#[derive(Serialize)]
+struct AdminOverview {
+    users: Vec<crate::db::AdminUser>,
+    games: Vec<crate::db::AdminGame>,
+}
+
+async fn admin_overview(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<AdminOverview>> {
+    admin(&app, &headers)?;
+    Ok(Json(AdminOverview { users: app.db.admin_users(200).map_err(oops)?, games: app.db.admin_games(200).map_err(oops)? }))
+}
+
+#[derive(Deserialize)]
+struct BanRequest {
+    username: String,
+    banned: bool,
+}
+
+/// Bans (or unbans) an account: logged out, kept out of games (and sent
+/// out of any they're in), their games and profile hidden.
+async fn admin_ban(State(app): State<Arc<App>>, headers: HeaderMap, Json(b): Json<BanRequest>) -> Result<StatusCode> {
+    let me = admin(&app, &headers)?;
+    if b.username.eq_ignore_ascii_case(&me.username) || b.username.eq_ignore_ascii_case("Brixo") {
+        return Err(bad("you can't ban that account"));
+    }
+    match app.db.set_banned(&b.username, b.banned).map_err(oops)? {
+        None => Err(ApiError(StatusCode::NOT_FOUND, "no such account".into())),
+        Some(_) => {
+            if b.banned {
+                app.servers.kick_everywhere(&b.username);
+            }
+            Ok(StatusCode::NO_CONTENT)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct HideRequest {
+    id: i64,
+    hidden: bool,
+}
+
+/// Takes a game down (or puts it back). A game taken down disappears from
+/// the site and its server shuts.
+async fn admin_hide(State(app): State<Arc<App>>, headers: HeaderMap, Json(h): Json<HideRequest>) -> Result<StatusCode> {
+    admin(&app, &headers)?;
+    if !app.db.set_hidden(h.id, h.hidden).map_err(oops)? {
+        return Err(ApiError(StatusCode::NOT_FOUND, "no such game".into()));
+    }
+    if h.hidden {
+        app.servers.stop(h.id);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+

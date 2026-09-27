@@ -32,6 +32,11 @@ pub enum ToServer {
     ActivateAt { x: f32, y: f32, z: f32 },
     /// Said something in chat.
     Chat { text: String },
+    /// Shift lock: face this way (radians around Y, 0 = +Z: where the
+    /// camera looks) whichever way you walk. None switches it off.
+    Face { yaw: Option<f32> },
+    /// Reset character: knock me out, so I come back at a spawn (stuck).
+    Reset,
 }
 
 /// Server -> player.

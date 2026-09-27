@@ -228,6 +228,9 @@ pub struct Speaker {
     handle: rodio::OutputStreamHandle,
     music: Option<Playing>,
     cache: HashMap<String, Arc<Vec<f32>>>,
+    /// The player's own volume settings, 0 to 1 (1 is Brixo's normal mix).
+    sound_level: f32,
+    music_level: f32,
 }
 
 /// The song that's playing: what it is, when (in its own time) it started,
@@ -239,6 +242,8 @@ struct Playing {
     length: Option<std::time::Duration>,
     /// Bumped to call off a fade-in that's still going.
     fading: Arc<std::sync::atomic::AtomicUsize>,
+    /// Its volume before the player's music setting.
+    base: f32,
 }
 
 /// How long switching songs takes: the old one fades out as the new one
@@ -285,7 +290,18 @@ pub const MUSIC_VOLUME: f32 = 0.35;
 impl Speaker {
     pub fn new() -> Option<Speaker> {
         let (stream, handle) = rodio::OutputStream::try_default().ok()?;
-        Some(Speaker { _stream: stream, handle, music: None, cache: HashMap::new() })
+        Some(Speaker { _stream: stream, handle, music: None, cache: HashMap::new(), sound_level: 1.0, music_level: 1.0 })
+    }
+
+    /// The player's volume settings for sound effects and music (0 to 1).
+    /// The music that's playing changes at once.
+    pub fn set_levels(&mut self, sounds: f32, music: f32) {
+        self.sound_level = sounds.clamp(0.0, 1.0);
+        self.music_level = music.clamp(0.0, 1.0);
+        if let Some(m) = &self.music {
+            m.fading.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            m.sink.set_volume(m.base * self.music_level);
+        }
     }
 
     fn samples(&mut self, key: &str, make: impl FnOnce() -> Option<Vec<f32>>) -> Option<Arc<Vec<f32>>> {
@@ -301,13 +317,13 @@ impl Speaker {
     pub fn play(&mut self, name: &str) {
         let Some(s) = self.samples(name, || sound(name)) else { return };
         let buf = rodio::buffer::SamplesBuffer::new(1, RATE, s.to_vec());
-        let _ = self.handle.play_raw(rodio::Source::amplify(buf, SOUND_VOLUME));
+        let _ = self.handle.play_raw(rodio::Source::amplify(buf, SOUND_VOLUME * self.sound_level));
     }
 
     /// Plays an audio file (mp3, wav or ogg) once, at `volume` (0 to 1).
     pub fn play_file(&mut self, bytes: Arc<Vec<u8>>, volume: f32) {
         if let Ok(source) = rodio::Decoder::new(std::io::Cursor::new(bytes.to_vec())) {
-            let _ = self.handle.play_raw(rodio::Source::amplify(rodio::Source::convert_samples::<f32>(source), volume * SOUND_VOLUME));
+            let _ = self.handle.play_raw(rodio::Source::amplify(rodio::Source::convert_samples::<f32>(source), volume * SOUND_VOLUME * self.sound_level));
         }
     }
 
@@ -336,7 +352,8 @@ impl Speaker {
         };
         let looped = rodio::Source::repeat_infinite(rodio::Source::buffered(source));
         sink.append(rodio::Source::skip_duration(looped, offset));
-        let target = volume * MUSIC_VOLUME * 2.0;
+        let base = volume * MUSIC_VOLUME * 2.0;
+        let target = base * self.music_level;
         let sink = Arc::new(sink);
         let fading = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         if old.is_some() {
@@ -346,7 +363,7 @@ impl Speaker {
             sink.set_volume(target);
         }
         let started = std::time::Instant::now().checked_sub(offset).unwrap_or_else(std::time::Instant::now);
-        self.music = Some(Playing { key: key.to_string(), sink, started, length, fading });
+        self.music = Some(Playing { key: key.to_string(), sink, started, length, fading, base });
     }
 
     /// Loops a music track (None stops the music). Asking for the track
@@ -361,9 +378,9 @@ impl Speaker {
         let Ok(sink) = rodio::Sink::try_new(&self.handle) else { return };
         let buf = rodio::buffer::SamplesBuffer::new(1, RATE, s.to_vec());
         sink.append(rodio::Source::repeat_infinite(buf));
-        sink.set_volume(MUSIC_VOLUME);
+        sink.set_volume(MUSIC_VOLUME * self.music_level);
         let fading = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        self.music = Some(Playing { key: name.to_string(), sink: Arc::new(sink), started: std::time::Instant::now(), length: None, fading });
+        self.music = Some(Playing { key: name.to_string(), sink: Arc::new(sink), started: std::time::Instant::now(), length: None, fading, base: MUSIC_VOLUME });
     }
 }
 

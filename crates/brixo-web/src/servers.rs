@@ -156,6 +156,19 @@ impl Servers {
         self.running.lock().unwrap().contains_key(&game_id)
     }
 
+    /// Shuts a game's server down now (a game taken down).
+    pub fn stop(&self, game_id: i64) {
+        // Dropping the handle stops it.
+        self.running.lock().unwrap().remove(&game_id);
+    }
+
+    /// Sends a player (a banned account) out of every game.
+    pub fn kick_everywhere(&self, name: &str) {
+        for r in self.running.lock().unwrap().values() {
+            r.handle.kick(name);
+        }
+    }
+
     /// Shuts down servers that have been empty for `idle`.
     pub fn reap(&self, idle: Duration) {
         let mut running = self.running.lock().unwrap();

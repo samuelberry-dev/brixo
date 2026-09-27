@@ -24,6 +24,15 @@ Every function built into Brixo. For events (`on ...`) see [Events](ref-events).
 | `play_music(name or sound, player)` | Just for that player. |
 | `stop_music()`, `stop_music(player)` | Fades the music out. |
 
+## Saving
+
+Kept for each player in each game, between visits. See [Saving player data](howto-saving).
+
+| Function | What it does |
+|---|---|
+| `save(player, name, value)` | Keeps `value` (a number, text, true/false, or a list or map of them) for this player under `name`. `nil` forgets it. Up to 64 KB per player per game. |
+| `load(player, name)` | What was saved under `name` for this player, or `nil`. |
+
 ## Waiting
 
 | Function | What it does |

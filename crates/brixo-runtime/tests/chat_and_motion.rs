@@ -30,22 +30,25 @@ fn chat_is_trimmed_filtered_capped_and_rate_limited() {
     assert_eq!(game.chat(ann, "  hello there!  ").as_deref(), Some("hello there!"));
     assert_eq!(game.chat(ann, "too fast"), None, "spam limit");
     run(&mut game, 0.5);
-    assert_eq!(game.chat(ann, "you NOOB, shut up").as_deref(), Some("you ####, #######"));
+    assert_eq!(game.chat(ann, "you NOOB, shut up").as_deref(), Some("you NOOB, shut up"), "gaming talk is fine");
+    run(&mut game, 0.5);
+    assert_eq!(game.chat(ann, "FUCK off").as_deref(), Some("#### off"));
     run(&mut game, 0.5);
     let long = "a".repeat(500);
     assert_eq!(game.chat(ann, &long).unwrap().len(), 120);
     run(&mut game, 0.5);
     assert_eq!(game.chat(ann, "   "), None, "nothing to say");
     let got: Vec<String> = game.take_chat().into_iter().map(|(_, name, t)| format!("{name}: {t}")).collect();
-    assert_eq!(got.len(), 3);
+    assert_eq!(got.len(), 4);
     assert_eq!(got[0], "Ann: hello there!");
 }
 
 #[test]
 fn the_filter_only_matches_whole_words() {
     assert_eq!(filter_chat("hello, shellfish and class"), "hello, shellfish and class");
-    assert_eq!(filter_chat("HELL yes"), "#### yes");
-    assert_eq!(filter_chat("stupid!"), "######!");
+    // Mild words get through; real swearing doesn't, in any case.
+    assert_eq!(filter_chat("HELL yes, gg noob"), "HELL yes, gg noob");
+    assert_eq!(filter_chat("SHIT!"), "####!");
 }
 
 #[test]

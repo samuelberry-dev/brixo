@@ -26,6 +26,8 @@ pub struct NetClient {
     /// The game's Sounds' audio files, as the server sends them.
     pub assets: std::collections::HashMap<InstanceId, std::sync::Arc<Vec<u8>>>,
     last_input: Option<PlayerInput>,
+    /// The shift-lock facing last sent.
+    last_facing: Option<f32>,
 }
 
 impl NetClient {
@@ -56,7 +58,7 @@ impl NetClient {
             // Dropping tx tells poll() the server has gone.
         })?;
 
-        Ok(NetClient { writer, incoming, world: DataModel::new(), me: None, connected: true, cues: Vec::new(), chat: Vec::new(), assets: Default::default(), last_input: None })
+        Ok(NetClient { writer, incoming, world: DataModel::new(), me: None, connected: true, cues: Vec::new(), chat: Vec::new(), assets: Default::default(), last_input: None, last_facing: None })
     }
 
     /// Applies everything the server has sent since the last call.
@@ -129,6 +131,26 @@ impl NetClient {
     /// You clicked with a tool in hand, the mouse pointing at `aim`.
     pub fn activate_at(&mut self, aim: brixo_core::Vec3) {
         self.send(ToServer::ActivateAt { x: aim.x, y: aim.y, z: aim.z });
+    }
+
+    /// Reset character: knocks you out, so you come back at a spawn.
+    pub fn reset(&mut self) {
+        self.send(ToServer::Reset);
+    }
+
+    /// Shift lock: face `yaw` whichever way you walk (None: off). Only
+    /// sent when it changes by more than a hair, not every frame.
+    pub fn send_facing(&mut self, yaw: Option<f32>) {
+        let same = match (self.last_facing, yaw) {
+            (None, None) => true,
+            (Some(a), Some(b)) => (a - b).abs() < 0.01,
+            _ => false,
+        };
+        if same || !self.connected {
+            return;
+        }
+        self.last_facing = yaw;
+        self.send(ToServer::Face { yaw });
     }
 
     /// Tells the server what you're pressing (only when it changes).

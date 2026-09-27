@@ -463,8 +463,88 @@ labels attached to parts), tools with hotbar (1-9) and `on activated`, chat
 counts, Play), `brixo://` links registered with the OS, ticketed game servers
 started on demand, Studio publishing (log in once, then Publish).
 
-**Apps:** studio, player (opened by Play: HUD, pause, F9 console, chat, mouse
-lock; no menus), dedicated LAN server.
+**Apps:** studio, player (opened by Play: HUD, pause menu, F9 console, chat,
+mouse lock), dedicated LAN server.
+
+**Player menus** (`brixo-player/src/menus.rs`): dressed like the website
+(`theme::apply_site`, white boxes with glossy blue title bars, the stud
+banner on the home screen); the HUD (game name, health bar, shift lock note)
+stays navy so it reads over any world. Esc opens the pause menu, which dims
+the game and has tabs: **Game** (who's playing, Reset character), **Settings**
+(shift lock on Shift, camera speed, music and sound volume) and **Controls**
+(keycaps). Settings live in `~/Brixo/settings.json` (`settings.rs`), saved
+once the menu closes; volumes go to `Speaker::set_levels`.
+
+**Shift lock** (Shift, in Brixo Player): the mouse locks and turns the camera
+(the same lock as first person), the camera sits `SHOULDER_OFFSET` (1.75)
+studs right (`FollowCamera::shoulder`, sliding across), a crosshair marks the
+middle (tools aim there), and the character faces the camera's way while
+walking in any direction: `Game::set_facing` / `ToServer::Face { yaw }` ->
+`Physics::hold_facing`. Pause frees the mouse.
+
+**Studio's Play matches the Player:** Shift toggles shift lock (same shoulder
+camera, crosshair, facing), `/` or Enter opens a chat box (said through
+`Game::chat`, so it's filtered and shows as a bubble), and the mouse locks for
+first person and shift lock; Esc or leaving the window frees it (a "Mouse
+free" pill says so, click the world to lock again). Stopping Play resets all
+three. Keys: `Editor::play_key`; the lock: `Editor::update_mouse_lock` (raw
+mouse motion via `device_event`, confined-cursor fallback via `CursorMoved`).
+**Reset character** is `ToServer::Reset` (health to 0). Servers now skip a
+message they don't understand instead of dropping the player, so a newer
+Player can talk to an older server; deploy the website before releasing a
+Player that sends new messages anyway, since servers from before this don't.
+
+**Saved player data** (`brixo_runtime::saves`): `save(player, "key", value)`
+and `load(player, "key")` (nil if nothing's saved). Numbers, text,
+true/false and lists/maps of them; parts and players are refused with an
+error that says to save the name instead. Limits: 64 KB of JSON per player
+per game (`SAVE_LIMIT`), names up to 50 letters; saving nil deletes. Data
+is loaded when the player joins (so `load` works in `on player_joined`) and
+written every 15 s if changed (`SAVE_EVERY`), after `on player_left`
+handlers run, and when the Game is dropped. The store is a `SaveStore`
+trait: online it's `SiteSaves` in `brixo-web/src/api.rs` (the `saves`
+table, one row per game_id + user_id; the server's `Identity.save_key` is
+the account id, passed to `Game::add_player_saved`), in Studio a
+`MemoryStore` that lives until Studio closes (so Play, Stop, Play keeps
+it; a new or opened game clears it), and a plain local game gets its own
+`MemoryStore`. Guide page: `howto-saving`.
+
+**Chat filter** (`brixo_runtime::chat_filter::filter_chat`, also used for
+usernames, blurbs and descriptions on the website): hides swearing, slurs,
+sexual words and self-harm phrases with #s, and is deliberately loose about
+ordinary gaming talk (noob, dumb, loser, hell, damn, shut up, "I'll kill
+you" all pass). Three lists: `ANYWHERE` (blocked even inside a word:
+fuck, shit...), `WORDS` (whole word plus an `ENDINGS` suffix, so
+Scunthorpe, Dickens, assassin, cocktail pass) and `PHRASES` (kill
+yourself, kys...). It sees through leetspeak (`plain`), stretched letters
+(3+ repeats squeezed, so "shiitake" is fine), stars for letters (same
+first and last letter; stars round a word are emphasis: "*sigh*"), and
+spelled-out letters ("f u c k", "k y s"). Unit tests list what must pass
+and what must be caught: add to both when changing a list.
+
+**Moderation** (no report button yet, on purpose): `users.banned`,
+`users.admin`, `games.hidden`. A banned account can't log in (403), its
+sessions are deleted, its game tickets are refused, it's kicked from every
+running server (`Servers::kick_everywhere` -> `ServerHandle::kick`), and
+its games and profile vanish from the site (`LISTED` in `db.rs`). A hidden
+game drops out of listings, Play gives 404, and its server is stopped
+(`Servers::stop`). Admins get an **Admin** tab (`/admin`, `web/admin.html`:
+games and accounts with search, Take down / Put back, Ban / Unban; API
+`/api/admin`, `/api/admin/ban`, `/api/admin/hide`). Admins can't ban
+themselves or the Brixo account. On the server:
+`brixo-admin admin NAME` / `unadmin`, `ban` / `unban NAME`,
+`hide` / `show GAME_ID`.
+
+**Client prediction** (`brixo_client::Predictor`, Brixo Player online):
+your own character runs on a local copy of the physics with the keys as
+you press them, so it moves at once instead of a round trip later. The
+predictor remembers ~1 s of its path; the server's position should be
+somewhere on it. Off the path by more than 3 studs (`SNAP`) means the
+server moved you (respawn, teleporter), so it restarts from there;
+smaller drift above `DEAD_ZONE` is eased out at `EASE` via
+`Physics::nudge` (keeps momentum); when both sides stand still it settles
+exactly on the server. Everyone else and every part still come from the
+server. ~1 ms a frame on Flagfall. `BRIXO_NO_PREDICT=1` turns it off.
 
 **Death:** at 0 health (or falling off the world) the character falls apart
 (head, torso, arms and legs scatter and land, computed from `PlayerProps::dead`
@@ -524,9 +604,9 @@ carrying home, returning, chasing the carrier or escorting as needed. The
 `bots` server example uses it automatically on a Flagfall server, and
 `tests/flagbots.rs` plays a 5-minute bots-only match headless.
 
-**Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 36 pages of
+**Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 37 pages of
 Markdown in `crates/brixo-web/docs/` (getting started, Rovik, building,
-players and GUI, 11 how-tos, reference), compiled into the binary
+players and GUI, 12 how-tos, reference), compiled into the binary
 (`pages!`/`images!` lists: a new page or picture must be added there) and
 rendered with pulldown-cmark. Routes: `/learn/:slug`, `/learn/img/:file`,
 `/learn/search.json` (the sidebar search), `/learn/samples/<name>.brixo`
@@ -547,21 +627,20 @@ tests: they catch the guide going stale.
 
 ## 8. Known gaps / limits
 
-- The website runs on `localhost`: not deployed, no HTTPS, no email or password
-  reset, no rate limiting, no moderation tools. Game servers only listen
-  locally, so friends on other computers can't join website games yet.
-- `--register-protocol` is verified on Linux; the Windows registry version is
-  written but untested.
-- No saved player data (deliberately deferred).
-- No client prediction; JSON over TCP every tick (fine for a few players).
+- Website: no email or password reset, no report button (admins find
+  problems themselves on `/admin`), no age rules yet.
+- JSON over TCP every tick (fine for a few players; a compact protocol
+  later). Only your own character is predicted.
 - No client scripts or RemoteEvents (server-driven GUI covers current needs).
-- Chat input and mouse lock exist in the player app only, not studio Play.
 - A held tool doesn't follow the arm's swing. Animations are poses, not blended.
-- Studio: no Explorer drag-and-drop reparenting, rename-in-place, or box select;
-  no terrain, meshes, unions, lighting settings, or hinges/motors.
+- Studio: no box select, terrain, meshes, unions, lighting settings, or
+  hinges/motors.
 - GUI positions are absolute (not relative to a parent Frame); no image GUI.
 - Scripts can't create scripts; behaviour is cloned from templates.
-- The chat word filter is a tiny starter list.
+- The chat filter is a word list: it catches the obvious and the usual
+  dodges, not everything (and deliberately not mild trash talk).
+- `tests/flagbots.rs` is timing-dependent (script threads), so it asserts
+  captures OR returns rather than a capture every run.
 - Every waiting script is an OS thread (a bytecode VM would fix scale limits).
 - Rovik sandboxing isn't hardened for untrusted creators yet.
 - In Coin Tycoon, a player leaving doesn't free their plot.
@@ -570,18 +649,14 @@ tests: they catch the guide going stale.
 
 ## 9. Roadmap (agreed direction)
 
-1. **Taking the platform online** (plan before coding): hosting the website and
-   game servers, HTTPS, internet play with client prediction and a compact
-   protocol, an installer that registers `brixo://`, and a trust-and-safety
-   design for young players (age rules, moderation, reporting) before anyone
-   outside friends signs up.
+1. **Growing the platform** (playbrixo.com is live): a report button,
+   age rules and password reset before a wide launch; a compact protocol.
 2. **Second sample game:** Brick Obby (moving platforms, checkpoints,
    leaderboard) to stress different systems.
-3. **Creator tools:** Explorer drag-drop/rename/box-select, hinges and motors,
-   lighting settings, a Rovik reference and tutorials, client scripts when a game
-   needs them.
+3. **Creator tools:** box select, hinges and motors, lighting settings,
+   client scripts when a game needs them.
 4. **Polish:** tool follows the swing, animation blending, more faces and
-   accessories (hat, face, back slots), chat in studio Play.
+   accessories (face, back slots).
 
 ---
 

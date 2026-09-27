@@ -7,6 +7,16 @@ use glam::Vec3;
 
 /// Closest the third-person camera gets before switching to first person.
 pub const MIN_FOLLOW_DISTANCE: f32 = 6.0;
+/// Shift lock: how far to the right of the character the camera looks
+/// from (Roblox uses 1.75 studs).
+pub const SHOULDER_OFFSET: f32 = 1.75;
+
+/// Shift lock: the way to face (radians around Y, 0 = +Z) so the character
+/// looks where `camera` looks.
+pub fn shift_lock_yaw(camera: &Camera) -> f32 {
+    let f = camera.forward();
+    f.x.atan2(f.z)
+}
 const FARTHEST: f32 = 60.0;
 /// Where the camera sits in first person, above the character's centre.
 const EYE_HEIGHT: f32 = 1.8;
@@ -114,6 +124,13 @@ pub fn movement_input(camera: &Camera, held: Held) -> PlayerInput {
 pub struct FollowCamera {
     /// 0 means first person.
     pub distance: f32,
+    /// Shift lock: the camera sits over the character's right shoulder
+    /// (the player also faces where it looks; see shift_lock_yaw).
+    pub shoulder: bool,
+    /// How far over the shoulder it is right now (0 to 1): it slides
+    /// across when shift lock turns on or off, rather than jumping.
+    shoulder_blend: f32,
+    shoulder_at: Option<std::time::Instant>,
     /// How far back the camera actually was last frame, and when: walls
     /// pull it in instantly, and it eases back out from there.
     reach: Option<(f32, std::time::Instant)>,
@@ -121,7 +138,7 @@ pub struct FollowCamera {
 
 impl Default for FollowCamera {
     fn default() -> Self {
-        Self { distance: 16.0, reach: None }
+        Self { distance: 16.0, reach: None, shoulder: false, shoulder_blend: 0.0, shoulder_at: None }
     }
 }
 
@@ -167,7 +184,12 @@ impl FollowCamera {
             Some(id)
         } else {
             let distance = self.distance.max(MIN_FOLLOW_DISTANCE);
-            let target = center + Vec3::Y * LOOK_HEIGHT;
+            let now = std::time::Instant::now();
+            let dt = self.shoulder_at.map(|t| (now - t).as_secs_f32().min(0.1)).unwrap_or(0.0);
+            self.shoulder_at = Some(now);
+            let goal = if self.shoulder { 1.0 } else { 0.0 };
+            self.shoulder_blend += (goal - self.shoulder_blend) * (1.0 - (-12.0 * dt).exp());
+            let target = center + Vec3::Y * LOOK_HEIGHT + camera.right() * (SHOULDER_OFFSET * self.shoulder_blend);
             let back = -camera.forward();
             // Don't go through walls: stop just in front of the first solid
             // thing between the character and the camera.

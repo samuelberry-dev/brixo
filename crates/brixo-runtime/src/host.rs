@@ -108,6 +108,8 @@ pub struct WorldHost {
     pub sounds: Arc<Mutex<Vec<SoundEvent>>>,
     /// Explosions scripts set off, carried out by the game's next step.
     pub blasts: Arc<Mutex<Vec<Blast>>>,
+    /// Saved player data, for save() and load().
+    pub saves: Arc<Mutex<crate::saves::Saves>>,
 }
 
 /// Breakable parts: anchored parts with a custom field `breakable = true`.
@@ -908,7 +910,7 @@ impl Host for WorldHost {
     }
 
     fn function_names(&self) -> Vec<&'static str> {
-        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode"]
+        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load"]
     }
 
     fn call(&self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -1044,6 +1046,24 @@ impl Host for WorldHost {
                 };
                 self.sounds.lock().unwrap().push(event);
                 Ok(Value::Nil)
+            }
+            "save" | "load" => {
+                let usage = if name == "save" { "save(player, \"coins\", player.coins)" } else { "load(player, \"coins\")" };
+                need(if name == "save" { 3 } else { 2 }).map_err(|_| format!("{name} works like {usage}"))?;
+                let player = instance_arg(&args[0])?;
+                if self.world.lock().player(player).is_none() {
+                    return Err(format!("{name} needs a player first: {usage}"));
+                }
+                let Value::Str(key) = &args[1] else {
+                    return Err(format!("{name} needs a name for the value, in quotes: {usage}"));
+                };
+                let mut saves = self.saves.lock().unwrap();
+                if name == "save" {
+                    saves.save(player, key, &args[2])?;
+                    Ok(Value::Nil)
+                } else {
+                    saves.load(player, key)
+                }
             }
             "players" => {
                 need(0)?;

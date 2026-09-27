@@ -42,6 +42,9 @@ fn players_join_see_each_other_move_and_leave() {
     let server = brixo_server::start(arena(), 0).unwrap();
     let addr = server.local_addr();
     let mut ann = NetClient::connect(&addr, "Ann").unwrap();
+    // In first, so she keeps the name and the second Ann becomes Ann2 (two
+    // joining at once could arrive either way round).
+    wait_for(&mut [&mut ann], "Ann to join", |cs| cs[0].me.is_some());
     let mut ann2 = NetClient::connect(&addr, "Ann").unwrap();
 
     wait_for(&mut [&mut ann, &mut ann2], "both see two players", |cs| {
@@ -160,7 +163,7 @@ fn ticketed_servers_let_in_ticket_holders_as_their_account() {
         let mut v = valid.lock().unwrap();
         if v.as_deref() == Some(t) {
             *v = None;
-            Some(brixo_server::Identity { name: "Ann".into(), look })
+            Some(brixo_server::Identity { name: "Ann".into(), look, save_key: None })
         } else {
             None
         }
@@ -253,4 +256,42 @@ fn joins_through_a_name_with_several_addresses() {
         assert!(start.elapsed() < std::time::Duration::from_secs(5), "never joined");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+}
+
+#[test]
+fn shift_lock_facing_and_reset_go_over_the_network() {
+    let mut dm = arena();
+    let root = dm.root();
+    let spawn = dm.create(Class::SpawnLocation, "Spawn", root).unwrap();
+    dm.part_mut(spawn).unwrap().position = Vec3::new(0.0, 0.5, 0.0);
+    let server = brixo_server::start(dm, 0).unwrap();
+    let mut ann = NetClient::connect(&server.local_addr(), "Ann").unwrap();
+    wait_for(&mut [&mut ann], "joined", |cs| cs[0].me.is_some() && player_count(cs[0]) == 1);
+    let me = ann.me.unwrap();
+    // Strafing with shift lock on keeps facing the given way (+z: 0 degrees).
+    ann.send_facing(Some(0.0));
+    ann.send_input(PlayerInput { move_x: 1.0, ..Default::default() });
+    let x0 = ann.world.player(me).unwrap().body.position.x;
+    wait_for(&mut [&mut ann], "strafing right", |cs| cs[0].world.player(me).is_some_and(|p| p.body.position.x > x0 + 3.0));
+    let yaw = ann.world.player(me).unwrap().body.rotation.y;
+    assert!(yaw.abs() < 1.0, "faces +z while strafing: {yaw}");
+    ann.send_input(PlayerInput::default());
+    // Reset character knocks you out.
+    ann.reset();
+    wait_for(&mut [&mut ann], "knocked out", |cs| cs[0].world.player(me).is_some_and(|p| p.dead > 0.0 || p.health <= 0.0));
+}
+
+#[test]
+fn a_message_the_server_doesnt_know_is_skipped_not_fatal() {
+    use std::io::Write;
+    let server = brixo_server::start(arena(), 0).unwrap();
+    let mut raw = std::net::TcpStream::connect(server.local_addr()).unwrap();
+    raw.write_all(b"{\"Hello\":{\"name\":\"Old\"}}\n{\"SomethingFromTheFuture\":{\"x\":1}}\n{\"Chat\":{\"text\":\"still here\"}}\n").unwrap();
+    let start = Instant::now();
+    while server.player_count() < 1 {
+        assert!(start.elapsed() < Duration::from_secs(5), "never joined");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(server.player_count(), 1, "still connected after an unknown message");
 }

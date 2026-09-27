@@ -634,10 +634,95 @@ mod web_model {
         }
         let saved = std::fs::read_to_string(path).unwrap_or_default().replace("\r\n", "\n");
         assert!(
-            saved == fresh,
+            same_model(&saved, &fresh),
             "the avatar changed: run `BRIXO_WRITE_MODEL=1 cargo test -p brixo-render web_model` \
              (PowerShell: $env:BRIXO_WRITE_MODEL=1; cargo test -p brixo-render web_model; Remove-Item Env:BRIXO_WRITE_MODEL) \
              to update crates/brixo-web/src/web/avatar-model.json"
         );
+    }
+
+    /// The same model, allowing the last rounded step in a number: Windows,
+    /// Mac and Linux work out sin and cos very slightly differently, so a
+    /// value right on a rounding edge can land one step either side. Any
+    /// real change to the avatar moves things far more than that.
+    fn same_model(saved: &str, fresh: &str) -> bool {
+        if saved == fresh {
+            return true;
+        }
+        let (a, b): (Vec<&str>, Vec<&str>) = (saved.split('"').collect(), fresh.split('"').collect());
+        if a.len() != b.len() {
+            return false;
+        }
+        (0..a.len()).all(|i| {
+            if a[i] == b[i] {
+                return true;
+            }
+            // Only the packed numbers may differ: "p", "n" or "uv" came just before.
+            let kind = if i >= 2 { a[i - 2] } else { "" };
+            let (Some(x), Some(y)) = (unb64(a[i]), unb64(b[i])) else { return false };
+            if x.len() != y.len() {
+                return false;
+            }
+            let near = |p: i32, q: i32| (p - q).abs() <= 1;
+            match kind {
+                "p" => x.chunks(2).zip(y.chunks(2)).all(|(p, q)| near(i16::from_le_bytes([p[0], p[1]]) as i32, i16::from_le_bytes([q[0], q[1]]) as i32)),
+                "n" => x.iter().zip(&y).all(|(p, q)| near(*p as i8 as i32, *q as i8 as i32)),
+                "uv" => x.chunks(2).zip(y.chunks(2)).all(|(p, q)| near(u16::from_le_bytes([p[0], p[1]]) as i32, u16::from_le_bytes([q[0], q[1]]) as i32)),
+                _ => false,
+            }
+        })
+    }
+
+    fn unb64(s: &str) -> Option<Vec<u8>> {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::with_capacity(s.len() / 4 * 3);
+        for c in s.as_bytes().chunks(4) {
+            if c.len() != 4 {
+                return None;
+            }
+            let mut n = 0u32;
+            let mut pad = 0;
+            for &ch in c {
+                n <<= 6;
+                if ch == b'=' {
+                    pad += 1;
+                } else {
+                    n |= T.iter().position(|&t| t == ch)? as u32;
+                }
+            }
+            out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8][..3 - pad]);
+        }
+        Some(out)
+    }
+
+    #[test]
+    fn the_up_to_date_check_forgives_rounding_but_not_real_changes() {
+        let fresh = super::web_model_json();
+        // Nudge the first position by one thousandth of a stud: forgiven.
+        let at = fresh.find("\"p\":\"").unwrap() + 5;
+        let end = at + fresh[at..].find('"').unwrap();
+        let mut bytes = unb64(&fresh[at..end]).unwrap();
+        let v = i16::from_le_bytes([bytes[0], bytes[1]]) + 1;
+        bytes[..2].copy_from_slice(&v.to_le_bytes());
+        let enc = |b: &[u8]| {
+            const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = String::new();
+            for c in b.chunks(3) {
+                let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+                for k in 0..4 {
+                    out.push(if k <= c.len() { T[(n >> (18 - 6 * k) & 63) as usize] as char } else { '=' });
+                }
+            }
+            out
+        };
+        let nudged = format!("{}{}{}", &fresh[..at], enc(&bytes), &fresh[end..]);
+        assert!(nudged != fresh && same_model(&nudged, &fresh));
+        // Moved by a tenth of a stud: that's a real change.
+        let v = v + 100;
+        bytes[..2].copy_from_slice(&v.to_le_bytes());
+        let moved = format!("{}{}{}", &fresh[..at], enc(&bytes), &fresh[end..]);
+        assert!(!same_model(&moved, &fresh));
+        // So is a hat's name.
+        assert!(!same_model(&fresh.replace("top_hat", "tip_hat"), &fresh));
     }
 }

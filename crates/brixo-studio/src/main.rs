@@ -19,6 +19,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+/// Turning with the mouse locked (Play: first person, shift lock), per pixel.
+const LOCKED_LOOK_SPEED: f32 = 0.003;
 /// Output lines kept in the Output panel.
 const OUTPUT_LIMIT: usize = 1000;
 
@@ -272,6 +274,20 @@ struct Editor {
     local_player: Option<InstanceId>,
     chat: ChatLog,
     started: std::time::Instant,
+    /// Play, as in Brixo Player: shift lock (Shift), the chat box (/ or
+    /// Enter), and Esc freeing the mouse from its lock until you click the
+    /// 3D view again (so Stop and the panels stay reachable).
+    shift_lock: bool,
+    chat_open: bool,
+    chat_text: String,
+    mouse_freed: bool,
+    /// The mouse is locked right now (tools then aim at the middle).
+    mouse_locked: bool,
+    /// What was typed in chat, to send once the UI's done.
+    said: Option<String>,
+    /// Saved player data (save/load) while testing: kept from one Play to
+    /// the next until Studio closes or another game is opened.
+    saves: Arc<brixo_runtime::MemoryStore>,
 }
 
 impl Default for Editor {
@@ -315,6 +331,13 @@ impl Default for Editor {
             local_player: None,
             chat: ChatLog::default(),
             started: std::time::Instant::now(),
+            shift_lock: false,
+            chat_open: false,
+            chat_text: String::new(),
+            mouse_freed: false,
+            mouse_locked: false,
+            said: None,
+            saves: Arc::new(brixo_runtime::MemoryStore::default()),
         }
     }
 }
@@ -411,6 +434,9 @@ struct Studio {
     saved_camera: Option<(Vec3, f32, f32)>,
     keys: HashSet<KeyCode>,
     last_frame: Instant,
+    /// Where the OS couldn't truly lock the mouse (X11) it's confined
+    /// instead, and put back in the middle after each move.
+    confined: bool,
 }
 
 impl Studio {
@@ -444,6 +470,7 @@ impl Studio {
             saved_camera: None,
             keys: HashSet::new(),
             last_frame: Instant::now(),
+            confined: false,
         };
         if let Some(status) = opened_status {
             studio.status = status;
@@ -464,7 +491,8 @@ impl Studio {
     }
 
     fn player_input(&self) -> PlayerInput {
-        let held = |k| self.keys.contains(&k);
+        let chatting = self.editor.chat_open;
+        let held = |k| !chatting && self.keys.contains(&k);
         movement_input(
             &self.camera,
             Held {
@@ -476,6 +504,81 @@ impl Studio {
                 jump: held(KeyCode::Space),
             },
         )
+    }
+
+    /// Play's keys, as in Brixo Player: Shift for shift lock, / or Enter
+    /// to chat, Esc to close the chat or free the mouse.
+    fn play_key(&mut self, code: KeyCode, consumed: bool) {
+        let e = &mut self.editor;
+        if e.chat_open {
+            if code == KeyCode::Escape {
+                e.chat_open = false;
+                e.chat_text.clear();
+            }
+            return;
+        }
+        if consumed {
+            return;
+        }
+        match code {
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => {
+                e.shift_lock = !e.shift_lock;
+                e.mouse_freed = false;
+                self.audio.sound("click");
+            }
+            KeyCode::Slash | KeyCode::Enter => {
+                e.chat_open = true;
+                self.keys.clear();
+            }
+            KeyCode::Escape => e.mouse_freed = true,
+            _ => {}
+        }
+    }
+
+    /// First person and shift lock lock the mouse to the window during
+    /// Play, and it turns the camera. Chatting, Esc, a script tab or a
+    /// question box free it.
+    fn update_mouse_lock(&mut self) {
+        let first_person = match (self.game.as_ref(), self.play_view.as_ref()) {
+            (Some(g), Some(v)) => self.editor.follow.first_person(v, g.player_id()),
+            _ => false,
+        };
+        let e = &self.editor;
+        let want = self.game.is_some()
+            && (first_person || e.shift_lock)
+            && !e.chat_open
+            && !e.mouse_freed
+            && e.tab.is_none()
+            && e.pending.is_none()
+            && !e.show_web_login;
+        if want == self.editor.mouse_locked {
+            return;
+        }
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        use winit::window::CursorGrabMode;
+        let grab = if want {
+            match gpu.window.set_cursor_grab(CursorGrabMode::Locked) {
+                Ok(()) => {
+                    self.confined = false;
+                    Ok(())
+                }
+                Err(_) => {
+                    self.confined = true;
+                    gpu.window.set_cursor_grab(CursorGrabMode::Confined)
+                }
+            }
+        } else {
+            self.confined = false;
+            gpu.window.set_cursor_grab(CursorGrabMode::None)
+        };
+        if grab.is_ok() || !want {
+            gpu.window.set_cursor_visible(!want);
+            self.editor.mouse_locked = want;
+            if want && self.confined {
+                let size = gpu.window.inner_size();
+                let _ = gpu.window.set_cursor_position(winit::dpi::PhysicalPosition::new(size.width / 2, size.height / 2));
+            }
+        }
     }
 
     fn move_camera(&mut self, dt: f32) {
@@ -613,6 +716,10 @@ impl Studio {
         self.editor.local_player = self.game.as_ref().and_then(|g| g.player_id());
         let mut first_person_player = None;
         if let Some(game) = self.game.as_mut() {
+            // Shift lock: face where the camera looks, from over the shoulder.
+            let shift = self.editor.shift_lock;
+            self.editor.follow.shoulder = shift;
+            game.set_facing(shift.then(|| brixo_client::shift_lock_yaw(&self.camera)));
             game.set_input(input);
             game.step(dt as f64);
             self.output.extend(game.take_log());
@@ -778,6 +885,11 @@ impl Studio {
             }
         } // the game world is unlocked here
 
+        if let (Some(text), Some(g)) = (editor.said.take(), game.as_mut()) {
+            if let Some(me) = g.player_id() {
+                g.chat(me, &text);
+            }
+        }
         if let (Some((events, swing)), Some(g)) = (editor.play_input.take(), game.as_mut()) {
             if let Some(me) = g.player_id() {
                 if let Some(b) = events.clicked {
@@ -795,6 +907,10 @@ impl Studio {
         if toggle_play {
             // Play and Stop show the World.
             editor.tab = None;
+            editor.shift_lock = false;
+            editor.chat_open = false;
+            editor.chat_text.clear();
+            editor.mouse_freed = false;
             editor.drag = None;
             editor.prop_session = false;
             if let Some(h) = hosted.take() {
@@ -833,7 +949,7 @@ impl Studio {
                 *saved_camera = Some((camera.position, camera.yaw, camera.pitch));
                 camera.pitch = -0.35;
                 output.push(system_line("Playing"));
-                let started = Game::start(model.clone());
+                let started = Game::start_with_store(model.clone(), editor.saves.clone());
                 output.extend(started.take_log());
                 trim_output(output);
                 *game = Some(started);
@@ -1010,6 +1126,8 @@ fn replace_game(
     editor.renaming = None;
     editor.file = file;
     editor.publish_name = name;
+    // Another game: its test save data starts empty.
+    editor.saves = Arc::new(brixo_runtime::MemoryStore::default());
 }
 
 /// Saves to `path` (adding .brixo if it's missing). Gives back the status.
@@ -1850,6 +1968,54 @@ fn build_ui(
     toggle_play
 }
 
+/// Play's extras over the 3D view, as in Brixo Player: shift lock's
+/// crosshair and note, the chat box, and a hint when Esc freed the mouse.
+fn play_overlay(ctx: &egui::Context, rect: egui::Rect, editor: &mut Editor) {
+    use brixo_client::theme::site;
+    let pill = |ui: &mut egui::Ui, text: &str| {
+        egui::Frame::NONE
+            .fill(egui::Color32::from_rgba_unmultiplied(13, 42, 74, 215))
+            .corner_radius(4)
+            .inner_margin(egui::Margin::symmetric(10, 4))
+            .show(ui, |ui| ui.label(egui::RichText::new(text).color(site::GOLD)));
+    };
+    if editor.shift_lock {
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("shift lock")));
+        let c = ctx.screen_rect().center();
+        p.circle_stroke(c, 7.0, egui::Stroke::new(3.0, egui::Color32::from_black_alpha(110)));
+        p.circle_stroke(c, 7.0, egui::Stroke::new(1.6, egui::Color32::WHITE));
+        p.circle_filled(c, 1.6, egui::Color32::WHITE);
+        egui::Area::new(egui::Id::new("shift lock note"))
+            .fixed_pos(rect.right_bottom() + egui::vec2(-170.0, -34.0))
+            .show(ctx, |ui| pill(ui, "Shift lock on (Shift)"));
+    }
+    if editor.mouse_freed && editor.shift_lock {
+        egui::Area::new(egui::Id::new("mouse freed"))
+            .fixed_pos(rect.center_top() + egui::vec2(-130.0, 10.0))
+            .show(ctx, |ui| pill(ui, "Mouse free: click the game to look again"));
+    }
+    if editor.chat_open {
+        egui::Area::new(egui::Id::new("chat input"))
+            .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -64.0))
+            .show(ctx, |ui| {
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut editor.chat_text)
+                        .desired_width(420.0)
+                        .hint_text("Say something (Enter to send, Esc to cancel)"),
+                );
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let text = std::mem::take(&mut editor.chat_text);
+                    if !text.trim().is_empty() {
+                        editor.said = Some(text);
+                    }
+                    editor.chat_open = false;
+                } else {
+                    edit.request_focus();
+                }
+            });
+    }
+}
+
 /// Opens a script in a tab (or shows its tab if it's open).
 fn open_tab(editor: &mut Editor, id: InstanceId) {
     if !editor.tabs.contains(&id) {
@@ -2541,11 +2707,17 @@ fn viewport(
         draw_hotbar(ui.ctx(), rect, model, me, &mut events);
         events.hotbar = events.hotbar.or_else(|| hotbar_key(ui.ctx()));
         // A click swings the tool in hand, aimed where the mouse points.
-        let swing = (response.clicked() && !events.pointer_on_gui)
-            .then(|| response.interact_pointer_pos())
+        let locked = editor.mouse_locked;
+        let swing = (response.clicked() && !events.pointer_on_gui && !editor.mouse_freed)
+            .then(|| if locked { Some(screen.center()) } else { response.interact_pointer_pos() })
             .flatten()
             .map(|pos| brixo_client::aim_point(model, camera, screen.width() / screen.height(), Some(me), ndc(screen, pos)));
         editor.play_input = Some((events, swing));
+        // Esc freed the mouse: a click on the game takes it back.
+        if editor.mouse_freed && response.clicked() {
+            editor.mouse_freed = false;
+        }
+        play_overlay(ui.ctx(), rect, editor);
     }
 
     // Plain left-click (no drag): select whatever is under the cursor,
@@ -3132,6 +3304,16 @@ fn vec3_row(ui: &mut egui::Ui, label: &str, v: &mut V, speed: f32) -> bool {
 // --- winit plumbing --------------------------------------------------------
 
 impl ApplicationHandler for Studio {
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: winit::event::DeviceId, event: winit::event::DeviceEvent) {
+        // Raw mouse movement turns the camera while Play has the mouse locked.
+        if let winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            if self.editor.mouse_locked && !self.confined {
+                self.camera.yaw += dx as f32 * LOCKED_LOOK_SPEED;
+                self.camera.pitch = (self.camera.pitch - dy as f32 * LOCKED_LOOK_SPEED).clamp(-1.5, 1.5);
+            }
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gpu.is_some() {
             return;
@@ -3187,15 +3369,38 @@ impl ApplicationHandler for Studio {
                         ElementState::Released => {
                             self.keys.remove(&code);
                         }
-                        ElementState::Pressed if !consumed => {
-                            self.keys.insert(code);
+                        ElementState::Pressed => {
+                            if !event.repeat && self.game.is_some() {
+                                self.play_key(code, consumed);
+                            }
+                            if !consumed && !self.editor.chat_open {
+                                self.keys.insert(code);
+                            }
                         }
-                        ElementState::Pressed => {}
                     }
                 }
             }
 
-            WindowEvent::Focused(false) => self.keys.clear(),
+            // Where the mouse could only be confined (X11): turn by how far
+            // it moved from the middle, then put it back.
+            WindowEvent::CursorMoved { position, .. } if self.editor.mouse_locked && self.confined => {
+                if let Some(gpu) = &self.gpu {
+                    let size = gpu.window.inner_size();
+                    let (cx, cy) = ((size.width / 2) as f64, (size.height / 2) as f64);
+                    let (dx, dy) = (position.x - cx, position.y - cy);
+                    if dx.abs() > 0.5 || dy.abs() > 0.5 {
+                        self.camera.yaw += dx as f32 * LOCKED_LOOK_SPEED;
+                        self.camera.pitch = (self.camera.pitch - dy as f32 * LOCKED_LOOK_SPEED).clamp(-1.5, 1.5);
+                        let _ = gpu.window.set_cursor_position(winit::dpi::PhysicalPosition::new(cx, cy));
+                    }
+                }
+            }
+
+            WindowEvent::Focused(false) => {
+                self.keys.clear();
+                // Switching to another window frees the mouse.
+                self.editor.mouse_freed = true;
+            }
 
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
@@ -3204,6 +3409,7 @@ impl ApplicationHandler for Studio {
 
                 self.move_camera(dt);
                 self.frame(dt);
+                self.update_mouse_lock();
                 if self.editor.quit {
                     event_loop.exit();
                     return;

@@ -128,29 +128,7 @@ pub const CHAT_LIMIT: usize = 120;
 /// Shortest gap between one player's messages, in seconds.
 pub const CHAT_COOLDOWN: f64 = 0.4;
 
-/// Words chat hides. A starter list: real platforms need far more (and
-/// better tools), but the plumbing is here from day one.
-const BLOCKED: &[&str] = &["damn", "hell", "crap", "stupid", "idiot", "dumb", "shut up", "hate you", "loser", "noob"];
-
-/// Replaces blocked words (whole words, any case) with #s.
-pub fn filter_chat(text: &str) -> String {
-    let mut out = text.to_string();
-    let lower = text.to_lowercase();
-    for word in BLOCKED {
-        let mut start = 0;
-        while let Some(i) = lower[start..].find(word) {
-            let at = start + i;
-            let end = at + word.len();
-            let before_ok = at == 0 || !lower[..at].chars().last().unwrap().is_alphanumeric();
-            let after_ok = end == lower.len() || !lower[end..].chars().next().unwrap().is_alphanumeric();
-            if before_ok && after_ok {
-                out.replace_range(at..end, &"#".repeat(word.len()));
-            }
-            start = end;
-        }
-    }
-    out
-}
+pub use crate::chat_filter::filter_chat;
 
 /// How long a player stays fallen apart before respawning, in seconds.
 pub const RESPAWN_TIME: f32 = 4.0;
@@ -230,6 +208,9 @@ pub struct Game {
     log: Arc<Mutex<Vec<LogLine>>>,
     sounds: Arc<Mutex<Vec<crate::host::SoundEvent>>>,
     blasts: Arc<Mutex<Vec<crate::host::Blast>>>,
+    /// Saved player data (see saves.rs), and when it was last written out.
+    saves: Arc<Mutex<crate::saves::Saves>>,
+    last_save: f64,
     /// Explosion fireballs on screen: the part, when it started, its radius.
     fireballs: Vec<(InstanceId, f64, f32)>,
     scripts: Vec<ScriptInfo>,
@@ -268,9 +249,17 @@ impl Game {
     /// body until it first waits or finishes.
     /// Starts a single-player game: you're the one player, named "Player".
     pub fn start(model: DataModel) -> Game {
+        Game::start_with_store(model, Arc::new(crate::saves::MemoryStore::default()))
+    }
+
+    /// A single-player game whose saved data (save/load) goes in `store`
+    /// (Studio keeps one for as long as it's open).
+    pub fn start_with_store(model: DataModel, store: Arc<dyn crate::saves::SaveStore>) -> Game {
         let mut game = Game::new(model);
+        game.saves.lock().unwrap().set_store(store);
         // The player exists before scripts start, so they can find it.
         let id = game.spawn_player("Player", None);
+        game.saves.lock().unwrap().open(id, "Player");
         game.local_player = Some(id);
         game.discover_scripts();
         game.announce_players();
@@ -290,6 +279,8 @@ impl Game {
             clock: Arc::new(Mutex::new(0.0)),
             sounds: Arc::new(Mutex::new(Vec::new())),
             blasts: Arc::new(Mutex::new(Vec::new())),
+            saves: Arc::new(Mutex::new(crate::saves::Saves::new(Arc::new(crate::saves::MemoryStore::default())))),
+            last_save: 0.0,
             fireballs: Vec::new(),
             log: Arc::new(Mutex::new(Vec::new())),
             scripts: Vec::new(),
@@ -322,6 +313,20 @@ impl Game {
     /// What one player is pressing (servers: one per connected player).
     pub fn set_input_for(&mut self, player: InstanceId, input: PlayerInput) {
         self.inputs.insert(player, input);
+    }
+
+    /// Shift lock for the local player: face `yaw` (radians, 0 = +Z, the
+    /// camera's way) whichever way they walk, or None to face where they
+    /// walk again.
+    pub fn set_facing(&mut self, yaw: Option<f32>) {
+        if let Some(id) = self.local_player {
+            self.physics.hold_facing(id, yaw);
+        }
+    }
+
+    /// Shift lock for one player (servers: from that player's client).
+    pub fn set_facing_for(&mut self, player: InstanceId, yaw: Option<f32>) {
+        self.physics.hold_facing(player, yaw);
     }
 
     /// The local player, in single-player games.
@@ -362,9 +367,29 @@ impl Game {
     /// A player joins wearing a specific look (their account's avatar)
     /// instead of a random one.
     pub fn add_player_as(&mut self, name: &str, look: Option<Look>) -> InstanceId {
+        self.add_player_saved(name, look, None)
+    }
+
+    /// A player joins, with their saved data kept under `save_key` (their
+    /// account, online) or, if None, under their name.
+    pub fn add_player_saved(&mut self, name: &str, look: Option<Look>, save_key: Option<&str>) -> InstanceId {
         let id = self.spawn_player(name, look);
+        // Loaded before player_joined fires, so scripts can load() there.
+        let key = save_key.map(str::to_string).unwrap_or_else(|| self.world.lock().get(id).map(|i| i.name.clone()).unwrap_or_default());
+        self.saves.lock().unwrap().open(id, &key);
         self.announce_players();
         id
+    }
+
+    /// Where saved player data (save/load) is kept. Set before anyone joins.
+    pub fn set_save_store(&mut self, store: Arc<dyn crate::saves::SaveStore>) {
+        self.saves.lock().unwrap().set_store(store);
+    }
+
+    /// Writes all changed saved data to the store now (a server shutting
+    /// down; it also happens every few seconds and when players leave).
+    pub fn flush_saves(&mut self) {
+        self.saves.lock().unwrap().flush();
     }
 
     /// A player leaves. Scripts hear `on player_left(player)` while the
@@ -374,6 +399,8 @@ impl Game {
             return;
         }
         self.fire_everywhere(|s| &s.left_handlers, player);
+        // After player_left, so what it saves is kept.
+        self.saves.lock().unwrap().close(player);
         self.players.retain(|p| *p != player);
         self.unannounced.retain(|p| *p != player);
         self.inputs.remove(&player);
@@ -771,6 +798,10 @@ impl Game {
         self.run_physics(dt);
         self.place_tools(dt as f32);
         self.carry_parts();
+        if self.time - self.last_save >= crate::saves::SAVE_EVERY {
+            self.last_save = self.time;
+            self.flush_saves();
+        }
     }
 
     /// Parts with `carried_by = "<player name>"` ride along with that
@@ -907,6 +938,7 @@ impl Game {
             clock: self.clock.clone(),
             sounds: self.sounds.clone(),
             blasts: self.blasts.clone(),
+            saves: self.saves.clone(),
         }));
         let log = self.log.clone();
         let source_label = label.clone();
@@ -1248,6 +1280,11 @@ impl Game {
 
 impl Drop for Game {
     fn drop(&mut self) {
+        // A game that ends (Stop, a server shutting down) writes out
+        // saved data.
+        if let Ok(mut saves) = self.saves.lock() {
+            saves.flush();
+        }
         // Dropping the channels makes every paused wait() fail, so each
         // task thread unwinds and exits on its own.
         self.tasks.clear();

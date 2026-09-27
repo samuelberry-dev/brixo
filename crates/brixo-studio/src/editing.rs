@@ -17,7 +17,7 @@ pub const KEYWORDS: &[&str] = &[
 
 /// Functions Brixo gives scripts, on top of Rovik's own built-ins.
 pub const BRIXO_FUNCTIONS: &[&str] =
-    &["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode"];
+    &["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load"];
 
 /// Fields scripts use on objects (after a `.`).
 pub const FIELDS: &[&str] = &[

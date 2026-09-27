@@ -1,4 +1,4 @@
-A **Tool** is something players hold: a sword, a gun, a trowel, a flashlight, a magic wand. Tools a player has sit in their **hotbar** at the bottom of the screen. Pressing **1** to **9** holds one (the same key again puts it away), and **clicking** uses it.
+A **Tool** is something players hold: a sword, a gun, a trowel, a flashlight, a magic wand. Tools a player has sit in their **hotbar** at the bottom of the screen. Pressing **1** to **9** holds one (the same key again puts it away), and **clicking** uses it. A click aims where the mouse points (a script reads it as `p.mouse`); with **shift lock** on (**Shift**, in Brixo Player or Studio's Play), it aims at the crosshair in the middle of the screen.
 
 ![Brixo's gear kit from Flagfall and Spire Wars: sword, slingshot, rocket launcher, superball, trowel and paintball gun](img/tools-kit.png)
 

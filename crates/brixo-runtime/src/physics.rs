@@ -120,6 +120,9 @@ pub struct Physics {
     /// Parts in a Model are welded to the Model's first part:
     /// part -> (the part it's welded to, the joint).
     welds: HashMap<InstanceId, (InstanceId, ImpulseJointHandle)>,
+    /// Players who face a fixed way whatever way they walk (shift lock:
+    /// the way the camera looks), by player id.
+    held_yaw: HashMap<InstanceId, f32>,
 }
 
 impl Default for Physics {
@@ -154,6 +157,7 @@ impl Physics {
             steps_taken: 0,
             characters: HashMap::new(),
             welds: HashMap::new(),
+            held_yaw: HashMap::new(),
         }
     }
 
@@ -418,7 +422,10 @@ impl Physics {
         if dir.length_squared() > 1.0 {
             dir = dir.normalize();
         }
-        if dir.length_squared() > 0.0001 {
+        if let Some(yaw) = self.held_yaw.get(&c.id) {
+            // Shift lock: face the camera's way, walking sideways and back.
+            c.yaw = *yaw;
+        } else if dir.length_squared() > 0.0001 {
             c.yaw = dir.x.atan2(dir.z);
         }
 
@@ -625,6 +632,37 @@ impl Physics {
     pub fn face(&mut self, id: InstanceId, yaw: f32) {
         if let Some(c) = self.characters.get_mut(&id) {
             c.yaw = yaw;
+        }
+    }
+
+    /// Keeps a character facing `yaw` (radians, 0 = +Z) whichever way it
+    /// walks, or (None) lets it face where it walks again. Shift lock.
+    pub fn hold_facing(&mut self, id: InstanceId, yaw: Option<f32>) {
+        match yaw.filter(|y| y.is_finite()) {
+            Some(y) => {
+                self.held_yaw.insert(id, y);
+                if let Some(c) = self.characters.get_mut(&id) {
+                    c.yaw = y;
+                }
+            }
+            None => {
+                self.held_yaw.remove(&id);
+            }
+        }
+    }
+
+    /// Slides a character by `by` without disturbing its jump or fall (a
+    /// small correction; a teleport, by contrast, stops it dead). Also moves
+    /// it in `world`, so the next step doesn't take it for a teleport.
+    pub fn nudge(&mut self, world: &mut DataModel, id: InstanceId, by: BVec3) {
+        let Some(c) = self.characters.get_mut(&id) else { return };
+        let Some(body) = self.bodies.get_mut(c.body) else { return };
+        let to = body.translation() + to_glam(by);
+        body.set_translation(to, true);
+        let p = from_glam(to);
+        c.synced_position = p;
+        if let Some(player) = world.player_mut(id) {
+            player.body.position = p;
         }
     }
 

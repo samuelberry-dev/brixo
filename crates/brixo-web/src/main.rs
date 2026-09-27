@@ -5,6 +5,10 @@
 //!   brixo-web set-password NAME     set someone's password (e.g. Brixo's)
 //!   brixo-web invite [COUNT]        make invite codes (1 unless you say)
 //!   brixo-web invites               list invite codes and who used them
+//!   brixo-web admin NAME            make someone an admin (the /admin page)
+//!   brixo-web unadmin NAME          ...or not
+//!   brixo-web ban NAME / unban NAME ban an account, or lift the ban
+//!   brixo-web hide GAME_ID          take a game down (show GAME_ID: put it back)
 //!
 //! Settings (all optional; the defaults suit your own PC):
 //! - PORT: the website's port (7420).
@@ -55,7 +59,38 @@ fn main() {
                 }
             }
         }
-        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite or invites")),
+        Some(cmd @ ("admin" | "unadmin" | "ban" | "unban")) => {
+            let name = args.get(1).unwrap_or_else(|| fail(format!("usage: brixo-web {cmd} NAME")));
+            let db = brixo_web::db::Db::open(&db_path).unwrap_or_else(|e| fail(e));
+            let found = match cmd {
+                "admin" | "unadmin" => db.set_admin(name, cmd == "admin").unwrap_or_else(|e| fail(e)),
+                _ => db.set_banned(name, cmd == "ban").unwrap_or_else(|e| fail(e)).is_some(),
+            };
+            if !found {
+                fail(format!("there's no one called {name}"));
+            }
+            println!(
+                "{}",
+                match cmd {
+                    "admin" => format!("{name} is an admin: they'll see an Admin tab on the site."),
+                    "unadmin" => format!("{name} isn't an admin any more."),
+                    // A running website also sends them out of games (the
+                    // Admin page does that); from here they're kept out of
+                    // new ones and logged out.
+                    "ban" => format!("{name} is banned: logged out, and can't log in or play."),
+                    _ => format!("{name} isn't banned any more."),
+                }
+            );
+        }
+        Some(cmd @ ("hide" | "show")) => {
+            let id: i64 = args.get(1).and_then(|n| n.parse().ok()).unwrap_or_else(|| fail(format!("usage: brixo-web {cmd} GAME_ID (the number in the game's address)")));
+            let db = brixo_web::db::Db::open(&db_path).unwrap_or_else(|e| fail(e));
+            if !db.set_hidden(id, cmd == "hide").unwrap_or_else(|e| fail(e)) {
+                fail(format!("there's no game {id}"));
+            }
+            println!("{}", if cmd == "hide" { format!("Game {id} is taken down.") } else { format!("Game {id} is back.") });
+        }
+        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite, invites, admin, ban, unban, hide or show")),
     }
 }
 
