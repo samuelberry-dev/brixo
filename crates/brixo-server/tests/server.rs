@@ -333,3 +333,50 @@ fn brixo_client_board(c: &NetClient) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+#[test]
+fn karts_drive_over_the_network_and_keys_reach_scripts() {
+    let mut dm = arena();
+    let root = dm.root();
+    let k = dm.create(Class::Model, "Kart", root).unwrap();
+    dm.get_mut(k).unwrap().attributes.insert("kart".into(), brixo_core::Attribute::Bool(true));
+    let c = dm.create(Class::Part, "Chassis", k).unwrap();
+    {
+        let p = dm.part_mut(c).unwrap();
+        p.size = Vec3::new(3.0, 0.8, 5.0);
+        p.position = Vec3::new(0.0, 1.0, -40.0);
+    }
+    let w = dm.create(Class::Part, "Wheel", k).unwrap();
+    {
+        let p = dm.part_mut(w).unwrap();
+        p.size = Vec3::new(1.2, 1.2, 1.2);
+        p.position = Vec3::new(1.8, 0.6, -38.0);
+    }
+    let s = dm.create(Class::Script, "Drive", root).unwrap();
+    dm.script_mut(s).unwrap().source = "on player_joined(p)\n    p.kart = find(\"Kart\")\nend\non key(p, k)\n    print(p.name + \" pressed \" + k)\nend\n".into();
+    let server = brixo_server::start(dm, 0).unwrap();
+    let mut ann = NetClient::connect(&server.local_addr(), "Ann").unwrap();
+    wait_for(&mut [&mut ann], "Ann in her kart", |cs| cs[0].me.is_some_and(|me| cs[0].world.player(me).is_some_and(|p| p.kart.is_some())));
+    // Throttle (in a kart, move_z is the throttle).
+    ann.send_input(PlayerInput { move_x: 0.0, move_z: 1.0, jump: false });
+    wait_for(&mut [&mut ann], "the kart drove, and its wheel came along on Ann's screen", |cs| {
+        let w = &cs[0].world;
+        let (chassis, wheel) = (w.part(c).unwrap().position, w.part(w_id(w)).unwrap().position);
+        chassis.z > -20.0 && (wheel.z - (chassis.z + 2.0)).abs() < 0.3
+    });
+    ann.key("e");
+    ann.key("w");
+    let start = Instant::now();
+    loop {
+        ann.poll();
+        if server.take_log().iter().any(|l| l.text == "Ann pressed e") {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "the key never arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn w_id(w: &DataModel) -> brixo_core::InstanceId {
+    w.find_first("Wheel").unwrap()
+}

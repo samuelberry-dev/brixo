@@ -74,10 +74,10 @@ pub const SHOES_COLORS: [(u8, u8, u8); 4] = [
 ];
 
 /// A tiny xorshift generator; the avatar doesn't need anything fancier.
-struct Rng(u64);
+pub(crate) struct Rng(u64);
 
 impl Rng {
-    fn seeded() -> Self {
+    pub(crate) fn seeded() -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -93,7 +93,7 @@ impl Rng {
     }
 }
 
-fn random_colors(p: &mut brixo_core::PlayerProps, rng: &mut Rng) {
+pub(crate) fn random_colors(p: &mut brixo_core::PlayerProps, rng: &mut Rng) {
     let c = |(r, g, b): (u8, u8, u8)| brixo_core::Color::new(r, g, b);
     p.skin_color = c(rng.pick(&SKIN_TONES));
     p.shirt_color = c(rng.pick(&SHIRT_COLORS));
@@ -145,7 +145,11 @@ fn part_turn(p: &brixo_core::PartProps) -> glam::Quat {
 pub const FALL_LIMIT: f32 = -60.0;
 
 /// Events scripts can use with `on`.
-pub const EVENTS: &[&str] = &["touched", "player_joined", "player_left", "clicked", "activated", "died", "respawned"];
+pub const EVENTS: &[&str] = &["touched", "player_joined", "player_left", "clicked", "activated", "died", "respawned", "key"];
+
+/// The keys scripts can hear with `on key(player, key)`: letters the game
+/// doesn't use for moving (WASD), the camera (I, O) or the tools (1-9).
+pub const SCRIPT_KEYS: &[&str] = &["e", "q", "f", "r", "g", "z", "x", "c", "v", "b"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LogLine {
@@ -199,6 +203,8 @@ struct ScriptInfo {
     respawned_handlers: Vec<Value>,
     clicked_handlers: Vec<Value>,
     activated_handlers: Vec<Value>,
+    /// `on key(player, key)`.
+    key_handlers: Vec<Value>,
     timers: Vec<Timer>,
 }
 
@@ -212,6 +218,14 @@ pub struct Game {
     saves: Arc<Mutex<crate::saves::Saves>>,
     last_save: f64,
     hinge_angles: Arc<Mutex<HashMap<InstanceId, f32>>>,
+    /// What scripts asked of karts (boost, spin out, place), and bots they
+    /// added, waiting for the next step.
+    kart_commands: Arc<Mutex<Vec<crate::physics::KartCommand>>>,
+    new_bots: Arc<Mutex<Vec<InstanceId>>>,
+    /// Bots, and how far round the racing line each has got.
+    bots: HashMap<InstanceId, crate::kart::BotDriver>,
+    /// Players whose kart drives itself like a bot's (for filming).
+    autopilot: HashMap<InstanceId, crate::kart::BotDriver>,
     /// Explosion fireballs on screen: the part, when it started, its radius.
     fireballs: Vec<(InstanceId, f64, f32)>,
     scripts: Vec<ScriptInfo>,
@@ -283,6 +297,10 @@ impl Game {
             saves: Arc::new(Mutex::new(crate::saves::Saves::new(Arc::new(crate::saves::MemoryStore::default())))),
             last_save: 0.0,
             hinge_angles: Arc::new(Mutex::new(HashMap::new())),
+            kart_commands: Arc::new(Mutex::new(Vec::new())),
+            new_bots: Arc::new(Mutex::new(Vec::new())),
+            bots: HashMap::new(),
+            autopilot: HashMap::new(),
             fireballs: Vec::new(),
             log: Arc::new(Mutex::new(Vec::new())),
             scripts: Vec::new(),
@@ -456,6 +474,42 @@ impl Game {
             self.fire_where(|s| &s.clicked_handlers, |_, parent| parent == Some(button), player);
         }
         ok
+    }
+
+    /// A player pressed a key: scripts hear `on key(player, key)`. Only the
+    /// keys in SCRIPT_KEYS count (whatever a client claims).
+    pub fn key(&mut self, player: InstanceId, key: &str) -> bool {
+        let key = key.to_lowercase();
+        if !SCRIPT_KEYS.contains(&key.as_str()) || !self.players.contains(&player) {
+            return false;
+        }
+        let mut calls = Vec::new();
+        for (s, script) in self.scripts.iter().enumerate() {
+            for handler in &script.key_handlers {
+                calls.push((s, handler.clone()));
+            }
+        }
+        for (s, handler) in calls {
+            let wanted = handler.param_count().unwrap_or(2);
+            let args: Vec<Value> = [object(player), Value::str(key.as_str())].into_iter().take(wanted).collect();
+            self.spawn(s, Job::Call(handler, args));
+        }
+        true
+    }
+
+    /// Lets a player's kart drive itself along the racing line, as a
+    /// bot's does (filming demos), or gives them the wheel back.
+    pub fn set_autopilot(&mut self, player: InstanceId, on: bool) {
+        if on {
+            self.autopilot.entry(player).or_default();
+        } else {
+            self.autopilot.remove(&player);
+        }
+    }
+
+    /// Whether a player is a bot (made by a script's `add_bot`).
+    pub fn is_bot(&self, player: InstanceId) -> bool {
+        self.bots.contains_key(&player)
     }
 
     /// The Tools in a player's backpack, in order (keys 1-9).
@@ -732,6 +786,7 @@ impl Game {
                     p.health = 0.0;
                     p.dead = 0.0001;
                     p.equipped = None;
+                    p.kart = None;
                     died.push((id, name, fell));
                 }
             }
@@ -745,6 +800,65 @@ impl Game {
             self.push_log("Brixo", format!("{name} respawned"), false);
             self.fire_everywhere(|s| &s.respawned_handlers, id);
         }
+    }
+
+    /// Before physics: bots scripts added join the game; kart commands from
+    /// scripts are carried out; each kart gets its driver's keys (or a
+    /// bot's driving).
+    fn drive_karts(&mut self, dt: f32) {
+        for bot in std::mem::take(&mut *self.new_bots.lock().unwrap()) {
+            if !self.players.contains(&bot) {
+                self.players.push(bot);
+            }
+            self.bots.insert(bot, crate::kart::BotDriver::default());
+        }
+        for c in std::mem::take(&mut *self.kart_commands.lock().unwrap()) {
+            // A kart the engine hasn't picked up yet (placed as the game
+            // starts): move its chassis, which it'll start from.
+            if let crate::physics::KartCommand::Place(k, at, yaw) = c {
+                if self.physics.kart_state(k).is_none() {
+                    let mut world = self.world.lock();
+                    // (Where its parts sit on it, first, from where it was built.)
+                    crate::kart::record_offsets(&mut world, k);
+                    if let Some(p) = brixo_core::kart_chassis(&world, k).and_then(|ch| world.part_mut(ch)) {
+                        p.position = BVec3::new(at.x, at.y, at.z);
+                        p.rotation = BVec3::new(0.0, yaw, 0.0);
+                    }
+                    crate::kart::pose_parts(&mut world, k);
+                    continue;
+                }
+            }
+            self.physics.kart_command(c);
+        }
+        let world = self.world.lock();
+        let line = crate::kart::racing_line(&world);
+        let mut inputs = HashMap::new();
+        let all_karts: Vec<(InstanceId, glam::Vec3)> = crate::kart::karts(&world)
+            .into_iter()
+            .filter_map(|k| Some((k, self.physics.kart_state(k)?.0)))
+            .collect();
+        for &player in &self.players {
+            let Some(p) = world.player(player) else { continue };
+            let Some(kart) = p.kart.filter(|k| brixo_core::is_kart(&world, *k)) else { continue };
+            let driver = match self.bots.get_mut(&player) {
+                Some(d) => Some(d),
+                None => self.autopilot.get_mut(&player),
+            };
+            let input = if let Some(driver) = driver {
+                let Some((at, yaw, speed)) = self.physics.kart_state(kart) else { continue };
+                let lane = match world.get(player).and_then(|i| i.attributes.get("lane")) {
+                    Some(brixo_core::Attribute::Num(n)) => *n as f32,
+                    _ => 0.0,
+                };
+                let others: Vec<glam::Vec3> = all_karts.iter().filter(|(k, _)| *k != kart).map(|(_, p)| *p).collect();
+                driver.drive(&line, at, yaw, speed, lane, &others, dt)
+            } else {
+                crate::kart::KartInput::from_player(self.inputs.get(&player).copied().unwrap_or_default())
+            };
+            inputs.insert(kart, input);
+        }
+        drop(world);
+        self.physics.set_kart_inputs(inputs);
     }
 
     /// Carries out explosions scripts set off: throws loose parts and shows
@@ -942,6 +1056,8 @@ impl Game {
             blasts: self.blasts.clone(),
             saves: self.saves.clone(),
             hinge_angles: self.hinge_angles.clone(),
+            kart_commands: self.kart_commands.clone(),
+            new_bots: self.new_bots.clone(),
         }));
         let log = self.log.clone();
         let source_label = label.clone();
@@ -972,6 +1088,7 @@ impl Game {
             respawned_handlers: Vec::new(),
             clicked_handlers: Vec::new(),
             activated_handlers: Vec::new(),
+            key_handlers: Vec::new(),
             timers: Vec::new(),
         });
         let index = self.scripts.len() - 1;
@@ -995,6 +1112,7 @@ impl Game {
                 script.respawned_handlers.clear();
                 script.clicked_handlers.clear();
                 script.activated_handlers.clear();
+                script.key_handlers.clear();
                 script.timers.clear();
             }
         }
@@ -1027,6 +1145,9 @@ impl Game {
                 }
                 Trigger::Event(name) if name == "activated" => {
                     self.scripts[index].activated_handlers.push(handler.function.clone());
+                }
+                Trigger::Event(name) if name == "key" => {
+                    self.scripts[index].key_handlers.push(handler.function.clone());
                 }
                 Trigger::Event(name) => {
                     self.push_log(
@@ -1240,11 +1361,35 @@ impl Game {
             .filter(|s| !s.touch_handlers.is_empty())
             .filter_map(|s| s.parent)
             .collect();
+        self.drive_karts(dt as f32);
         let touches = {
             let mut world = self.world.lock();
             self.physics.step(&mut world, dt as f32, &listeners, &self.inputs)
         };
         *self.hinge_angles.lock().unwrap() = self.physics.hinge_angles();
+        // What a kart touches, its driver touches too (so a jump pad or a
+        // coin that checks for players works for someone driving).
+        let touches: Vec<(InstanceId, InstanceId)> = {
+            let world = self.world.lock();
+            let driver = |part: InstanceId| {
+                let kart = brixo_core::kart_of(&world, part)?;
+                world.walk().into_iter().find(|p| world.player(*p).is_some_and(|pp| pp.kart == Some(kart)))
+            };
+            let mut all = touches.clone();
+            for (a, b) in &touches {
+                if let Some(d) = driver(*a) {
+                    if brixo_core::kart_of(&world, *b).is_none() {
+                        all.push((*b, d));
+                    }
+                }
+                if let Some(d) = driver(*b) {
+                    if brixo_core::kart_of(&world, *a).is_none() {
+                        all.push((*a, d));
+                    }
+                }
+            }
+            all
+        };
         for (a, b) in touches {
             self.fire_touched(a, b);
             self.fire_touched(b, a);

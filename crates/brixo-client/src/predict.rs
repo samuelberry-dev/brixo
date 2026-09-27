@@ -33,6 +33,8 @@ const EASE: f32 = 10.0;
 pub struct Predictor {
     physics: Physics,
     me: Option<InstanceId>,
+    /// Driving: your kart, predicted the same way (see `step_kart`).
+    kart: Option<KartPrediction>,
     /// Where we've put the character, and when: newest last.
     history: VecDeque<(f64, Vec3)>,
     /// What we predict now: position, facing (degrees), speed, in the air.
@@ -44,8 +46,20 @@ pub struct Predictor {
 
 impl Default for Predictor {
     fn default() -> Self {
-        Predictor { physics: Physics::new(), me: None, history: VecDeque::new(), now: None, last_server: None, base: Instant::now() }
+        Predictor { physics: Physics::new(), me: None, kart: None, history: VecDeque::new(), now: None, last_server: None, base: Instant::now() }
     }
+}
+
+/// Your kart, predicted: which it is, where we've put its chassis (and
+/// the kart's own facts: speed, steering...), and its recent path.
+struct KartPrediction {
+    kart: InstanceId,
+    chassis: InstanceId,
+    pose: Option<brixo_core::PartProps>,
+    facts: Vec<(String, brixo_core::Attribute)>,
+    seat: Option<(Vec3, Vec3)>,
+    history: VecDeque<(f64, Vec3, f32)>,
+    last_server: Option<Vec3>,
 }
 
 fn sub(a: Vec3, b: Vec3) -> Vec3 {
@@ -83,6 +97,14 @@ impl Predictor {
             self.now = None;
             return;
         };
+        // Driving: predict the kart instead.
+        if let Some(kart) = said.kart.filter(|k| brixo_core::is_kart(server, *k)) {
+            self.now = None;
+            self.history.clear();
+            self.step_kart(server, me, kart, input, dt, t);
+            return;
+        }
+        self.kart = None;
         // Knocked out: the server's in charge until you're back.
         if said.dead > 0.0 || said.health <= 0.0 {
             self.now = None;
@@ -149,9 +171,87 @@ impl Predictor {
         }
     }
 
+    /// Your kart, one step: run the kart physics on a copy of the world
+    /// with the chassis where we predicted it, then check the server's
+    /// chassis against our recent path, like the character above.
+    fn step_kart(&mut self, server: &DataModel, me: InstanceId, kart: InstanceId, input: PlayerInput, dt: f32, t: f64) {
+        let Some(chassis) = brixo_core::kart_chassis(server, kart) else { return };
+        if self.kart.as_ref().is_none_or(|k| k.kart != kart || k.chassis != chassis) {
+            self.physics = Physics::new();
+            self.kart = Some(KartPrediction { kart, chassis, pose: None, facts: Vec::new(), seat: None, history: VecDeque::new(), last_server: None });
+        }
+        let Some(server_pose) = server.part(chassis).copied() else { return };
+        let server_at = server_pose.position;
+        let k = self.kart.as_mut().unwrap();
+        let mut world = server.clone();
+        // Carry on from our own prediction.
+        if let (Some(pose), Some(p)) = (k.pose, world.part_mut(chassis)) {
+            *p = pose;
+        }
+        // Where's the server, on our path?
+        let nearest = k.history.iter().map(|(_, p, yaw)| (*p, *yaw, dist(*p, server_at))).min_by(|a, b| a.2.total_cmp(&b.2));
+        let mut snap = false;
+        let mut fix = None;
+        match nearest {
+            None => {}
+            Some((_, _, d)) if d > 5.0 => snap = true,
+            Some((p, yaw, d)) if d > DEAD_ZONE => {
+                let turn = server_pose.rotation.y.to_radians() - yaw;
+                let turn = (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                fix = Some((sub(server_at, p), turn));
+            }
+            _ => {}
+        }
+        if snap {
+            // It went somewhere we didn't: follow the server (placed, spun out...).
+            if let Some(p) = world.part_mut(chassis) {
+                *p = server_pose;
+            }
+            k.history.clear();
+        }
+        self.physics.step(&mut world, 0.0, &HashSet::new(), &HashMap::new());
+        if let Some((off, turn)) = fix {
+            let e = (EASE * dt).min(1.0);
+            self.physics.nudge_kart(kart, glam::Vec3::new(off.x * e, off.y * e, off.z * e), turn * e);
+            for (_, h, yaw) in k.history.iter_mut() {
+                *h = Vec3::new(h.x + off.x * e, h.y + off.y * e, h.z + off.z * e);
+                *yaw += turn * e;
+            }
+        }
+        let mut inputs = HashMap::new();
+        inputs.insert(kart, brixo_runtime::kart::KartInput::from_player(input));
+        self.physics.set_kart_inputs(inputs);
+        let players: HashMap<InstanceId, PlayerInput> = [(me, input)].into_iter().collect();
+        self.physics.step(&mut world, dt, &HashSet::new(), &players);
+        let Some(pose) = world.part(chassis).copied() else { return };
+        k.pose = Some(pose);
+        k.facts = world.get(kart).map(|i| i.attributes.iter().map(|(a, b)| (a.clone(), b.clone())).collect()).unwrap_or_default();
+        k.seat = world.player(me).map(|p| (p.body.position, p.body.rotation));
+        k.history.push_back((t, pose.position, pose.rotation.y.to_radians()));
+        while k.history.front().is_some_and(|(when, _, _)| t - when > HISTORY) {
+            k.history.pop_front();
+        }
+        k.last_server = Some(server_at);
+    }
+
     /// Draws your character where we predict, in `view` (the smoothed copy
     /// of the server's world that's about to be drawn).
     pub fn apply(&self, view: &mut DataModel) {
+        if let (Some(k), Some(me)) = (&self.kart, self.me) {
+            if let (Some(pose), Some(p)) = (k.pose, view.part_mut(k.chassis)) {
+                *p = pose;
+            }
+            if let Some(inst) = view.get_mut(k.kart) {
+                for (key, value) in &k.facts {
+                    inst.attributes.insert(key.clone(), value.clone());
+                }
+            }
+            if let (Some((at, turn)), Some(p)) = (k.seat, view.player_mut(me)) {
+                p.body.position = at;
+                p.body.rotation = turn;
+            }
+            return;
+        }
         let (Some(me), Some((position, yaw, speed, airborne))) = (self.me, self.now) else { return };
         if let Some(p) = view.player_mut(me) {
             p.body.position = position;
@@ -159,6 +259,11 @@ impl Predictor {
             p.speed = speed;
             p.airborne = airborne;
         }
+    }
+
+    /// Where we predict your kart's chassis is (while driving).
+    pub fn kart_position(&self) -> Option<Vec3> {
+        self.kart.as_ref()?.pose.map(|p| p.position)
     }
 
     /// Where we predict your character is right now.
@@ -269,5 +374,64 @@ mod tests {
         let frames = play(&mut game, me, &mut pred, 10, 6, |_| PlayerInput::default());
         let (p, s) = *frames.last().unwrap();
         assert!(dist(p, s) < 0.5, "followed the teleport: {p:?} {s:?}");
+    }
+
+    fn kart_arena() -> (DataModel, InstanceId) {
+        let mut dm = arena();
+        let root = dm.root();
+        let k = dm.create(Class::Model, "Kart", root).unwrap();
+        dm.get_mut(k).unwrap().attributes.insert("kart".into(), brixo_core::Attribute::Bool(true));
+        let c = dm.create(Class::Part, "Chassis", k).unwrap();
+        let p = dm.part_mut(c).unwrap();
+        p.size = Vec3::new(3.0, 0.8, 5.0);
+        p.position = Vec3::new(40.0, 0.45, 0.0);
+        (dm, k)
+    }
+
+    #[test]
+    fn your_kart_is_predicted_too() {
+        let (dm, k) = kart_arena();
+        let mut game = Game::start_server(dm);
+        let me = game.add_player("Ann");
+        game.world().player_mut(me).unwrap().kart = Some(k);
+        for _ in 0..30 {
+            game.step(1.0 / 60.0);
+        }
+        let chassis = |w: &DataModel| {
+            let c = brixo_core::kart_chassis(w, k).unwrap();
+            w.part(c).unwrap().position
+        };
+        let mut pred = Predictor::default();
+        let start = Instant::now();
+        let lag = 12;
+        let mut queue: VecDeque<PlayerInput> = VecDeque::from(vec![PlayerInput::default(); lag]);
+        let throttle = PlayerInput { move_z: 1.0, ..Default::default() };
+        let mut frames = Vec::new();
+        for f in 0..240 {
+            // A second of throttle, then the brakes, then nothing.
+            let input = if f < 60 {
+                throttle
+            } else if f < 90 {
+                PlayerInput { move_z: -1.0, ..Default::default() }
+            } else {
+                PlayerInput::default()
+            };
+            queue.push_back(input);
+            game.set_input_for(me, queue.pop_front().unwrap());
+            game.step(1.0 / 60.0);
+            let server = game.world().clone();
+            pred.step_at(&server, Some(me), input, None, 1.0 / 60.0, start + Duration::from_secs_f64(f as f64 / 60.0));
+            frames.push((pred.kart_position().unwrap(), chassis(&server)));
+        }
+        let (p, s) = frames[8];
+        assert!(p.z > s.z + 0.2, "moving at once: predicted {p:?}, server {s:?}");
+        let (p, s) = frames[50];
+        assert!(dist(p, s) < 12.0 && p.z > s.z + 2.0, "ahead of the server by about the lag: {p:?} {s:?}");
+        let (p, s) = *frames.last().unwrap();
+        assert!(dist(p, s) < 0.5, "they agree once stopped: {p:?} {s:?}");
+        // Never pulled back while driving.
+        for w in frames[..60].windows(2) {
+            assert!(w[1].0.z >= w[0].0.z - 0.05, "pulled back: {:?} then {:?}", w[0].0, w[1].0);
+        }
     }
 }

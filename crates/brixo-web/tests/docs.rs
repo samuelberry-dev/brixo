@@ -413,3 +413,40 @@ fn the_leaderboard_line_shows_coins() {
     no_errors(&game);
     assert_eq!(brixo_core::leaderboard_columns(&game.world()), ["coins"]);
 }
+
+#[test]
+fn the_kart_pad_seats_you_and_your_keys_boost_and_the_pad_boosts() {
+    let mut w = World::new();
+    let root = w.dm.root();
+    let kart = brixo_samples::speedway::build_kart(&mut w.dm, root, "Red Kart", (0.0, 1.1, 40.0), (200, 40, 40), (250, 200, 30));
+    let pad = w.part("Kart Pad", (0.0, 0.5, 25.0), (4.0, 1.0, 4.0));
+    w.script(Some(pad), &recipe("howto-karts", "other.kart = kart"));
+    w.script(None, &recipe("howto-karts", "on key(p, k)"));
+    let boost_pad = w.part("Boost Pad", (0.0, 0.1, 70.0), (30.0, 0.2, 8.0));
+    w.script(Some(boost_pad), &recipe("howto-karts", "boost(other.kart, 1.2)"));
+    let mut game = Game::start(w.dm);
+    run(&mut game, 0.5);
+    let me = game.player_id().unwrap();
+    teleport(&game, me, 0.0, 3.5, 25.0);
+    run(&mut game, 1.0);
+    no_errors(&game);
+    assert_eq!(game.world().player(me).unwrap().kart, Some(kart), "the pad seats you");
+    let boosting = |game: &Game| matches!(game.world().get(kart).unwrap().attributes.get("boosting"), Some(brixo_core::Attribute::Bool(true)));
+    // Drive over the boost pad.
+    game.set_input(brixo_runtime::PlayerInput { move_x: 0.0, move_z: 1.0, jump: false });
+    let mut boosted = false;
+    for _ in 0..90 {
+        game.step(1.0 / 60.0);
+        boosted |= boosting(&game);
+    }
+    no_errors(&game);
+    assert!(boosted, "the boost pad boosts");
+    game.set_input(brixo_runtime::PlayerInput::default());
+    run(&mut game, 1.5);
+    assert!(!boosting(&game), "for a second or so");
+    // E boosts too.
+    assert!(game.key(me, "e"));
+    run(&mut game, 0.2);
+    assert!(boosting(&game), "E boosts");
+    no_errors(&game);
+}

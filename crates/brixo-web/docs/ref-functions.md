@@ -14,6 +14,17 @@ Every function built into Brixo. For events (`on ...`) see [Events](ref-events).
 | `explode(position, radius, power)` | The same, throwing things with `power` (0 to 400; 70 if left out). |
 | `leaderboard("coins", "wins", ...)` | The leaderboard in the top right corner, showing these player fields (up to 5), sorted by the first. `leaderboard()` takes it away. See [Coins and a leaderboard](howto-coins#4-a-leaderboard). |
 
+## Karts and bots
+
+See [Karts, racing and bots](howto-karts).
+
+| Function | What it does |
+|---|---|
+| `boost(kart, seconds)` | A burst of speed. |
+| `spin_out(kart)` | Spins it round and stops it for a second. |
+| `place_kart(kart, position, facing)` | Moves it there, stopped, facing `facing` degrees (`0` is +Z, `90` is +X). |
+| `add_bot(name)` | A computer player (a unique name is made from `name`). Put it in a kart and it drives the racing line. Gives back the bot. |
+
 ## Sound
 
 | Function | What it does |

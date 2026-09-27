@@ -3,6 +3,7 @@
 pub mod chat_filter;
 pub mod game;
 pub mod host;
+pub mod kart;
 pub mod physics;
 pub mod saves;
 

@@ -446,6 +446,7 @@ async fn sample_file(Path(file): Path<String>) -> Response {
         "flagfall.brixo" => (brixo_samples::flagfall, "Flagfall"),
         "spire-wars.brixo" => (brixo_samples::spire_wars, "Spire Wars"),
         "gear-range.brixo" => (brixo_samples::gears::gear_range, "Gear Range"),
+        "brickport-speedway.brixo" => (brixo_samples::speedway::brickport_speedway, "Brickport Speedway"),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match make().to_json() {
@@ -744,7 +745,15 @@ pub fn seed_samples(app: &App) {
             Err(_) => return,
         },
     };
-    let samples: [(&str, fn() -> DataModel, &str, &[u8]); 3] = [
+    let samples: [(&str, fn() -> DataModel, &str, &[u8]); 4] = [
+        (
+            "Brickport Speedway",
+            brixo_samples::speedway::brickport_speedway,
+            "Kart racing for up to 8! Drift for boosts, grab items, fly the canyon jump and race three laps of a \
+             figure-8 past the grandstand, through town and over the bridge. Bots fill the grid, and your wins and \
+             best lap are saved.",
+            include_bytes!("../assets/brickport-speedway.png"),
+        ),
         (
             "Flagfall",
             brixo_samples::flagfall,

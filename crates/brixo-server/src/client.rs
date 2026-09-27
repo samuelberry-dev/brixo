@@ -88,7 +88,11 @@ impl NetClient {
                     self.world = w;
                 }
             }
-            ToClient::State { parts, players, guis, attrs } => apply_state(&mut self.world, &parts, &players, &guis, &attrs),
+            ToClient::State { parts, players, guis, attrs } => {
+                apply_state(&mut self.world, &parts, &players, &guis, &attrs);
+                // Karts' parts aren't sent: pose them from their chassis.
+                brixo_runtime::kart::pose_all(&mut self.world);
+            }
             ToClient::Changes { added, removed, moved } => crate::protocol::apply_changes(&mut self.world, &added, &removed, &moved),
             ToClient::Sound { name } => self.cues.push(brixo_runtime::Cue::Sound(name)),
             ToClient::Music { name } => self.cues.push(brixo_runtime::Cue::Music(name)),
@@ -131,6 +135,11 @@ impl NetClient {
     /// You clicked with a tool in hand, the mouse pointing at `aim`.
     pub fn activate_at(&mut self, aim: brixo_core::Vec3) {
         self.send(ToServer::ActivateAt { x: aim.x, y: aim.y, z: aim.z });
+    }
+
+    /// You pressed a key scripts can hear (`on key`).
+    pub fn key(&mut self, key: &str) {
+        self.send(ToServer::Key { key: key.to_string() });
     }
 
     /// Reset character: knocks you out, so you come back at a spawn.

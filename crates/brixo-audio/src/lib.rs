@@ -231,6 +231,22 @@ pub struct Speaker {
     /// The player's own volume settings, 0 to 1 (1 is Brixo's normal mix).
     sound_level: f32,
     music_level: f32,
+    /// Your kart's engine, humming while you drive.
+    engine: Option<rodio::Sink>,
+}
+
+/// A kart engine's hum: a short loop (a whole number of every wave in it,
+/// so it loops without a click) of a buzzy low note with a putt-putt.
+pub fn engine_loop() -> Vec<f32> {
+    let n = (RATE as f32 * 0.2) as usize;
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / RATE as f32;
+            let saw = |f: f32| 2.0 * (t * f).fract() - 1.0;
+            let putt = 0.75 + 0.25 * (t * 20.0 * std::f32::consts::TAU).sin();
+            (saw(55.0) * 0.55 + saw(110.0) * 0.3 + (t * 220.0 * std::f32::consts::TAU).sin() * 0.15) * putt * 0.5
+        })
+        .collect()
 }
 
 /// The song that's playing: what it is, when (in its own time) it started,
@@ -290,7 +306,7 @@ pub const MUSIC_VOLUME: f32 = 0.35;
 impl Speaker {
     pub fn new() -> Option<Speaker> {
         let (stream, handle) = rodio::OutputStream::try_default().ok()?;
-        Some(Speaker { _stream: stream, handle, music: None, cache: HashMap::new(), sound_level: 1.0, music_level: 1.0 })
+        Some(Speaker { _stream: stream, handle, music: None, cache: HashMap::new(), sound_level: 1.0, music_level: 1.0, engine: None })
     }
 
     /// The player's volume settings for sound effects and music (0 to 1).
@@ -311,6 +327,29 @@ impl Speaker {
         let s = Arc::new(make()?);
         self.cache.insert(key.to_string(), s.clone());
         Some(s)
+    }
+
+    /// Your kart's engine: humming at `pitch` (1 is its idle note, 2 an
+    /// octave up at full speed), or silent (None).
+    pub fn engine(&mut self, pitch: Option<f32>) {
+        match pitch {
+            None => {
+                if let Some(sink) = self.engine.take() {
+                    sink.stop();
+                }
+            }
+            Some(pitch) => {
+                if self.engine.is_none() {
+                    let Ok(sink) = rodio::Sink::try_new(&self.handle) else { return };
+                    let buf = rodio::buffer::SamplesBuffer::new(1, RATE, engine_loop());
+                    sink.append(rodio::Source::repeat_infinite(buf));
+                    self.engine = Some(sink);
+                }
+                let sink = self.engine.as_ref().unwrap();
+                sink.set_speed(pitch.clamp(0.5, 3.0));
+                sink.set_volume(0.22 * self.sound_level);
+            }
+        }
     }
 
     /// Plays a sound effect once.

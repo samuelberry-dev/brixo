@@ -310,6 +310,38 @@ pub fn color_from_text(s: &str) -> Option<Color> {
     (parts.len() == 3).then(|| Color::new(parts[0], parts[1], parts[2]))
 }
 
+/// Karts: a Model with the custom field `kart = true`. Its **Chassis**
+/// (the part called "Chassis", or else its first part) is what the engine
+/// drives; the rest of its parts ride along, posed from it (see
+/// `pose_kart_parts`). A part called "Seat" is where the driver sits.
+pub const KART_FIELD: &str = "kart";
+
+/// Whether `id` is a kart.
+pub fn is_kart(world: &DataModel, id: InstanceId) -> bool {
+    world.get(id).is_some_and(|i| i.class == Class::Model && matches!(i.attributes.get(KART_FIELD), Some(Attribute::Bool(true))))
+}
+
+/// The kart a part belongs to (its Model, if that's a kart).
+pub fn kart_of(world: &DataModel, part: InstanceId) -> Option<InstanceId> {
+    let parent = world.get(part)?.parent?;
+    is_kart(world, parent).then_some(parent)
+}
+
+/// A kart's chassis: the part called "Chassis", or its first part.
+pub fn kart_chassis(world: &DataModel, kart: InstanceId) -> Option<InstanceId> {
+    let kids = &world.get(kart)?.children;
+    kids.iter().copied().find(|c| world.part(*c).is_some() && world.get(*c).is_some_and(|i| i.name == "Chassis"))
+        .or_else(|| kids.iter().copied().find(|c| world.part(*c).is_some()))
+}
+
+/// Where a kart part sits on its chassis: the custom fields `kart_at`
+/// ("x,y,z" in the chassis's own space) and `kart_turn` (its own turn,
+/// "x,y,z" degrees, as a quaternion's x,y,z,w in `kart_q`). Recorded by the
+/// engine the first time it sees the kart, so every copy of the world
+/// (server and players) poses the parts the same way.
+pub const KART_AT: &str = "kart_at";
+pub const KART_Q: &str = "kart_q";
+
 /// Where a character's right shoulder is, in its own space (facing +Z).
 pub const RIGHT_SHOULDER: Vec3 = Vec3 { x: -1.43, y: 0.97, z: 0.0 };
 /// From the shoulder to the middle of the hand.
@@ -755,6 +787,9 @@ pub struct PlayerProps {
     /// falling-apart animation; they respawn a few seconds in.
     #[serde(default)]
     pub dead: f32,
+    /// The kart they're sitting in and driving (a Model with `kart = true`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kart: Option<InstanceId>,
 }
 
 impl Default for PlayerProps {
@@ -783,6 +818,7 @@ impl Default for PlayerProps {
             airborne: false,
             swing: 0.0,
             dead: 0.0,
+            kart: None,
         }
     }
 }

@@ -21,6 +21,9 @@ use rapier3d::prelude::*;
 #[allow(unused_imports)]
 use rapier3d::prelude::CoefficientCombineRule;
 
+mod kart;
+pub use kart::{KartCommand, DRIFT_MINI, DRIFT_SUPER, TOP_SPEED};
+
 /// Physics runs at a fixed rate so it behaves the same on every machine.
 pub const PHYSICS_DT: f32 = 1.0 / 60.0;
 /// Downward acceleration in studs per second squared. With 1 stud at about
@@ -125,6 +128,11 @@ pub struct Physics {
     held_yaw: HashMap<InstanceId, f32>,
     /// Hinged parts: the joint holding each one.
     hinges: HashMap<InstanceId, HingeJoint>,
+    /// Karts, by their Model, and what drives each this step.
+    karts: HashMap<InstanceId, kart::Kart>,
+    kart_inputs: HashMap<InstanceId, crate::kart::KartInput>,
+    /// Who was driving which kart last step (to let them out when they stop).
+    seated: HashMap<InstanceId, InstanceId>,
 }
 
 /// A hinged part's joint, and what it was built from (a change rebuilds it).
@@ -182,6 +190,9 @@ impl Physics {
             welds: HashMap::new(),
             held_yaw: HashMap::new(),
             hinges: HashMap::new(),
+            karts: HashMap::new(),
+            kart_inputs: HashMap::new(),
+            seated: HashMap::new(),
         }
     }
 
@@ -198,7 +209,9 @@ impl Physics {
         self.pull_from_world(world, listeners);
         self.sync_welds(world);
         self.sync_hinges(world);
+        self.release_drivers(world);
         self.sync_characters(world);
+        self.sync_karts(world);
 
         self.accumulator = (self.accumulator + dt.max(0.0)).min(MAX_CATCH_UP);
         let mut touches = Vec::new();
@@ -206,9 +219,14 @@ impl Physics {
             self.accumulator -= PHYSICS_DT;
             let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
             for id in ids {
+                // (Drivers sit in their kart instead.)
+                if world.player(id).and_then(|p| p.kart).is_some_and(|k| self.karts.contains_key(&k)) {
+                    continue;
+                }
                 let input = inputs.get(&id).copied().unwrap_or_default();
                 self.move_character(world, id, input);
             }
+            self.move_karts(world);
             self.apply_conveyors();
             self.pipeline.step(
                 Vec3::new(0.0, -GRAVITY, 0.0),
@@ -241,6 +259,7 @@ impl Physics {
         }
 
         self.push_to_world(world);
+        self.push_karts(world);
         let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
         for id in ids {
             touches.extend(self.character_touches(world, id));
@@ -867,6 +886,14 @@ impl Physics {
         // way every time you press Play.
         for id in world.walk() {
             let Some(props) = world.part(id) else { continue };
+            // A kart's parts aren't bodies of their own: the kart's box
+            // stands for them all (see physics/kart.rs).
+            if brixo_core::kart_of(world, id).is_some() {
+                if self.parts.contains_key(&id) {
+                    self.remove(id);
+                }
+                continue;
+            }
             let listening = listeners.contains(&id);
             match self.parts.get(&id) {
                 None => self.add(id, *props, listening),

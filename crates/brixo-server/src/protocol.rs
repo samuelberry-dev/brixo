@@ -37,6 +37,8 @@ pub enum ToServer {
     Face { yaw: Option<f32> },
     /// Reset character: knock me out, so I come back at a spawn (stuck).
     Reset,
+    /// Pressed a key scripts can hear (`on key(player, key)`: E, Q, F...).
+    Key { key: String },
 }
 
 /// Server -> player.

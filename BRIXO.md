@@ -684,13 +684,60 @@ as **admins only** (`games.admin_only`: out of every listing, 404 to
 others, played from the Admin page's Play button; any game can be switched
 with "admins only" / "make public", `POST /api/admin/admin-only`).
 
-**Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 39 pages of
+**Karts** (`brixo-runtime/src/kart.rs` shared; `physics/kart.rs` the
+engine): a kart is a Model with `kart = true`. Its chassis ("Chassis", else
+the first part) is a kinematic box (the bounding box of all its parts)
+moved by Rapier's KinematicCharacterController; every other part is posed
+from it by `pose_parts`, from `kart_at`/`kart_q` offsets recorded once on
+each part (so the server sends only the chassis; clients `pose_all`). Parts
+named "Wheel..." roll with `odo`, "Front Wheel..." also steer. Driving is
+local input: `move_z` throttle, `move_x` steer (A = +1), jump = drift (hop,
+slide, release for a 0.6/1.3 s boost at `DRIFT_MINI`/`DRIFT_SUPER` charge).
+Karts write `speed`, `steer`, `odo`, `drift` (0/0.5/1/2), `boosting`,
+`spinning` on the Model; scripts set `top_speed` (70) and `locked`. Leaving
+a ramp's lip throws it (`climb` becomes `vy`). Script API: `p.kart` (set a
+kart/part of one/nil; taken is an error; death clears it), `kart.driver`,
+`boost`, `spin_out`, `place_kart` (a kart physics hasn't picked up yet gets
+its chassis moved instead), `add_bot`, `on key(p, k)` for E Q F R G Z X C V
+B (`ToServer::Key`). What a kart touches, its driver touches. Bots
+(`bot = true` Players, `Game.bots: BotDriver`) follow the Workspace's
+`racing_line` Folder (parts named 1, 2, 3...), `lane` studs to the left:
+they brake for bends by each bend's radius, dodge karts ahead, and back up
+when stuck. `Game::set_autopilot` (Player: `BRIXO_AUTOPILOT=1`) drives a
+human's kart the same way, for filming. Client: chase camera (FOV and
+distance grow with speed), speed dial and drift bar, sparks and flames
+(`kart_fx`), engine note; the renderer leaves out characters within 5
+studs of the camera. Prediction covers karts. `tests/karts.rs`.
+
+**Brickport Speedway** (`brixo_samples::speedway`, `brixo-samples
+speedway`): kart racing for 8, bots filling the grid. The track is a
+Catmull-Rom spline through `CONTROL` (31 points, 2.4k studs, sampled every
+4), built as road slabs per nearly-straight stretch (banked up to 7.5° in
+bends and lifted so the low edge clears the grass), striped walls, curbs,
+a bridge crossover with pillars, a canyon jump (a full-width boost strip,
+a kicker wedge, a landing wedge; `LIP_Z`/`LAND_Z`) over the river into a
+lake, and a barn shortcut (`CUT_FROM`/`CUT_TO`; the script caps
+`top_speed` at 40 inside it; no checkpoints in the stretch it skips).
+Grandstand with ~120 fans, jumbotron (a label attached to its screen),
+start gantry with 5 lights, pits (join here), podium, town, trees, lamps.
+The **Race** script: lobby (15 s, humans free-drive from the pits, bots
+wait on the grid), grid (humans at random slots), lights, 3 laps, results
+(25 s after the first finisher, or when every human's done), podium,
+fireworks, saved `wins`/`best_lap`, leaderboard; time of day rotates
+18.0/21.8/13.5. Checkpoints are checked by position every 0.1 s (not
+touches). Items (boost, homing rocket, oil, shield) from item boxes, used
+with E; R = back to the last checkpoint; bots stuck 4 s respawn; bots are
+rubber-banded against the best human via `top_speed`. Names to avoid for
+custom fields: anything one letter off a built-in field (`place` reads as
+a typo of `face`; `lane` is exempted). `tests/speedway.rs` races it headless.
+
+**Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 40 pages of
 Markdown in `crates/brixo-web/docs/` (getting started, Rovik, building,
-players and GUI, lighting, 13 how-tos, reference), compiled into the binary
+players and GUI, lighting, 14 how-tos, reference), compiled into the binary
 (`pages!`/`images!` lists: a new page or picture must be added there) and
 rendered with pulldown-cmark. Routes: `/learn/:slug`, `/learn/img/:file`,
 `/learn/search.json` (the sidebar search), `/learn/samples/<name>.brixo`
-(Coin Tycoon, Flagfall, Spire Wars, Gear Range, built fresh from
+(Coin Tycoon, Flagfall, Spire Wars, Gear Range, Brickport Speedway, built fresh from
 brixo-samples; Studio opens a .brixo dropped on its window). Code-block
 markers, all enforced by `tests/docs.rs`: ` ```rovik ` must parse;
 ` ```rovik run in=class:Name with=class:Name,... ` (underscores for spaces)

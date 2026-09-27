@@ -53,6 +53,9 @@ A **SpawnLocation** is a part players appear on. Give it a `team` custom field a
 | `equipped` | object (read) | The tool in their hand, or `nil`. |
 | `swinging` | true/false (read) | Just used a tool. |
 | `children` | list (read) | Their tools, and their own GUI. |
+| `kart` | kart or `nil` | The kart they're driving. Set it to put them in one (a kart or any part of it), `nil` to get out. |
+| `bot` | true/false (read) | A computer player, made by `add_bot`. |
+| `lane` | number | A bot's distance to the left of the racing line (negative: right). |
 
 `camera` is also a variable in Studio's single-player Play: `camera.mode` is the same as your own `camera_mode`.
 
@@ -72,6 +75,10 @@ A **SpawnLocation** is a part players appear on. Give it a `team` custom field a
 
 In the Workspace everyone sees it; inside a player, only they do. A TextButton's script hears `on clicked(p)`.
 
+## Kart
+
+A **Model** with `kart = true`. Its `driver` (read) is who's driving it. Brixo keeps `speed`, `drift`, `boosting` and `spinning` up to date on it; set `top_speed` or `locked = true` to change how it drives. See [Karts](howto-karts).
+
 ## Tool
 
 A tool's first part is the handle. It has the usual `name`, `parent` and `children`. With a custom field `grip = "up"` it's held straight up (a sword). Scripts inside it hear `on activated(p)`. Inside a player, it's in their hotbar.
@@ -86,7 +93,7 @@ Made by dropping an audio file on Studio. Play it with `play_sound(sound)` or `p
 
 ## Model, Folder, Script, Workspace
 
-These have just the properties every object has, except the **Workspace**, which also holds the [lighting](lighting): `time_of_day`, `brightness`, `fog_start`, `fog_end`, `fog_color` and `sky_color`. The Workspace is the top of everything: `find("Workspace")`. A script's `self` is the object it's inside.
+These have just the properties every object has, except the **Workspace**, which also holds the [lighting](lighting): `time_of_day`, `brightness`, `fog_start`, `fog_end`, `fog_color` and `sky_color`, and `racing_line`, the name of the folder bots drive along (see [Bots](howto-karts#bots)). The Workspace is the top of everything: `find("Workspace")`. A script's `self` is the object it's inside.
 
 ## Custom fields Brixo understands
 

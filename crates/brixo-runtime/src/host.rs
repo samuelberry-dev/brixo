@@ -112,6 +112,10 @@ pub struct WorldHost {
     pub saves: Arc<Mutex<crate::saves::Saves>>,
     /// Each hinged part's angle as of the last physics step, for `hinge_angle`.
     pub hinge_angles: Arc<Mutex<std::collections::HashMap<InstanceId, f32>>>,
+    /// Kart commands (boost, spin_out, place_kart) for the next step.
+    pub kart_commands: Arc<Mutex<Vec<crate::physics::KartCommand>>>,
+    /// Bots `add_bot` made, for the game to take on at its next step.
+    pub new_bots: Arc<Mutex<Vec<InstanceId>>>,
 }
 
 /// Breakable parts: anchored parts with a custom field `breakable = true`.
@@ -281,9 +285,10 @@ fn fields_for(class: Class) -> Vec<&'static str> {
             "position", "size", "rotation", "color", "anchored", "can_collide", "shape", "material",
             "transparency", "velocity", "floating", "bounce", "hinge", "hinge_at", "motor_speed", "swing_to", "hinge_angle",
         ]),
+        Class::Model => f.extend(["driver", "speed", "steer", "drift", "boosting", "spinning", "locked", "top_speed"]),
         Class::Player => f.extend([
             "position", "size", "rotation", "velocity", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
-            "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped",
+            "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped", "kart", "bot",
         ]),
         Class::TextLabel | Class::TextButton | Class::Frame => f.extend([
             "text", "text_size", "text_color", "background", "background_color", "visible", "x", "y", "width",
@@ -311,6 +316,10 @@ fn edit_distance(a: &str, b: &str) -> usize {
 
 /// A real field of `class` that `name` is probably a typo of.
 fn near_miss(class: Class, name: &str) -> Option<&'static str> {
+    // Custom fields the engine itself reads aren't typos.
+    if ["lane"].contains(&name) {
+        return None;
+    }
     fields_for(class)
         .into_iter()
         .filter(|f| *f != name)
@@ -492,6 +501,18 @@ impl Host for WorldHost {
                     Some(_) => Ok(facet_object(id, avatar_color_facet(name).unwrap())),
                     None => Err(format!("a {} doesn't have {name}. Only players do", class_name(inst.class))),
                 },
+                // The kart a player is driving (nil if none).
+                "kart" if world.player(id).is_some() => {
+                    Ok(world.player(id).unwrap().kart.filter(|k| world.get(*k).is_some()).map(object).unwrap_or(Value::Nil))
+                }
+                "bot" if world.player(id).is_some() => Ok(Value::Bool(matches!(inst.attributes.get("bot"), Some(brixo_core::Attribute::Bool(true))))),
+                // Who's driving a kart (nil if nobody).
+                "driver" if brixo_core::is_kart(&world, id) => Ok(world
+                    .walk()
+                    .into_iter()
+                    .find(|p| world.player(*p).is_some_and(|pp| pp.kart == Some(id)))
+                    .map(object)
+                    .unwrap_or(Value::Nil)),
                 "health" | "max_health" | "walk_speed" | "jump_power" => match world.player(id) {
                     Some(p) => Ok(Value::Num(match name {
                         "health" => p.health,
@@ -656,7 +677,30 @@ impl Host for WorldHost {
                     l.set(&mut world);
                     Ok(())
                 }
-                "mouse" | "look" | "swinging" if world.player(id).is_some() => Err(format!("{name} can't be changed")),
+                "mouse" | "look" | "swinging" | "bot" if world.player(id).is_some() => Err(format!("{name} can't be changed")),
+                "driver" if brixo_core::is_kart(&world, id) => Err("a kart's driver can't be set: set the player's kart instead (player.kart = the_kart)".into()),
+                // Sit a player in a kart to drive it, or (nil) get them out.
+                "kart" if world.player(id).is_some() => match value {
+                    Value::Nil => {
+                        // (The engine lets them out beside the kart.)
+                        world.player_mut(id).unwrap().kart = None;
+                        Ok(())
+                    }
+                    Value::Object(o) => {
+                        let mut kart = InstanceId::from_raw(o.id);
+                        // A part of a kart counts as the kart.
+                        if !brixo_core::is_kart(&world, kart) {
+                            kart = brixo_core::kart_of(&world, kart).ok_or("that isn't a kart: a kart is a Model with the custom field kart = true")?;
+                        }
+                        let taken = world.walk().into_iter().any(|p| p != id && world.player(p).is_some_and(|pp| pp.kart == Some(kart)));
+                        if taken {
+                            return Err("someone's already driving that kart".into());
+                        }
+                        world.player_mut(id).unwrap().kart = Some(kart);
+                        Ok(())
+                    }
+                    other => Err(format!("a player's kart has to be a kart (or nil to get out), not a {}", other.type_name())),
+                },
                 "x" | "y" | "width" | "height" | "text_size" | "text" | "background" | "visible" | "text_color"
                 | "background_color"
                     if world.gui(id).is_some() =>
@@ -994,7 +1038,7 @@ impl Host for WorldHost {
     }
 
     fn function_names(&self) -> Vec<&'static str> {
-        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load", "leaderboard"]
+        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load", "leaderboard", "boost", "spin_out", "place_kart", "add_bot"]
     }
 
     fn call(&self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -1135,8 +1179,15 @@ impl Host for WorldHost {
                 let usage = if name == "save" { "save(player, \"coins\", player.coins)" } else { "load(player, \"coins\")" };
                 need(if name == "save" { 3 } else { 2 }).map_err(|_| format!("{name} works like {usage}"))?;
                 let player = instance_arg(&args[0])?;
-                if self.world.lock().player(player).is_none() {
-                    return Err(format!("{name} needs a player first: {usage}"));
+                {
+                    let world = self.world.lock();
+                    if world.player(player).is_none() {
+                        return Err(format!("{name} needs a player first: {usage}"));
+                    }
+                    // Bots have nothing saved and keep nothing.
+                    if matches!(world.get(player).and_then(|i| i.attributes.get("bot")), Some(brixo_core::Attribute::Bool(true))) {
+                        return Ok(Value::Nil);
+                    }
                 }
                 let Value::Str(key) = &args[1] else {
                     return Err(format!("{name} needs a name for the value, in quotes: {usage}"));
@@ -1184,6 +1235,71 @@ impl Host for WorldHost {
                     attrs.insert(brixo_core::LEADERBOARD_FIELD.into(), brixo_core::Attribute::Str(columns.join(",")));
                 }
                 Ok(Value::Nil)
+            }
+            // Karts: boost(kart, seconds), spin_out(kart),
+            // place_kart(kart, position, facing).
+            "boost" | "spin_out" | "place_kart" => {
+                let usage = match name {
+                    "boost" => "boost(kart, 1.5)",
+                    "spin_out" => "spin_out(kart)",
+                    _ => "place_kart(kart, {x = 0, y = 3, z = 0}, 90)",
+                };
+                let n = match name {
+                    "boost" => 2,
+                    "spin_out" => 1,
+                    _ => 3,
+                };
+                need(n).map_err(|_| format!("{name} works like {usage}"))?;
+                let world = self.world.lock();
+                let mut kart = instance_arg(&args[0]).map_err(|_| format!("{name} needs a kart first: {usage}"))?;
+                if !brixo_core::is_kart(&world, kart) {
+                    kart = brixo_core::kart_of(&world, kart).ok_or_else(|| format!("{name} needs a kart (a Model with kart = true): {usage}"))?;
+                }
+                let command = match name {
+                    "boost" => crate::physics::KartCommand::Boost(kart, number(&args[1], "seconds")?),
+                    "spin_out" => crate::physics::KartCommand::SpinOut(kart),
+                    _ => {
+                        let at = self.to_vec3(&world, &args[1], Vec3::new(0.0, 0.0, 0.0))?;
+                        crate::physics::KartCommand::Place(kart, glam::Vec3::new(at.x, at.y, at.z), number(&args[2], "facing")?)
+                    }
+                };
+                drop(world);
+                self.kart_commands.lock().unwrap().push(command);
+                Ok(Value::Nil)
+            }
+            // add_bot(name): a computer player, to drive a kart (its
+            // `kart` set like any player's). Bots follow the racing line.
+            "add_bot" => {
+                need(1).map_err(|_| "add_bot works like add_bot(\"Bolt\")".to_string())?;
+                let Value::Str(wanted) = &args[0] else {
+                    return Err("add_bot needs the bot's name, in quotes: add_bot(\"Bolt\")".into());
+                };
+                let mut world = self.world.lock();
+                let taken = |w: &DataModel, n: &str| w.walk().into_iter().any(|p| w.player(p).is_some() && w.get(p).is_some_and(|i| i.name == n));
+                let mut name = wanted.to_string();
+                let mut k = 2;
+                while taken(&world, &name) {
+                    name = format!("{wanted}{k}");
+                    k += 1;
+                }
+                let root = world.root();
+                let spawn = world
+                    .walk()
+                    .into_iter()
+                    .find(|i| world.get(*i).is_some_and(|x| x.class == Class::SpawnLocation))
+                    .and_then(|i| world.part(i).copied());
+                let id = world.create(Class::Player, &name, root).ok_or("couldn't make a bot")?;
+                {
+                    let p = world.player_mut(id).unwrap();
+                    crate::game::random_colors(p, &mut crate::game::Rng::seeded());
+                    if let Some(s) = spawn {
+                        p.body.position = Vec3::new(s.position.x, s.position.y + s.size.y / 2.0 + 2.55, s.position.z);
+                    }
+                }
+                world.get_mut(id).unwrap().attributes.insert("bot".into(), brixo_core::Attribute::Bool(true));
+                drop(world);
+                self.new_bots.lock().unwrap().push(id);
+                Ok(object(id))
             }
             "players" => {
                 need(0)?;

@@ -310,6 +310,19 @@ impl Player {
                 }
                 KeyCode::F9 => s.console = !s.console,
                 KeyCode::Tab if !s.lost => s.board_open = !s.board_open,
+                // Keys games hear (`on key(player, key)`): E, Q, F, R...
+                other if !s.paused && !s.lost => {
+                    if let Some(key) = script_key(other) {
+                        match &mut s.backend {
+                            Backend::Local(game) => {
+                                if let Some(me) = game.player_id() {
+                                    game.key(me, key);
+                                }
+                            }
+                            Backend::Online(net) => net.key(key),
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -334,9 +347,25 @@ impl Player {
             right: held(KeyCode::KeyD),
             jump: held(KeyCode::Space),
         };
+        // Driving a kart? (Arrow keys steer then, and the camera chases.)
+        let driving = match &self.screen {
+            Screen::Playing(s) => {
+                let me = match &s.backend {
+                    Backend::Local(game) => game.player_id(),
+                    Backend::Online(net) => net.me,
+                };
+                me.and_then(|m| s.view.player(m)).and_then(|p| p.kart).is_some()
+            }
+            _ => false,
+        };
+        let kart_held = Held {
+            left: held.left || (!chatting && self.keys.contains(&KeyCode::ArrowLeft)),
+            right: held.right || (!chatting && self.keys.contains(&KeyCode::ArrowRight)),
+            ..held
+        };
         // The camera keys, for trackpads (see brixo_client::CameraKeys).
         if let Screen::Playing(s) = &mut self.screen {
-            if !s.paused && !s.lost {
+            if !s.paused && !s.lost && !driving {
                 keyboard_look(&mut self.camera, &mut s.follow, cam_keys, dt);
             }
         }
@@ -346,7 +375,13 @@ impl Player {
         let mut hidden = None;
         let mut first_person = false;
         if let Screen::Playing(s) = &mut self.screen {
-            let mut input = if s.paused || s.lost { PlayerInput::default() } else { movement_input(&self.camera, held) };
+            let mut input = if s.paused || s.lost {
+                PlayerInput::default()
+            } else if driving {
+                brixo_client::kart_input(kart_held)
+            } else {
+                movement_input(&self.camera, held)
+            };
             // Test hook for filming: queued actions (see pending_actions).
             let (mut queued_equip, mut queued_use) = (None, false);
             for line in pending_actions() {
@@ -380,13 +415,17 @@ impl Player {
             }
             // Shift lock: face where the camera looks, and look from over
             // the shoulder.
-            let shift = s.shift_lock && !s.paused && !s.lost;
+            let shift = s.shift_lock && !s.paused && !s.lost && !driving;
             s.follow.shoulder = shift;
             let facing = shift.then(|| brixo_client::shift_lock_yaw(&self.camera));
             match &mut s.backend {
                 Backend::Local(game) => {
                     game.set_facing(facing);
                     if let Some(me) = game.player_id() {
+                        // Filming: BRIXO_AUTOPILOT drives your kart for you.
+                        if std::env::var_os("BRIXO_AUTOPILOT").is_some() {
+                            game.set_autopilot(me, true);
+                        }
                         if let Some(slot) = queued_equip {
                             game.equip(me, Some(slot));
                         }
@@ -406,6 +445,7 @@ impl Player {
                         self.audio.cue_with(&cue, &|id| brixo_client::world_sound(&world, id));
                     }
                     s.view = self.smoother.view(&game.world());
+                    brixo_runtime::kart::pose_all(&mut s.view);
                     hidden = s.follow.update(&mut self.camera, &s.view, game.player_id());
                     write_position(&s.view, game.player_id());
                     first_person = s.follow.first_person(&s.view, game.player_id());
@@ -444,12 +484,19 @@ impl Player {
                     }
                     s.view = self.smoother.view(&net.world);
                     s.predictor.apply(&mut s.view);
+                    brixo_runtime::kart::pose_all(&mut s.view);
                     hidden = s.follow.update(&mut self.camera, &s.view, net.me);
                     write_position(&s.view, net.me);
                     write_watch(&s.view);
                     first_person = s.follow.first_person(&s.view, net.me);
                 }
             }
+            // Your kart's engine, humming with its speed.
+            let me = match &s.backend {
+                Backend::Local(game) => game.player_id(),
+                Backend::Online(net) => net.me,
+            };
+            self.audio.engine(if s.lost { None } else { brixo_client::kart_fx::engine_pitch(&s.view, me) });
             let extra = s.output.len().saturating_sub(CONSOLE_LIMIT);
             s.output.drain(..extra);
         }
@@ -491,6 +538,8 @@ impl Player {
                         GuiEvents::default()
                     } else {
                         draw_beacons(ctx, area, world, me, camera);
+                        brixo_client::kart_fx::draw_effects(ctx, world, camera.position, &project, ctx.input(|i| i.time) as f32);
+                        brixo_client::kart_fx::draw_hud(ctx, area, world, me);
                         let mut events = draw_gui(ctx, area, world, me, !s.paused && !s.lost, &project);
                         if let Some(me) = me {
                             draw_hotbar(ctx, area, world, me, &mut events);
@@ -776,6 +825,23 @@ fn aim(camera: &mut Camera, at: glam::Vec3, look: glam::Vec3) {
 }
 
 /// Test hook for filming: the camera's position and the point it looks at,
+/// The letter a key is, if it's one games can hear (brixo_runtime::SCRIPT_KEYS).
+fn script_key(code: KeyCode) -> Option<&'static str> {
+    Some(match code {
+        KeyCode::KeyE => "e",
+        KeyCode::KeyQ => "q",
+        KeyCode::KeyF => "f",
+        KeyCode::KeyR => "r",
+        KeyCode::KeyG => "g",
+        KeyCode::KeyZ => "z",
+        KeyCode::KeyX => "x",
+        KeyCode::KeyC => "c",
+        KeyCode::KeyV => "v",
+        KeyCode::KeyB => "b",
+        _ => return None,
+    })
+}
+
 /// from BRIXO_CAMERA_FILE ("x y z lx ly lz"), if that's set and present.
 fn camera_shot() -> Option<(glam::Vec3, glam::Vec3)> {
     let text = std::fs::read_to_string(std::env::var_os("BRIXO_CAMERA_FILE")?).ok()?;

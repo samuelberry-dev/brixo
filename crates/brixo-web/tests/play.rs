@@ -163,7 +163,7 @@ fn game_pages_profiles_thumbnails_and_stats() {
     // Brixo's profile lists its games.
     let brixo = get(&anon, "/api/users/brixo");
     assert_eq!(brixo["username"], "Brixo");
-    assert_eq!(brixo["games"].as_array().unwrap().len(), 3);
+    assert_eq!(brixo["games"].as_array().unwrap().len(), 4);
     assert_eq!(status(anon.get(&format!("{site}/api/users/nobody_here")).call()), 404);
 
     // A new player: blurb (filtered), and can't edit someone else's game.
@@ -178,7 +178,7 @@ fn game_pages_profiles_thumbnails_and_stats() {
     // Stats count real players, not Brixo itself.
     let stats = get(&anon, "/api/stats");
     assert_eq!(stats["users"], 1);
-    assert_eq!(stats["games"], 3);
+    assert_eq!(stats["games"], 4);
 
     // Pressing Play counts a visit.
     let before = flagfall["visits"].as_i64().unwrap();
@@ -213,7 +213,7 @@ fn game_servers_use_the_public_address_and_port_range() {
     ann.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Annie", "password": "pass words"})).unwrap();
     let games: serde_json::Value = ann.get(&format!("{site}/api/games")).call().unwrap().into_json().unwrap();
     let ids: Vec<i64> = games.as_array().unwrap().iter().map(|g| g["id"].as_i64().unwrap()).collect();
-    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.len(), 4);
 
     let play = |id: i64| ann.post(&format!("{site}/api/games/{id}/play")).call();
     let pass: serde_json::Value = play(ids[0]).unwrap().into_json().unwrap();

@@ -478,6 +478,10 @@ fn pose(p: &brixo_core::PlayerProps, time: f32, seed: f32, grip_up: bool) -> [f3
         // The classic jump: arms straight up, legs apart.
         pose = [-2.8, -2.8, -0.3, 0.3];
     }
+    if p.kart.is_some() {
+        // Sitting in a kart: legs out in front, hands on the wheel.
+        pose = [-1.15, -1.15, -1.5, -1.5];
+    }
     if p.equipped.is_some() {
         // The same arm the runtime puts the tool in (see held_arm_angle).
         pose[1] = brixo_core::held_arm_angle(p.swing, grip_up);
@@ -995,6 +999,12 @@ impl SceneRenderer {
             let start = instances.len() as u32;
             for (id, p, highlight) in &players {
                 if self.hidden_player == Some(*id) {
+                    continue;
+                }
+                // Someone right up against the camera (a kart alongside
+                // yours) would fill the screen: leave them out.
+                let chest = Vec3::new(p.body.position.x, p.body.position.y + 1.5, p.body.position.z);
+                if chest.distance(camera.position) < 5.0 {
                     continue;
                 }
                 if draw.hat.is_some_and(|h| !p.hats.contains(&Some(h))) {

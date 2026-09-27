@@ -124,6 +124,13 @@ impl Audio {
         self.cue(&Cue::Sound(name.to_string()));
     }
 
+    /// Your kart's engine hum (None: not driving).
+    pub fn engine(&mut self, pitch: Option<f32>) {
+        if let Some(s) = self.speaker.as_mut() {
+            s.engine(pitch);
+        }
+    }
+
     pub fn stop_music(&mut self) {
         self.cue(&Cue::Music(None));
     }

@@ -299,6 +299,13 @@ impl Server {
                         }
                     }
                 }
+                Event::Message(ToServer::Key { key }) => {
+                    if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
+                        if key.len() <= 8 {
+                            self.game.key(player, &key);
+                        }
+                    }
+                }
                 Event::Message(ToServer::Face { yaw }) => {
                     if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
                         self.game.set_facing_for(player, yaw.filter(|y| y.is_finite()));
@@ -533,7 +540,11 @@ impl Sent {
         for id in &order {
             let raw = id.raw();
             if let Some(p) = world.part(*id) {
-                if self.parts.get(&raw) != Some(p) {
+                // A kart's parts (all but its chassis) are posed by each
+                // player from the chassis: sent once, never again.
+                if self.parts.contains_key(&raw) && brixo_runtime::kart::is_posed_part(world, *id) {
+                    // (still checked for custom fields below)
+                } else if self.parts.get(&raw) != Some(p) {
                     self.parts.insert(raw, *p);
                     parts.push((raw, *p));
                 }

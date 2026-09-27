@@ -1,4 +1,4 @@
-Brixo's three sample games are on the [Games](/games) page. They're also the best way to learn how bigger games fit together, because you can **open them in Studio** and read every script:
+Brixo's sample games are on the [Games](/games) page. They're also the best way to learn how bigger games fit together, because you can **open them in Studio** and read every script:
 
 1. In Studio, pick **File > Open a sample game**. Or download one below and **drag the file onto the Studio window** (or open it with **File > Open**).
 2. It opens as a new game. Studio asks first if you have unsaved changes.
@@ -11,6 +11,7 @@ Brixo's three sample games are on the [Games](/games) page. They're also the bes
 | **Coin Tycoon** | [coin-tycoon.brixo](samples/coin-tycoon.brixo) |
 | **Flagfall** | [flagfall.brixo](samples/flagfall.brixo) |
 | **Spire Wars** | [spire-wars.brixo](samples/spire-wars.brixo) |
+| **Brickport Speedway** | [brickport-speedway.brixo](samples/brickport-speedway.brixo) |
 | **Gear Range** (a test map with the whole gear kit) | [gear-range.brixo](samples/gear-range.brixo) |
 
 ## Coin Tycoon
@@ -91,6 +92,20 @@ fn rebuild()
     end
 end
 ```
+
+## Brickport Speedway
+
+**The game:** kart racing for up to 8, with bots filling the empty places. Drive round the pits while the next race counts down, line up on the grid, wait for the five red lights to go out, and race three laps of a figure-8: a banked sweeper, over a bridge the track later runs under, a jump across the canyon, a town street, a hairpin, and a shortcut through a barn (narrow, and slow going). Drive through **item boxes** for a boost, a homing rocket, an oil slick or a shield, and use it with **E**; **R** puts you back on the track. The top three go up on the podium, with fireworks. Your wins and best lap are saved, and each race is at a different time of day: sunset, night, afternoon.
+
+**How it's built:**
+
+- **The track is made in code** from 31 points along its middle, smoothed into a curve: road pieces follow it, tilting uphill, downhill and into the bends, with red and white walls either side. Open the file to see the result; the pieces are all ordinary parts.
+- **The karts** are Models with `kart = true`, parked on the grid. See [Karts, racing and bots](howto-karts).
+- **One Race script runs everything**, with each racer's progress in a map, `racers[name]`: how many checkpoints they've passed, which one is next, their lap times. It loops for ever: lobby, grid, lights, race, results.
+- **Checkpoints** are invisible parts around the track, in order. Rather than `on touched`, the script checks every tenth of a second whether each kart is past its next one (close to it, and on its far side). Places come from checkpoints passed, then distance to the next one.
+- **Bots** are added with `add_bot` to make 8, and drive the **Racing Line** folder. Bots that fall behind the best human get a higher `top_speed`, and ones far ahead a lower one, so races stay close. They use their items too.
+- **Items** are custom fields: an item box sets `other.item`, and `on key` uses it. Rockets and oil slicks are parts the script moves and checks every 0.05 seconds; the shield is a see-through ball with `carried_by`.
+- **Per-player GUI**: each player gets their own lap and place label and item slot, made with `create("TextLabel", p)` when they join. The standings and the jumbotron are shared.
 
 ## The gear kit
 

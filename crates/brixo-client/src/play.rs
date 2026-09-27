@@ -117,6 +117,14 @@ pub fn movement_input(camera: &Camera, held: Held) -> PlayerInput {
     PlayerInput { move_x: dir.x, move_z: dir.z, jump: held.jump }
 }
 
+/// Driving a kart: the keys as they are (the kart reads them as throttle
+/// and steering, not as a direction in the world). W is 1 and S -1 on
+/// `move_z`; A is 1 and D -1 on `move_x`; Space drifts.
+pub fn kart_input(held: Held) -> PlayerInput {
+    let axis = |a: bool, b: bool| (a as i32 - b as i32) as f32;
+    PlayerInput { move_x: axis(held.left, held.right), move_z: axis(held.forward, held.back), jump: held.jump }
+}
+
 /// The camera that follows your character. The game picks the mode; in the
 /// default mode the wheel zooms between third person and, all the way in,
 /// first person.
@@ -172,6 +180,11 @@ impl FollowCamera {
     pub fn update(&mut self, camera: &mut Camera, world: &DataModel, me: Option<InstanceId>) -> Option<InstanceId> {
         let id = me?;
         let player = world.player(id)?;
+        if let Some(kart) = player.kart.filter(|k| brixo_core::is_kart(world, *k)) {
+            self.chase(camera, world, kart);
+            return None;
+        }
+        camera.fov_degrees = 70.0;
         let center = Vec3::new(player.body.position.x, player.body.position.y, player.body.position.z);
         let mode = player.camera_mode;
         let first_person = match mode {
@@ -213,52 +226,100 @@ impl FollowCamera {
     }
 }
 
-/// How far along a ray the first solid, visible part is (within `max`).
-/// Tools and see-through or non-colliding parts don't block the camera.
-pub fn first_hit(world: &DataModel, origin: Vec3, dir: Vec3, max: f32) -> Option<f32> {
+impl FollowCamera {
+    /// Driving: the camera swings round behind the kart (a mouse-look
+    /// drifts back behind it), pulls back and widens with speed.
+    fn chase(&mut self, camera: &mut Camera, world: &DataModel, kart: InstanceId) {
+        let Some(chassis) = brixo_core::kart_chassis(world, kart).and_then(|c| world.part(c)) else { return };
+        let now = std::time::Instant::now();
+        let dt = self.shoulder_at.map(|t| (now - t).as_secs_f32().min(0.1)).unwrap_or(0.0);
+        self.shoulder_at = Some(now);
+        let speed = match world.get(kart).and_then(|k| k.attributes.get("speed")) {
+            Some(brixo_core::Attribute::Num(n)) => *n as f32,
+            _ => 0.0,
+        };
+        // (A kart faces (sin y, cos y); the camera looks along (cos yaw, sin yaw).)
+        let heading = chassis.rotation.y.to_radians();
+        let want_yaw = std::f32::consts::FRAC_PI_2 - heading;
+        let mut diff = want_yaw - camera.yaw;
+        while diff > std::f32::consts::PI {
+            diff -= std::f32::consts::TAU;
+        }
+        while diff < -std::f32::consts::PI {
+            diff += std::f32::consts::TAU;
+        }
+        camera.yaw += diff * (1.0 - (-6.0 * dt).exp());
+        camera.pitch += (-0.22 - camera.pitch) * (1.0 - (-6.0 * dt).exp());
+        let fast = (speed / 90.0).clamp(0.0, 1.0);
+        let fov = 70.0 + 14.0 * fast;
+        camera.fov_degrees += (fov - camera.fov_degrees) * (1.0 - (-4.0 * dt).exp());
+        let target = Vec3::new(chassis.position.x, chassis.position.y + 2.6, chassis.position.z);
+        let back = -camera.forward();
+        let distance = 12.0 + 4.0 * fast;
+        let parts: std::collections::HashSet<InstanceId> = world.parts_under(kart).into_iter().collect();
+        let wanted = first_hit_except(world, target, back, distance, &|id| parts.contains(&id)).map(|t| (t - 0.6).max(2.0)).unwrap_or(distance);
+        camera.position = target + back * wanted;
+    }
+}
+
+/// How far along a ray the first solid, visible part is (within `max`),
+/// leaving out the parts `skip` says to.
+pub fn first_hit_except(world: &DataModel, origin: Vec3, dir: Vec3, max: f32, skip: &dyn Fn(InstanceId) -> bool) -> Option<f32> {
     let mut best: Option<f32> = None;
     for id in world.walk() {
-        let Some(p) = world.part(id) else { continue };
-        if !p.can_collide || p.transparency > 0.5 || world.tool_of(id).is_some() {
+        if skip(id) || world.part(id).is_none() {
             continue;
         }
-        let q = glam::Quat::from_euler(
-            glam::EulerRot::YXZ,
-            p.rotation.y.to_radians(),
-            p.rotation.x.to_radians(),
-            p.rotation.z.to_radians(),
-        );
-        let inv = q.inverse();
-        let o = inv * (origin - Vec3::new(p.position.x, p.position.y, p.position.z));
-        let d = inv * dir;
-        let h = Vec3::new(p.size.x, p.size.y, p.size.z) / 2.0;
-        // Slab test in the part's own space.
-        let (mut t0, mut t1) = (0.0f32, max);
-        let mut hit = true;
-        for axis in 0..3 {
-            if d[axis].abs() < 1e-6 {
-                if o[axis].abs() > h[axis] {
-                    hit = false;
-                    break;
-                }
-            } else {
-                let a = (-h[axis] - o[axis]) / d[axis];
-                let b = (h[axis] - o[axis]) / d[axis];
-                t0 = t0.max(a.min(b));
-                t1 = t1.min(a.max(b));
-                if t0 > t1 {
-                    hit = false;
-                    break;
-                }
-            }
-        }
-        // Starting inside a part (t0 == 0) doesn't count: that's the floor
-        // the character stands in, or similar.
-        if hit && t0 > 0.0 && best.is_none_or(|b| t0 < b) {
-            best = Some(t0);
+        if let Some(t) = first_hit_one(world, id, origin, dir, max) {
+            best = Some(best.map_or(t, |b: f32| b.min(t)));
         }
     }
     best
+}
+
+/// How far along a ray the first solid, visible part is (within `max`).
+/// Tools and see-through or non-colliding parts don't block the camera.
+pub fn first_hit(world: &DataModel, origin: Vec3, dir: Vec3, max: f32) -> Option<f32> {
+    first_hit_except(world, origin, dir, max, &|_| false)
+}
+
+/// Where a ray first enters one part (within `max`), if it's solid and
+/// visible and not a tool.
+fn first_hit_one(world: &DataModel, id: InstanceId, origin: Vec3, dir: Vec3, max: f32) -> Option<f32> {
+    let p = world.part(id)?;
+    if !p.can_collide || p.transparency > 0.5 || world.tool_of(id).is_some() {
+        return None;
+    }
+    let q = glam::Quat::from_euler(
+        glam::EulerRot::YXZ,
+        p.rotation.y.to_radians(),
+        p.rotation.x.to_radians(),
+        p.rotation.z.to_radians(),
+    );
+    let inv = q.inverse();
+    let o = inv * (origin - Vec3::new(p.position.x, p.position.y, p.position.z));
+    let d = inv * dir;
+    let h = Vec3::new(p.size.x, p.size.y, p.size.z) / 2.0;
+    // Slab test in the part's own space.
+    let (mut t0, mut t1) = (0.0f32, max);
+    for axis in 0..3 {
+        if d[axis].abs() < 1e-6 {
+            if o[axis].abs() > h[axis] {
+                return None;
+            }
+        } else {
+            let a = (-h[axis] - o[axis]) / d[axis];
+            let b = (h[axis] - o[axis]) / d[axis];
+            t0 = t0.max(a.min(b));
+            t1 = t1.min(a.max(b));
+            if t0 > t1 {
+                return None;
+            }
+        }
+    }
+    // Starting inside a part (t0 == 0) doesn't count: that's the floor
+    // the character stands in, or similar.
+    (t0 > 0.0).then_some(t0)
 }
 
 /// Where the mouse points in the world when a tool is clicked: the spot on

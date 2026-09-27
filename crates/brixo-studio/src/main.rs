@@ -504,9 +504,23 @@ impl Studio {
         studio
     }
 
+    /// Whether you're driving a kart in Play.
+    fn driving(&self) -> bool {
+        self.game.as_ref().is_some_and(|g| g.player_id().and_then(|me| g.world().player(me).and_then(|p| p.kart)).is_some())
+    }
+
     fn player_input(&self) -> PlayerInput {
         let chatting = self.editor.chat_open;
         let held = |k| !chatting && self.keys.contains(&k);
+        if self.driving() {
+            return brixo_client::kart_input(Held {
+                forward: held(KeyCode::KeyW) || held(KeyCode::ArrowUp),
+                back: held(KeyCode::KeyS) || held(KeyCode::ArrowDown),
+                left: held(KeyCode::KeyA) || held(KeyCode::ArrowLeft),
+                right: held(KeyCode::KeyD) || held(KeyCode::ArrowRight),
+                jump: held(KeyCode::Space),
+            });
+        }
         movement_input(
             &self.camera,
             Held {
@@ -546,7 +560,14 @@ impl Studio {
             }
             KeyCode::Escape => e.mouse_freed = true,
             KeyCode::Tab => e.board_open = !e.board_open,
-            _ => {}
+            other => {
+                // Keys games hear (`on key(player, key)`).
+                if let (Some(key), Some(game)) = (script_key(other), self.game.as_mut()) {
+                    if let Some(me) = game.player_id() {
+                        game.key(me, key);
+                    }
+                }
+            }
         }
     }
 
@@ -609,7 +630,9 @@ impl Studio {
         // During Play the keys drive the player and the camera follows it;
         // the camera keys turn and zoom it, as in Brixo Player.
         if self.game.is_some() {
-            keyboard_look(&mut self.camera, &mut self.editor.follow, camera_keys, dt);
+            if !self.driving() {
+                keyboard_look(&mut self.camera, &mut self.editor.follow, camera_keys, dt);
+            }
             return;
         }
         // Building: Left/Right turn and Page Up/Down tilt here too, for
@@ -732,7 +755,8 @@ impl Studio {
         let mut first_person_player = None;
         if let Some(game) = self.game.as_mut() {
             // Shift lock: face where the camera looks, from over the shoulder.
-            let shift = self.editor.shift_lock;
+            let driving = game.player_id().and_then(|me| game.world().player(me).and_then(|p| p.kart)).is_some();
+            let shift = self.editor.shift_lock && !driving;
             self.editor.follow.shoulder = shift;
             game.set_facing(shift.then(|| brixo_client::shift_lock_yaw(&self.camera)));
             game.set_input(input);
@@ -748,10 +772,12 @@ impl Studio {
             }
             trim_output(&mut self.output);
             let view = self.smoother.view(&game.world());
+            self.audio.engine(brixo_client::kart_fx::engine_pitch(&view, game.player_id()));
             first_person_player = self.editor.follow.update(&mut self.camera, &view, game.player_id());
             self.play_view = Some(view);
         } else if self.play_view.take().is_some() {
             self.smoother.reset();
+            self.audio.engine(None);
         }
 
         let Studio {
@@ -1087,6 +1113,23 @@ fn lighting_ui(ui: &mut egui::Ui, l: &mut brixo_core::Lighting) -> bool {
     changed
 }
 
+/// The letter a key is, if it's one games can hear (brixo_runtime::SCRIPT_KEYS).
+fn script_key(code: KeyCode) -> Option<&'static str> {
+    Some(match code {
+        KeyCode::KeyE => "e",
+        KeyCode::KeyQ => "q",
+        KeyCode::KeyF => "f",
+        KeyCode::KeyR => "r",
+        KeyCode::KeyG => "g",
+        KeyCode::KeyZ => "z",
+        KeyCode::KeyX => "x",
+        KeyCode::KeyC => "c",
+        KeyCode::KeyV => "v",
+        KeyCode::KeyB => "b",
+        _ => return None,
+    })
+}
+
 fn stud_label(step: f32) -> String {
     match step {
         s if s == 0.25 => "¼ stud".into(),
@@ -1191,11 +1234,12 @@ enum Pending {
 }
 
 /// The sample games, for File > Open a sample.
-const SAMPLES: [(&str, fn() -> DataModel); 4] = [
+const SAMPLES: [(&str, fn() -> DataModel); 5] = [
     ("Coin Tycoon", brixo_samples::coin_tycoon),
     ("Flagfall", brixo_samples::flagfall),
     ("Spire Wars", brixo_samples::spire_wars),
     ("Gear Range", brixo_samples::gears::gear_range),
+    ("Brickport Speedway", brixo_samples::speedway::brickport_speedway),
 ];
 
 /// A new game: a big grey baseplate and a spawn pad, ready to build on.
@@ -2935,6 +2979,8 @@ fn viewport(
     let mut events = draw_gui(ui.ctx(), rect, model, me, playing, &project);
     if playing {
         draw_beacons(ui.ctx(), screen, model, me, camera);
+        brixo_client::kart_fx::draw_effects(ui.ctx(), model, camera.position, &project, ui.ctx().input(|i| i.time) as f32);
+        brixo_client::kart_fx::draw_hud(ui.ctx(), rect, model, me);
         editor.chat.draw(ui.ctx(), rect, model, &project);
     }
     if let Some(me) = me {

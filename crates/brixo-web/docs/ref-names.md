@@ -52,6 +52,9 @@ Built-in tracks for `play_music`: `sunny` (bright and bouncy), `rush` (fast, for
 | / or Enter | Chat |
 | Esc | Pause menu: who's playing, Reset character, settings (shift lock, camera speed, volume) and these controls |
 | F9 | The game's log (prints and errors) |
+| E Q F R G Z X C V B | Whatever the game's scripts make them do (`on key`) |
+
+In a [kart](howto-karts): **W**/**S** accelerate and brake, **A**/**D** steer, **Space** drifts.
 
 ## Numbers worth knowing
 
