@@ -542,8 +542,10 @@ impl Default for ScriptProps {
 pub struct SoundProps {
     /// "mp3", "wav" or "ogg".
     pub format: String,
-    /// The file itself, base64-encoded, so games stay plain JSON.
-    pub data: String,
+    /// The file itself, base64-encoded, so games stay plain JSON. (Shared,
+    /// so copying a world, which players do every frame, doesn't copy
+    /// every song in it.)
+    pub data: std::sync::Arc<str>,
     /// 0 to 1.
     pub volume: f32,
 }
@@ -551,13 +553,13 @@ pub struct SoundProps {
 impl SoundProps {
     pub fn from_bytes(format: &str, bytes: &[u8]) -> SoundProps {
         use base64::Engine;
-        SoundProps { format: format.to_string(), data: base64::engine::general_purpose::STANDARD.encode(bytes), volume: 0.8 }
+        SoundProps { format: format.to_string(), data: base64::engine::general_purpose::STANDARD.encode(bytes).into(), volume: 0.8 }
     }
 
     /// The file's bytes (None if the data is missing or damaged).
     pub fn bytes(&self) -> Option<Vec<u8>> {
         use base64::Engine;
-        base64::engine::general_purpose::STANDARD.decode(&self.data).ok().filter(|b| !b.is_empty())
+        base64::engine::general_purpose::STANDARD.decode(self.data.as_bytes()).ok().filter(|b| !b.is_empty())
     }
 }
 
@@ -1186,7 +1188,7 @@ impl DataModel {
             Class::Model => Props::Model,
             Class::TextLabel | Class::TextButton | Class::Frame => Props::Gui(GuiProps::for_class(class)),
             Class::Tool => Props::Tool,
-            Class::Sound => Props::Sound(SoundProps { format: "wav".into(), data: String::new(), volume: 0.8 }),
+            Class::Sound => Props::Sound(SoundProps { format: "wav".into(), data: "".into(), volume: 0.8 }),
             Class::Part => Props::Part(PartProps::default()),
             Class::Script => Props::Script(ScriptProps::default()),
             Class::SpawnLocation => Props::Part(PartProps {

@@ -98,7 +98,7 @@ impl NetClient {
             ToClient::Music { name } => self.cues.push(brixo_runtime::Cue::Music(name)),
             ToClient::Chat { from, name, text } => self.chat.push((InstanceId::from_raw(from), name, text)),
             ToClient::Asset { id, format, data } => {
-                let props = brixo_core::SoundProps { format, data, volume: 1.0 };
+                let props = brixo_core::SoundProps { format, data: data.into(), volume: 1.0 };
                 if let Some(bytes) = props.bytes() {
                     self.assets.insert(InstanceId::from_raw(id), std::sync::Arc::new(bytes));
                 }

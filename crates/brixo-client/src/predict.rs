@@ -230,12 +230,20 @@ impl Predictor {
             k.history.clear();
             k.before = None;
         }
-        self.physics.step(&mut world, 0.0, &HashSet::new(), &HashMap::new());
+        // Bring the physics up to date first when it has to be (a new
+        // kart, or a snap), so the nudge below moves the right thing.
+        if snap || self.physics.kart_timers(kart).is_none() {
+            self.physics.step(&mut world, 0.0, &HashSet::new(), &HashMap::new());
+        }
         if let Some((off, turn)) = fix {
             let e = (EASE * dt).min(1.0);
-            self.physics.nudge_kart(kart, glam::Vec3::new(off.x * e, off.y * e, off.z * e), turn * e);
+            // Never more than a little a frame: a nudge moves the kart
+            // straight there, walls or not, and a big one could put it
+            // through a wall.
+            let step = glam::Vec3::new(off.x * e, off.y * e, off.z * e).clamp_length_max(0.25);
+            self.physics.nudge_kart(kart, step, turn * e);
             for (_, h, yaw) in k.history.iter_mut() {
-                *h = Vec3::new(h.x + off.x * e, h.y + off.y * e, h.z + off.z * e);
+                *h = Vec3::new(h.x + step.x, h.y + step.y, h.z + step.z);
                 *yaw += turn * e;
             }
         }

@@ -118,7 +118,7 @@ pub fn public_instance(world: &DataModel, id: InstanceId) -> Option<brixo_core::
     let mut inst = world.get(id)?.clone();
     match &mut inst.props {
         brixo_core::Props::Script(s) => s.source.clear(),
-        brixo_core::Props::Sound(s) => s.data.clear(),
+        brixo_core::Props::Sound(s) => s.data = "".into(),
         _ => {}
     }
     Some(inst)
@@ -135,7 +135,7 @@ pub fn client_view(world: &DataModel) -> String {
     }
     let sounds: Vec<_> = copy.walk().into_iter().filter(|id| copy.sound(*id).is_some()).collect();
     for id in sounds {
-        copy.sound_mut(id).unwrap().data.clear();
+        copy.sound_mut(id).unwrap().data = "".into();
     }
     copy.to_json().expect("worlds always serialize")
 }

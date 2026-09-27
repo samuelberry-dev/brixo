@@ -14,6 +14,9 @@ use rapier3d::prelude::*;
 use super::{Physics, GRAVITY, PHYSICS_DT};
 use crate::kart::{bv, euler_of, quat_of, record_offsets, v, KartInput};
 
+/// How round a kart's box is at its edges (studs).
+const KART_ROUND: f32 = 0.35;
+
 /// Fastest a kart goes without a boost, in studs a second (`top_speed`
 /// on the kart changes it).
 pub const TOP_SPEED: f32 = 70.0;
@@ -73,6 +76,10 @@ pub(crate) struct Kart {
     roll: f32,
     /// Where we last put the chassis: if a script moved it, it's a teleport.
     placed: brixo_core::Vec3,
+    /// The last wall it scraped (the way into it) and for how
+    /// much longer to keep off it: without this, a kart sliding along a
+    /// wall bumps into it every other step and wobbles.
+    wall: Option<(Vec3, f32)>,
 }
 
 /// A kart's box: the parts' extent in the chassis's own space.
@@ -148,7 +155,7 @@ impl Physics {
                 let body = self.bodies.insert(RigidBodyBuilder::kinematic_position_based().pose(Pose::from_parts(at, Quat::from_rotation_y(yaw))).build());
                 // Touches: the kart's box stands for all its parts, as its chassis.
                 let collider = self.colliders.insert_with_parent(
-                    ColliderBuilder::cuboid(half.x, half.y, half.z)
+                    ColliderBuilder::round_cuboid(half.x - KART_ROUND, half.y - KART_ROUND, half.z - KART_ROUND, KART_ROUND)
                         .friction(0.0)
                         .active_events(ActiveEvents::COLLISION_EVENTS)
                         .active_collision_types(ActiveCollisionTypes::all()),
@@ -192,6 +199,7 @@ impl Physics {
                         pitch: 0.0,
                         roll: 0.0,
                         placed: c.position,
+                        wall: None,
                     },
                 );
             } else {
@@ -356,10 +364,21 @@ impl Physics {
                 k.vy -= GRAVITY * 0.85 * dt;
             }
 
+            // Keep off the wall it was just scraping.
+            if let Some((n, left)) = k.wall {
+                let into = k.velocity.dot(n);
+                if into > 0.0 {
+                    k.velocity -= n * into;
+                }
+                k.wall = (left > dt).then_some((n, left - dt));
+            }
+
             // Move the box.
             let Some(body) = self.bodies.get(k.body) else { continue };
             let pose = Pose::from_parts(body.translation(), Quat::from_rotation_y(k.yaw));
-            let shape = SharedShape::cuboid(k.half.x, k.half.y, k.half.z);
+            // Rounded edges glide over the little lips where road pieces
+            // meet, where a sharp box would catch.
+            let shape = SharedShape::round_cuboid(k.half.x - KART_ROUND, k.half.y - KART_ROUND, k.half.z - KART_ROUND, KART_ROUND);
             let desired = k.velocity * dt + Vec3::Y * k.vy * dt;
             let own = k.body;
             let drivers: HashSet<RigidBodyHandle> = character_bodies.clone();
@@ -369,28 +388,44 @@ impl Physics {
             };
             let filter = QueryFilter::default().exclude_rigid_body(own).exclude_sensors().predicate(&skip);
             let dispatcher = self.narrow_phase.query_dispatcher();
+            let mut hits: Vec<Vec3> = Vec::new();
             let movement = {
                 let queries = self.broad_phase.as_query_pipeline(dispatcher, &self.bodies, &self.colliders, filter);
-                k.controller.move_shape(dt, &queries, &*shape, &pose, desired, |_| {})
+                k.controller.move_shape(dt, &queries, &*shape, &pose, desired, |c| hits.push(c.hit.normal1))
             };
             let was_grounded = k.grounded;
             k.grounded = movement.grounded;
             if k.grounded {
                 // Following the ground: remember how fast it rises, so
                 // leaving a ramp's lip throws the kart up.
-                k.climb = (movement.translation.y / dt).clamp(-30.0, 40.0);
+                // (Held a moment as it fades: the kart's rounded edge rolls
+                // over a ramp's lip, and the last step up there is small.)
+                let now = (movement.translation.y / dt).clamp(-30.0, 40.0);
+                k.climb = now.max(k.climb * 0.85);
                 if k.vy <= 0.0 {
                     k.vy = 0.0;
                 }
             } else if was_grounded && k.vy <= 0.0 {
                 k.vy = k.climb.max(0.0);
             }
-            // A wall: the box went less far than it meant to. Keep what it
-            // really did (sliding along it), and lose a little.
-            let flat_meant = Vec3::new(desired.x, 0.0, desired.z);
+            // Walls: only what it hit side-on counts (not the ground, not a
+            // lip it rode up over). Lose the part of the speed going into
+            // the wall, and a little more; the kart keeps facing where it
+            // did, sliding along.
             let flat_did = Vec3::new(movement.translation.x, 0.0, movement.translation.z);
-            if flat_meant.length() > 0.001 && flat_did.length() < flat_meant.length() * 0.85 {
-                k.velocity = flat_did / dt * 0.9;
+            for n in &hits {
+                let flat = Vec3::new(n.x, 0.0, n.z);
+                if n.y.abs() > 0.6 || flat.length_squared() < 1e-4 {
+                    continue;
+                }
+                // (The normal points out of the wall, at the kart.)
+                let n = -flat.normalize();
+                let into = k.velocity.dot(n);
+                if into > 0.5 {
+                    k.velocity -= n * into;
+                    k.velocity *= 0.97;
+                }
+                k.wall = Some((n, 0.15));
             }
             k.odo += flat_did.dot(forward);
             let next = pose.translation + movement.translation;

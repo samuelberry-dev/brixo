@@ -200,3 +200,50 @@ fn the_drift_park_is_open_during_a_race() {
     drop(w);
     check(&game);
 }
+
+#[test]
+fn a_lap_without_catching_on_the_road() {
+    // Driven like a bot, a whole lap: the kart never catches on the little
+    // lips where road pieces meet (a sudden stop, a shove sideways, a hop).
+    let mut dm = brixo_samples::speedway::brickport_speedway();
+    let race = dm.find_first("Race").unwrap();
+    dm.remove(race);
+    let mut game = Game::start_server(dm);
+    let me = game.add_player("Ann");
+    let kart = game.world().find_first("Red Kart").unwrap();
+    game.world().player_mut(me).unwrap().kart = Some(kart);
+    game.step(FRAME);
+    {
+        let mut w = game.world();
+        let c = brixo_core::kart_chassis(&w, kart).unwrap();
+        let p = w.part_mut(c).unwrap();
+        p.position = Vec3::new(-30.0, 1.4, 0.0);
+        p.rotation = Vec3::new(0.0, 90.0, 0.0);
+    }
+    game.step(FRAME);
+    game.set_autopilot(me, true);
+    let mut last: Option<(Vec3, f32)> = None;
+    let mut went = 0.0;
+    let mut caught = Vec::new();
+    for _ in 0..(60 * 45) {
+        game.step(FRAME);
+        let w = game.world();
+        let p = *w.part(brixo_core::kart_chassis(&w, kart).unwrap()).unwrap();
+        let speed = match w.get(kart).unwrap().attributes.get("speed") {
+            Some(Attribute::Num(n)) => *n as f32,
+            _ => 0.0,
+        };
+        if let Some((l, was)) = last {
+            if was - speed > 15.0 {
+                caught.push((p.position, was, speed));
+            }
+            went += ((p.position.x - l.x).powi(2) + (p.position.z - l.z).powi(2)).sqrt();
+        }
+        last = Some((p.position, speed));
+    }
+    assert!(went > 2300.0, "a whole lap: {went}");
+    // (Glancing off a wall on a tight bend is fair; catching on the road
+    // all the way round isn't. It used to be a dozen times a lap.)
+    assert!(caught.len() <= 2, "caught on the road: {caught:?}");
+    check(&game);
+}

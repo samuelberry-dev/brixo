@@ -695,7 +695,11 @@ local input: `move_z` throttle, `move_x` steer (A = +1), jump = drift (hop,
 slide, release for a 0.6/1.3 s boost at `DRIFT_MINI`/`DRIFT_SUPER` charge).
 Karts write `speed`, `steer`, `odo`, `drift` (0/0.5/1/2), `boosting`,
 `spinning` on the Model; scripts set `top_speed` (70) and `locked`. Leaving
-a ramp's lip throws it (`climb` becomes `vy`). Script API: `p.kart` (set a
+a ramp's lip throws it (`climb`, held briefly as it fades, becomes `vy`).
+The kart's box is a round cuboid (edges rounded 0.35) so it glides over
+small lips; only side-on hits (normal |y| < 0.6; Rapier's `normal1` points
+out of the obstacle) count as walls: the speed into the wall is taken off
+and that wall is remembered for 0.15 s, so scraping along one is smooth. Script API: `p.kart` (set a
 kart/part of one/nil; taken is an error; death clears it), `kart.driver`,
 `boost`, `spin_out`, `place_kart` (a kart physics hasn't picked up yet gets
 its chassis moved instead), `add_bot`, `on key(p, k)` for E Q F R G Z X C V
@@ -710,18 +714,20 @@ distance grow with speed), speed dial and drift bar, sparks and flames
 studs of the camera. Prediction covers karts: your kart is drawn blended
 between the last two physics steps (`Physics::step_fraction`/`steps_run`;
 drawing the newest step made fast karts hop on screens faster than 60 Hz),
-and script boosts and spin-outs reach the prediction through the kart's
+prediction nudges are capped at 0.25 studs a frame (a big one could push a
+kart through a wall), and script boosts and spin-outs reach the prediction through the kart's
 `boost_left`/`spin_left` facts (without them, a boost pad made the server
 run ahead and the prediction snap forward). The view smoother blends part
-rotation too. Scripts can put a player's camera on a part (`camera_part`,
+rotation too. `SoundProps.data` is an `Arc<str>`: players copy the world
+every frame, and copying every song in it took most of the time. Scripts can put a player's camera on a part (`camera_part`,
 kept as the part's id in a custom field; `FollowCamera` glides after it
 and cuts on jumps over 25 studs). `tests/karts.rs`.
 
 **Brickport Speedway** (`brixo_samples::speedway`, `brixo-samples
 speedway`): kart racing for 8, bots filling the grid. The track is a
 Catmull-Rom spline through `CONTROL` (31 points, 2.4k studs, sampled every
-4), built as road slabs per nearly-straight stretch (banked up to 7.5° in
-bends and lifted so the low edge clears the grass), striped walls, curbs,
+4), built as road slabs per nearly-straight stretch (flat: banking the
+road left lips where pieces met, and karts caught on them), striped walls, curbs,
 a bridge crossover with pillars, a canyon jump (a full-width boost strip,
 a kicker wedge, a landing wedge; `LIP_Z`/`LAND_Z`) over the river into a
 lake, and a barn shortcut (`CUT_FROM`/`CUT_TO`; the script caps

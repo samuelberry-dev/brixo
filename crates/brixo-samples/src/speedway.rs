@@ -37,6 +37,9 @@ pub const WIDTH: f32 = 28.0;
 const STEP: f32 = 4.0;
 /// Road surface is this far above its line (clear of the grass).
 const LIFT: f32 = 0.2;
+/// How far the road may lean into a bend, in degrees. None: leaning road
+/// pieces left little lips where they met, and karts caught on them.
+const MAX_BANK: f32 = 0.0;
 /// Laps in a race.
 pub const LAPS: u32 = 3;
 /// The river: a channel running in from the west into a lake.
@@ -182,7 +185,7 @@ pub fn track() -> Vec<Sample> {
             // The outside of the bend up: turning left (yaw growing), the
             // right side rises.
             // (Gentle bends and straights stay flat.)
-            let b = (-bank * 9.0).clamp(-9.0, 9.0);
+            let b = (-bank * 9.0).clamp(-MAX_BANK, MAX_BANK);
             b.signum() * (b.abs() - 1.5).max(0.0)
         })
         .collect();

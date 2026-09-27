@@ -453,7 +453,7 @@ impl Server {
     fn send_assets(&mut self) {
         let sounds: Vec<(u64, String, String)> = {
             let w = self.game.world();
-            w.walk().into_iter().filter_map(|id| w.sound(id).map(|s| (id.raw(), s.format.clone(), s.data.clone()))).collect()
+            w.walk().into_iter().filter_map(|id| w.sound(id).map(|s| (id.raw(), s.format.clone(), s.data.to_string()))).collect()
         };
         let mut dead = Vec::new();
         for (cid, c) in &mut self.connections {
