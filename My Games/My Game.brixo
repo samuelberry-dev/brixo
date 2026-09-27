@@ -1,0 +1,162 @@
+{
+  "instances": [
+    {
+      "id": 0,
+      "class": "Workspace",
+      "name": "Workspace",
+      "parent": null,
+      "children": [
+        1,
+        2,
+        3
+      ],
+      "props": "Workspace"
+    },
+    {
+      "id": 1,
+      "class": "Part",
+      "name": "Baseplate",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": -0.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 256.0,
+            "y": 1.0,
+            "z": 256.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 163,
+            "g": 162,
+            "b": 165
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block",
+          "material": "Plastic",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "class": "SpawnLocation",
+      "name": "SpawnLocation",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": 0.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 6.0,
+            "y": 1.0,
+            "z": 6.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 90,
+            "g": 90,
+            "b": 100
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block",
+          "material": "Plastic",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "class": "Part",
+      "name": "Part",
+      "parent": 0,
+      "children": [
+        4
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": -8.0
+          },
+          "size": {
+            "x": 2.0,
+            "y": 2.0,
+            "z": 2.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 160,
+            "g": 160,
+            "b": 160
+          },
+          "anchored": false,
+          "can_collide": true,
+          "shape": "Block",
+          "material": "Plastic",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "class": "Script",
+      "name": "Script",
+      "parent": 3,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- This script runs when you press Play.\n-- 'self' is the part it's inside.\n\nprint(\"Hello from \" + self.name)\n",
+          "enabled": true
+        }
+      }
+    }
+  ],
+  "next_id": 5,
+  "root": 0
+}

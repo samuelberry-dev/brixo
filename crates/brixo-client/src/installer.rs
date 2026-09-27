@@ -6,6 +6,7 @@
 //! runs only when this process is about to hand over to another (the
 //! installed copy) or quit, never before the app's own window.
 
+use crate::theme::{paint_banner, paint_brick, BRICKS};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -40,9 +41,6 @@ const SLOTS: usize = 10;
 const SIZE: (f64, f64) = (520.0, 320.0);
 
 // The logo's colours, the same as the website's.
-const BRICKS: [(char, [u8; 3]); 5] =
-    [('B', [196, 40, 28]), ('R', [13, 105, 172]), ('I', [224, 168, 0]), ('X', [75, 151, 75]), ('O', [218, 133, 65])];
-
 #[derive(Default)]
 struct Progress {
     done_steps: usize,
@@ -241,7 +239,7 @@ impl InstallerUi {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let p = ui.painter().clone();
-                paint_background(&p, rect);
+                paint_banner(&p, rect);
                 paint_logo(&p, rect, t);
                 p.text(
                     egui::pos2(rect.center().x, rect.top() + 150.0),
@@ -305,55 +303,6 @@ impl InstallerUi {
         }
         close_now || close_clicked
     }
-}
-
-fn rgb(c: [u8; 3]) -> egui::Color32 {
-    egui::Color32::from_rgb(c[0], c[1], c[2])
-}
-
-fn shade(c: [u8; 3], f: f32) -> egui::Color32 {
-    let s = |v: u8| ((v as f32 * f).round().clamp(0.0, 255.0)) as u8;
-    egui::Color32::from_rgb(s(c[0]), s(c[1]), s(c[2]))
-}
-
-/// The website banner: navy, lighter at the top, with a grid of studs.
-fn paint_background(p: &egui::Painter, rect: egui::Rect) {
-    let (top, bottom) = (egui::Color32::from_rgb(42, 90, 146), egui::Color32::from_rgb(13, 42, 74));
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(rect.left_top(), top);
-    mesh.colored_vertex(rect.right_top(), top);
-    mesh.colored_vertex(rect.left_bottom(), bottom);
-    mesh.colored_vertex(rect.right_bottom(), bottom);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(1, 2, 3);
-    p.add(egui::Shape::mesh(mesh));
-    let mut y = rect.top() + 12.0;
-    while y < rect.bottom() {
-        let mut x = rect.left() + 12.0;
-        while x < rect.right() {
-            p.circle_filled(egui::pos2(x, y + 0.8), 5.5, egui::Color32::from_black_alpha(45));
-            p.circle_filled(egui::pos2(x, y), 5.0, egui::Color32::from_white_alpha(22));
-            x += 24.0;
-        }
-        y += 24.0;
-    }
-    p.rect_stroke(rect.shrink(0.5), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(10, 31, 56)), egui::StrokeKind::Inside);
-}
-
-/// One brick: studs on top, a lighter top edge, a darker bottom edge.
-fn paint_brick(p: &egui::Painter, r: egui::Rect, color: [u8; 3], studs: usize) {
-    let stud_w = (r.width() * 0.26).min(18.0);
-    let stud_h = (r.height() * 0.16).max(3.0);
-    for i in 0..studs {
-        let cx = r.left() + r.width() * (i as f32 + 0.5) / studs as f32;
-        let s = egui::Rect::from_min_size(egui::pos2(cx - stud_w / 2.0, r.top() - stud_h + 1.0), egui::vec2(stud_w, stud_h));
-        p.rect_filled(s, 2.0, rgb(color));
-        p.rect_filled(egui::Rect::from_min_size(s.min, egui::vec2(stud_w, stud_h * 0.45)), 2.0, shade(color, 1.18));
-    }
-    p.rect_filled(r.translate(egui::vec2(0.0, 2.5)), 5.0, egui::Color32::from_black_alpha(70));
-    p.rect_filled(r, 5.0, shade(color, 0.78));
-    p.rect_filled(egui::Rect::from_min_max(r.min, egui::pos2(r.right(), r.bottom() - 3.0)), 5.0, rgb(color));
-    p.rect_filled(egui::Rect::from_min_size(r.min, egui::vec2(r.width(), 4.0)), 3.0, shade(color, 1.15));
 }
 
 /// B R I X O in bricks, bobbing gently like a staircase.

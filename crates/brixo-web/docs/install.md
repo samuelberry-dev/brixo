@@ -18,8 +18,8 @@ Studio checks for a new version each time it starts. When there is one, it tells
 
 ## Where your games are kept
 
-**Save** in Studio keeps your game in your **Brixo** folder, in a file called `scene.brixo`, and **Load** opens it again. Publishing to the website also keeps a copy there, online. See [Publish and play with friends](publishing).
+**File > Save** in Studio keeps your game as a `.brixo` file. It suggests the **My Games** folder inside your **Brixo** folder (`C:\Users\<you>\Brixo\My Games` on Windows, `~/Brixo/My Games` on a Mac), but you can put it anywhere, and keep as many games as you like. **File > Open** opens one again. Publishing to the website also keeps a copy there, online. See [Publish and play with friends](publishing).
 
-> **Tip:** Studio has one save slot for now. To keep several games, publish each one under its own name, or copy `scene.brixo` somewhere else before starting a new one.
+> **Tip:** Made games with an older Studio? They were saved as `scene.brixo` in your Brixo folder. Open it with **File > Open**, then **Save As** to give it a proper name.
 
 Next: [A tour of Studio](studio-tour).

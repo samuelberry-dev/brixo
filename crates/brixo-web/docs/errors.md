@@ -2,7 +2,7 @@ Everyone's scripts go wrong, all the time. That's normal: the skill is fixing th
 
 ## Where errors show up
 
-**While you type:** the script editor checks your code as you write it. A mistake gets its line shaded red and a message under the editor, before you even press Play.
+**While you type:** the script editor checks your code as you write it. A mistake gets its line shaded red and a message under the code, before you even press Play.
 
 **While the game runs:** errors appear in **Output**, in red, like this:
 

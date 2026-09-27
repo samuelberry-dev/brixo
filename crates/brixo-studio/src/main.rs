@@ -19,19 +19,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-/// Where Save and Load keep the scene: next to you when you run your own
-/// build, and in your Brixo folder (C:\Users\<you>\Brixo, or ~/Brixo on
-/// a Mac) for the downloaded Studio, which may not be allowed to write
-/// where it starts (a Mac app starts in /).
-fn scene_path() -> String {
-    if install::is_packaged(App::Studio) {
-        if let Some(brixo) = brixo_client::games_dir().parent() {
-            let _ = std::fs::create_dir_all(brixo);
-            return brixo.join("scene.brixo").to_string_lossy().into_owned();
-        }
-    }
-    "scene.brixo".to_string()
-}
 /// Output lines kept in the Output panel.
 const OUTPUT_LIMIT: usize = 1000;
 
@@ -99,7 +86,7 @@ impl Gpu {
         let scene = SceneRenderer::new(&device, format, config.width, config.height);
 
         let egui_ctx = egui::Context::default();
-        brixo_client::theme::apply(&egui_ctx);
+        brixo_client::theme::apply_site(&egui_ctx);
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
@@ -170,11 +157,15 @@ const HISTORY_LIMIT: usize = 200;
 struct History {
     undo: Vec<DataModel>,
     redo: Vec<DataModel>,
+    /// Goes up with every edit, undo and redo: the game has changed since
+    /// it was saved if this has.
+    edits: u64,
 }
 
 impl History {
     /// Call *before* changing the model.
     fn checkpoint(&mut self, model: &DataModel) {
+        self.edits += 1;
         self.undo.push(model.clone());
         if self.undo.len() > HISTORY_LIMIT {
             self.undo.remove(0);
@@ -186,6 +177,7 @@ impl History {
     fn undo(&mut self, model: &mut DataModel) -> bool {
         match self.undo.pop() {
             Some(previous) => {
+                self.edits += 1;
                 self.redo.push(std::mem::replace(model, previous));
                 true
             }
@@ -196,6 +188,7 @@ impl History {
     fn redo(&mut self, model: &mut DataModel) -> bool {
         match self.redo.pop() {
             Some(next) => {
+                self.edits += 1;
                 self.undo.push(std::mem::replace(model, next));
                 true
             }
@@ -203,37 +196,6 @@ impl History {
         }
     }
 }
-
-/// Filming (BRIXO_STUDIO_DEMO=build|code): the studio performs the
-/// trailer's studio shots by itself, notes when each happened and where the
-/// 3D view and code editor are on screen (BRIXO_DEMO_EVENTS), then closes.
-struct Demo {
-    kind: String,
-    /// When the first frame was drawn (the timeline starts there, not at
-    /// launch, which can take a while).
-    start: Option<std::time::Instant>,
-    done: std::collections::HashSet<&'static str>,
-    events: Vec<(String, f64)>,
-    drag_from: Option<V>,
-    finished: bool,
-    /// The code box while typing, and the 3D view mid-shot (the layout
-    /// shifts between Play and Stop, so they're noted when they matter).
-    code_seen: Option<egui::Rect>,
-    view_seen: Option<egui::Rect>,
-}
-
-const DEMO_CODE: &str = r#"-- Rain bouncy neon balls from the sky!
-every 0.1 seconds
-    b = create("Part", self)
-    b.shape = "ball"
-    b.size = {x = 2, y = 2, z = 2}
-    b.material = "neon"
-    b.color = {r = random(40, 255), g = random(40, 255), b = random(40, 255)}
-    b.position = {x = random(-25, 25), y = 45, z = random(-25, 25)}
-    b.bounce = 0.8
-    b.anchored = false
-end
-"#;
 
 struct Editor {
     /// A newer Brixo Studio on the website, once the check finds one.
@@ -250,9 +212,9 @@ struct Editor {
     follow: FollowCamera,
     /// What the game is called when published to the player.
     publish_name: String,
-    /// Publishing to the Brixo website: where it is, the login form, and
-    /// the logged-in connection once you've signed in.
-    web_site: String,
+    /// Publishing to the Brixo website: the login form, and the logged-in
+    /// connection once you've signed in. (Which website: install::site(),
+    /// so BRIXO_SITE points a test build at a local one.)
     web_user: String,
     web_pass: String,
     web_error: String,
@@ -288,13 +250,23 @@ struct Editor {
     play_input: Option<(GuiEvents, Option<brixo_core::Vec3>)>,
     /// A Sound to play once (its Preview button).
     preview: Option<InstanceId>,
-    /// Filming: an action for build_ui to take this frame, a Play/Stop
-    /// press, and where the 3D view and code editor were drawn.
+    /// An action for build_ui to take this frame (from the Explorer's
+    /// right-click menu).
     queued_action: Option<Action>,
-    queued_play: bool,
-    view_rect: Option<egui::Rect>,
-    code_rect: Option<egui::Rect>,
-    pixels_per_point: f32,
+    /// The file this game was opened from or saved to (None: never saved),
+    /// and the history's edit count when it was, to tell if it's changed.
+    file: Option<std::path::PathBuf>,
+    saved_edits: u64,
+    /// Waiting on "save your changes first?" before doing this.
+    pending: Option<Pending>,
+    /// Studio should close (after that question, if it was asked).
+    quit: bool,
+    /// Scripts open as tabs beside the World tab, and which tab is showing
+    /// (None: the World).
+    tabs: Vec<InstanceId>,
+    tab: Option<InstanceId>,
+    /// Put the cursor in the code (a tab was just opened).
+    focus_code: bool,
     /// The local game's player (None when hosting a server: the studio
     /// only watches then, so it doesn't show anyone's personal GUI).
     local_player: Option<InstanceId>,
@@ -312,7 +284,6 @@ impl Default for Editor {
             prop_session: false,
             follow: FollowCamera::default(),
             publish_name: "My Game".to_string(),
-            web_site: install::site(),
             update: install::check_for_update(App::Studio),
             update_hidden: false,
             web_user: String::new(),
@@ -334,10 +305,13 @@ impl Default for Editor {
             play_input: None,
             preview: None,
             queued_action: None,
-            queued_play: false,
-            view_rect: None,
-            code_rect: None,
-            pixels_per_point: 1.0,
+            file: None,
+            saved_edits: 0,
+            pending: None,
+            quit: false,
+            tabs: Vec::new(),
+            tab: None,
+            focus_code: false,
             local_player: None,
             chat: ChatLog::default(),
             started: std::time::Instant::now(),
@@ -415,8 +389,6 @@ fn host(model: &DataModel, players: u32) -> Result<Hosted, String> {
 }
 
 struct Studio {
-    /// Filming (BRIXO_STUDIO_DEMO), if on.
-    demo: Option<Demo>,
     gpu: Option<Gpu>,
     model: DataModel,
     camera: Camera,
@@ -443,33 +415,28 @@ struct Studio {
 
 impl Studio {
     fn new() -> Self {
-        // `brixo-studio game.brixo` opens that game; otherwise the demo.
+        // `brixo-studio game.brixo` (or double-clicking one) opens that
+        // game; otherwise a new one.
         let opened = std::env::args().nth(1).filter(|a| !a.starts_with("--")).map(|path| (DataModel::load_file(&path), path));
+        let mut file = None;
         let (model, opened_status) = match opened {
-            Some((Ok(model), path)) => (model, Some(format!("Opened {path}"))),
-            Some((Err(e), path)) => (demo_scene(), Some(format!("Couldn't open {path}: {e}"))),
-            None => (demo_scene(), None),
+            Some((Ok(model), path)) => {
+                file = Some(std::path::PathBuf::from(&path));
+                (model, Some(format!("Opened {}", name_of(std::path::Path::new(&path)))))
+            }
+            Some((Err(e), path)) => (start_scene(), Some(format!("Couldn't open {path}: {e}"))),
+            None => (start_scene(), None),
         };
         let mut studio = Self {
             gpu: None,
             model,
-            camera: Camera::new(),
+            camera: start_camera(),
             selection: None,
             status: "Ready".to_string(),
             editor: Editor::default(),
             game: None,
             hosted: None,
             audio: Audio::new(),
-            demo: std::env::var("BRIXO_STUDIO_DEMO").ok().map(|kind| Demo {
-                kind,
-                start: None,
-                done: Default::default(),
-                events: Vec::new(),
-                drag_from: None,
-                finished: false,
-                code_seen: None,
-                view_seen: None,
-            }),
             audio_stop: false,
             smoother: Smoother::default(),
             play_view: None,
@@ -481,15 +448,16 @@ impl Studio {
         if let Some(status) = opened_status {
             studio.status = status;
         }
+        if let Some(path) = file {
+            studio.editor.publish_name = name_of(&path);
+            studio.editor.file = Some(path);
+        }
         // For screenshots (the website guide's): BRIXO_STUDIO_CAMERA="x y z
         // lx ly lz" starts the camera at x,y,z looking at lx,ly,lz.
         if let Ok(spec) = std::env::var("BRIXO_STUDIO_CAMERA") {
             let n: Vec<f32> = spec.split_whitespace().filter_map(|s| s.parse().ok()).collect();
             if let [x, y, z, lx, ly, lz] = n[..] {
-                let d = Vec3::new(lx - x, ly - y, lz - z).normalize_or_zero();
-                studio.camera.position = Vec3::new(x, y, z);
-                studio.camera.yaw = d.z.atan2(d.x);
-                studio.camera.pitch = d.y.clamp(-1.0, 1.0).asin();
+                look_from(&mut studio.camera, Vec3::new(x, y, z), Vec3::new(lx, ly, lz));
             }
         }
         studio
@@ -574,17 +542,25 @@ impl Studio {
             self.status = "Stop the game first, then drop the file in again".into();
             return;
         }
-        match DataModel::load_file(&path.to_string_lossy()) {
-            Ok(loaded) => {
-                self.editor.history.checkpoint(&self.model);
-                self.model = loaded;
-                self.selection = None;
-                self.editor.drag = None;
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Game").to_string();
-                self.status = format!("Opened {name}. (Ctrl+Z goes back to what you had.)");
-                self.editor.publish_name = name;
+        let what = Pending::OpenFile(path.to_path_buf());
+        if self.editor.unsaved() {
+            self.editor.pending = Some(what);
+        } else {
+            carry_out(what, &mut self.model, &mut self.selection, &mut self.camera, &mut self.editor, &mut self.status);
+        }
+    }
+
+    /// The window's title: the game's name, and * while it has unsaved
+    /// changes.
+    fn update_title(&mut self) {
+        if brixo_client::filming::window_title().is_some() {
+            return;
+        }
+        let title = format!("{}{} - Brixo Studio", self.editor.doc_name(), if self.editor.unsaved() { " *" } else { "" });
+        if let Some(gpu) = self.gpu.as_ref() {
+            if gpu.window.title() != title {
+                gpu.window.set_title(&title);
             }
-            Err(e) => self.status = format!("Couldn't open that game: {e}"),
         }
     }
 
@@ -623,120 +599,7 @@ impl Studio {
         }
     }
 
-    /// Steps the filming demo (see Demo): each action happens once, at its
-    /// moment on the timeline.
-    fn run_demo(&mut self) {
-        let Some(demo) = self.demo.as_mut() else { return };
-        let t = demo.start.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f64();
-        let at = |key: &'static str, when: f64, demo: &mut Demo| -> bool {
-            if t >= when && demo.done.insert(key) {
-                demo.events.push((key.to_string(), t));
-                true
-            } else {
-                false
-            }
-        };
-        let model = &mut self.model;
-        let editor = &mut self.editor;
-        let seen_window = if demo.kind == "build" { 3.5..14.0 } else { 13.0..20.0 };
-        if seen_window.contains(&t) {
-            demo.view_seen = editor.view_rect;
-        }
-        if demo.kind != "build" && (6.0..10.2).contains(&t) {
-            demo.code_seen = editor.code_rect;
-        }
-        if demo.kind == "build" {
-            if at("select", 2.0, demo) {
-                self.selection = model.find_first("RedBlock");
-            }
-            if at("drag", 3.5, demo) {
-                editor.history.checkpoint(model);
-                demo.drag_from = self.selection.and_then(|id| model.part(id)).map(|p| p.position);
-            }
-            if (3.5..5.0).contains(&t) {
-                if let (Some(id), Some(from)) = (self.selection, demo.drag_from) {
-                    let u = ((t - 3.5) / 1.5) as f32;
-                    model.part_mut(id).unwrap().position = V::new(from.x + 6.0 * u * u * (3.0 - 2.0 * u), from.y, from.z);
-                }
-            }
-            if at("tools", 6.0, demo) {
-                editor.tool = Tool::Rotate;
-            }
-            if at("scale", 7.3, demo) {
-                editor.tool = Tool::Scale;
-            }
-            if at("move", 8.6, demo) {
-                editor.tool = Tool::Move;
-            }
-            if at("model", 9.0, demo) {
-                self.selection = model.find_first("Tree");
-                editor.queued_action = Some(Action::Focus);
-            }
-            if at("dup", 11.5, demo) {
-                editor.queued_action = Some(Action::Duplicate);
-            }
-            if at("dup2", 12.3, demo) {
-                editor.queued_action = Some(Action::Duplicate);
-            }
-            if at("focus2", 13.1, demo) {
-                editor.queued_action = Some(Action::Focus);
-            }
-            if at("gui", 14.5, demo) {
-                self.selection = model.find_first("SuperJump");
-            }
-            if at("end", 17.0, demo) {
-                demo.finished = true;
-            }
-        } else {
-            if at("select", 1.2, demo) {
-                self.selection = Some(model.root());
-            }
-            if at("addscript", 2.0, demo) {
-                editor.queued_action = Some(Action::AddScript);
-            }
-            // Typed in live, about 55 characters a second.
-            if t >= 3.7 && t < 10.4 {
-                if demo.done.insert("type") {
-                    demo.events.push(("type".into(), t));
-                }
-                if let Some(id) = self.selection.filter(|id| model.script(*id).is_some()) {
-                    let n = (((t - 3.7) * 55.0) as usize).min(DEMO_CODE.len());
-                    let n = (0..=n).rev().find(|i| DEMO_CODE.is_char_boundary(*i)).unwrap_or(0);
-                    model.script_mut(id).unwrap().source = DEMO_CODE[..n].to_string();
-                }
-            }
-            if at("play", 10.4, demo) {
-                editor.queued_play = true;
-            }
-            if at("stop", 21.4, demo) {
-                editor.queued_play = true;
-            }
-            if at("end", 22.9, demo) {
-                demo.finished = true;
-            }
-        }
-        if demo.finished {
-            if let Some(path) = std::env::var_os("BRIXO_DEMO_EVENTS") {
-                let ppp = editor.pixels_per_point;
-                let px = |r: Option<egui::Rect>| r.map(|r| [r.min.x * ppp, r.min.y * ppp, r.width() * ppp, r.height() * ppp]);
-                let out = serde_json::json!({
-                    "events": demo.events.iter().cloned().collect::<std::collections::HashMap<_, _>>(),
-                    "view": px(demo.view_seen.or(editor.view_rect)),
-                    "code": px(demo.code_seen.or(editor.code_rect)),
-                    // When the timeline started, as Unix time (to line the
-                    // events up with a recording started earlier).
-                    "start_epoch": std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs_f64() - t)
-                        .unwrap_or(0.0),
-                });
-                let _ = std::fs::write(path, out.to_string());
-            }
-        }
-    }
-
     fn frame(&mut self, dt: f32) {
-        self.run_demo();
         if let Some(id) = self.editor.preview.take() {
             if let Some((bytes, volume)) = brixo_client::world_sound(&self.model, id.raw()) {
                 self.audio.play_bytes(bytes, volume);
@@ -790,7 +653,7 @@ impl Studio {
         if let Some(h) = hosted.as_ref() {
             output.extend(h.server.take_log());
             trim_output(output);
-            *status = format!("Hosting on port {}: {} player(s) connected", h.server.port(), h.server.player_count());
+            *status = format!("Testing with {} of {} player windows connected", h.server.player_count(), h.windows.len());
         }
         let mut toggle_play = false;
 
@@ -930,6 +793,8 @@ impl Studio {
         }
 
         if toggle_play {
+            // Play and Stop show the World.
+            editor.tab = None;
             editor.drag = None;
             editor.prop_session = false;
             if let Some(h) = hosted.take() {
@@ -1037,10 +902,249 @@ enum Action {
     AddScript,
     AddFolder,
     Delete,
+    /// File menu. The ones that replace the game ask about unsaved changes
+    /// first (see Pending).
+    New,
+    Open,
+    OpenSample(usize),
     Save,
-    Load,
+    SaveAs,
     Undo,
     Redo,
+}
+
+/// Something that replaces (or closes) the game, waiting on "save your
+/// changes first?".
+#[derive(Clone, Debug)]
+enum Pending {
+    New,
+    Open,
+    OpenSample(usize),
+    OpenFile(std::path::PathBuf),
+    Quit,
+}
+
+/// The sample games, for File > Open a sample.
+const SAMPLES: [(&str, fn() -> DataModel); 4] = [
+    ("Coin Tycoon", brixo_samples::coin_tycoon),
+    ("Flagfall", brixo_samples::flagfall),
+    ("Spire Wars", brixo_samples::spire_wars),
+    ("Gear Range", brixo_samples::gears::gear_range),
+];
+
+/// A new game: a big grey baseplate and a spawn pad, ready to build on.
+fn start_scene() -> DataModel {
+    let mut dm = DataModel::new();
+    let root = dm.root();
+    let baseplate = dm.create(Class::Part, "Baseplate", root).unwrap();
+    {
+        let p = dm.part_mut(baseplate).unwrap();
+        p.size = V::new(256.0, 1.0, 256.0);
+        p.position = V::new(0.0, -0.5, 0.0);
+        p.color = Color::new(163, 162, 165);
+    }
+    let spawn = dm.create(Class::SpawnLocation, "SpawnLocation", root).unwrap();
+    dm.part_mut(spawn).unwrap().position = V::new(0.0, 0.5, 0.0);
+    dm
+}
+
+/// Points `camera` from `from` at `at`.
+fn look_from(camera: &mut Camera, from: Vec3, at: Vec3) {
+    let d = (at - from).normalize_or_zero();
+    camera.position = from;
+    camera.yaw = d.z.atan2(d.x);
+    camera.pitch = d.y.clamp(-1.0, 1.0).asin();
+}
+
+/// Where the camera starts: back from the spawn, looking down at it.
+fn start_camera() -> Camera {
+    let mut camera = Camera::new();
+    look_from(&mut camera, Vec3::new(-14.0, 14.0, -22.0), Vec3::new(0.0, 1.0, 0.0));
+    camera
+}
+
+/// The game's name from its file: "Lava Escape.brixo" is "Lava Escape".
+fn name_of(path: &std::path::Path) -> String {
+    path.file_stem().and_then(|s| s.to_str()).unwrap_or("Game").to_string()
+}
+
+/// Where the Open and Save As boxes start: "My Games" in the Brixo folder
+/// in your home folder (made if it isn't there). Not Brixo/games: that's
+/// Brixo Player's own library.
+fn games_folder() -> Option<std::path::PathBuf> {
+    let dir = brixo_client::games_dir().parent()?.join("My Games");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+impl Editor {
+    fn unsaved(&self) -> bool {
+        self.history.edits != self.saved_edits
+    }
+
+    /// The game's name for the title bar and questions.
+    fn doc_name(&self) -> String {
+        self.file.as_deref().map(name_of).unwrap_or_else(|| self.publish_name.clone())
+    }
+}
+
+/// Swaps in another game: a fresh history, no tabs, no selection.
+fn replace_game(
+    model: &mut DataModel,
+    selection: &mut Option<InstanceId>,
+    camera: &mut Camera,
+    editor: &mut Editor,
+    new: DataModel,
+    file: Option<std::path::PathBuf>,
+    name: String,
+) {
+    *model = new;
+    *selection = None;
+    *camera = start_camera();
+    editor.history = History::default();
+    editor.saved_edits = 0;
+    editor.also.clear();
+    editor.drag = None;
+    editor.tabs.clear();
+    editor.tab = None;
+    editor.renaming = None;
+    editor.file = file;
+    editor.publish_name = name;
+}
+
+/// Saves to `path` (adding .brixo if it's missing). Gives back the status.
+fn save_to(model: &DataModel, editor: &mut Editor, mut path: std::path::PathBuf) -> Result<String, String> {
+    if path.extension().is_none_or(|e| !e.eq_ignore_ascii_case("brixo")) {
+        let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(".brixo");
+        path.set_file_name(name);
+    }
+    model.save_file(&path.to_string_lossy()).map_err(|e| format!("Couldn't save: {e}"))?;
+    editor.saved_edits = editor.history.edits;
+    editor.publish_name = name_of(&path);
+    let status = format!("Saved {}", path.display());
+    editor.file = Some(path);
+    Ok(status)
+}
+
+/// Save: to the game's file, or ask where (Save As) the first time. False
+/// if it wasn't saved (cancelled, or it failed).
+fn save(model: &DataModel, editor: &mut Editor, status: &mut String, ask: bool) -> bool {
+    let path = match (&editor.file, ask) {
+        (Some(p), false) => Some(p.clone()),
+        _ => {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Save your Brixo game")
+                .add_filter("Brixo game", &["brixo"])
+                .set_file_name(format!("{}.brixo", editor.doc_name()));
+            if let Some(dir) = editor.file.as_ref().and_then(|f| f.parent().map(|p| p.to_path_buf())).or_else(games_folder) {
+                dialog = dialog.set_directory(dir);
+            }
+            dialog.save_file()
+        }
+    };
+    let Some(path) = path else { return false };
+    match save_to(model, editor, path) {
+        Ok(s) => {
+            *status = s;
+            true
+        }
+        Err(e) => {
+            *status = e;
+            false
+        }
+    }
+}
+
+/// Does what was waiting (the changes were saved, or you said not to).
+fn carry_out(
+    what: Pending,
+    model: &mut DataModel,
+    selection: &mut Option<InstanceId>,
+    camera: &mut Camera,
+    editor: &mut Editor,
+    status: &mut String,
+) {
+    match what {
+        Pending::New => {
+            replace_game(model, selection, camera, editor, start_scene(), None, "My Game".into());
+            *status = "New game".into();
+        }
+        Pending::Open => {
+            let mut dialog = rfd::FileDialog::new().set_title("Open a Brixo game").add_filter("Brixo game", &["brixo"]);
+            if let Some(dir) = games_folder() {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                carry_out(Pending::OpenFile(path), model, selection, camera, editor, status);
+            }
+        }
+        Pending::OpenFile(path) => match DataModel::load_file(&path.to_string_lossy()) {
+            Ok(loaded) => {
+                let name = name_of(&path);
+                *status = format!("Opened {name}");
+                replace_game(model, selection, camera, editor, loaded, Some(path), name);
+            }
+            Err(e) => *status = format!("Couldn't open that game: {e}"),
+        },
+        Pending::OpenSample(i) => {
+            let (name, make) = SAMPLES[i];
+            // Not saved anywhere yet: Save asks where.
+            replace_game(model, selection, camera, editor, make(), None, name.into());
+            *status = format!("Opened the {name} sample. Save it to keep your changes");
+        }
+        Pending::Quit => editor.quit = true,
+    }
+}
+
+/// "Save your changes first?" while something is waiting on it.
+fn unsaved_question(
+    ctx: &egui::Context,
+    model: &mut DataModel,
+    selection: &mut Option<InstanceId>,
+    camera: &mut Camera,
+    editor: &mut Editor,
+    status: &mut String,
+) {
+    let Some(what) = editor.pending.clone() else { return };
+    let mut choice = None;
+    egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
+        ui.set_width(340.0);
+        brixo_client::theme::title_bar(ui, "Unsaved changes", |_| {});
+        egui::Frame::NONE.inner_margin(12).show(ui, |ui| {
+            ui.label(format!("Save your changes to \"{}\" first?", editor.doc_name()));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                use brixo_client::theme::{gloss_button, Gloss};
+                if gloss_button(ui, "Save", Gloss::Green).clicked() {
+                    choice = Some(0);
+                }
+                if gloss_button(ui, "Don't save", Gloss::Gray).clicked() {
+                    choice = Some(1);
+                }
+                if gloss_button(ui, "Cancel", Gloss::Gray).clicked() {
+                    choice = Some(2);
+                }
+            });
+        });
+    });
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        choice = Some(2);
+    }
+    match choice {
+        Some(0) => {
+            editor.pending = None;
+            if save(model, editor, status, false) {
+                carry_out(what, model, selection, camera, editor, status);
+            }
+        }
+        Some(1) => {
+            editor.pending = None;
+            carry_out(what, model, selection, camera, editor, status);
+        }
+        Some(_) => editor.pending = None,
+        None => {}
+    }
 }
 
 /// Returns true if Play or Stop was pressed.
@@ -1052,7 +1156,7 @@ fn publish_to_web(editor: &mut Editor, model: &DataModel) -> String {
         Ok(d) => d,
         Err(e) => return format!("Publish failed: {e}"),
     };
-    let url = format!("{}/api/games", editor.web_site.trim_end_matches('/'));
+    let url = format!("{}/api/games", install::site().trim_end_matches('/'));
     match agent.post(&url).send_json(serde_json::json!({ "name": editor.publish_name, "data": data })) {
         Ok(_) => format!("Published \"{}\" to the Brixo website", editor.publish_name),
         Err(ureq::Error::Status(401, _)) => {
@@ -1088,8 +1192,9 @@ fn build_ui(
     play_time: Option<f64>,
 ) -> bool {
     let mut action: Option<Action> = editor.queued_action.take();
-    let mut toggle_play = ctx.input(|i| i.key_pressed(egui::Key::F5)) || std::mem::take(&mut editor.queued_play);
-    editor.pixels_per_point = ctx.pixels_per_point();
+    let mut toggle_play = ctx.input(|i| i.key_pressed(egui::Key::F5));
+
+    unsaved_question(ctx, model, selection, camera, editor, status);
 
     // Logging in to the Brixo website, the first time you Publish.
     if editor.show_web_login {
@@ -1101,9 +1206,6 @@ fn build_ui(
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 egui::Grid::new("web login").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-                    ui.label("Website");
-                    ui.text_edit_singleline(&mut editor.web_site);
-                    ui.end_row();
                     ui.label("Username");
                     ui.text_edit_singleline(&mut editor.web_user);
                     ui.end_row();
@@ -1115,10 +1217,10 @@ fn build_ui(
                     }
                 });
                 if !editor.web_error.is_empty() {
-                    ui.colored_label(egui::Color32::from_rgb(255, 120, 110), &editor.web_error);
+                    ui.colored_label(brixo_client::theme::site::RED, &editor.web_error);
                 }
                 ui.add_space(4.0);
-                if ui.button(format!("Log in and publish \"{}\"", editor.publish_name)).clicked() {
+                if brixo_client::theme::gloss_button(ui, &format!("Log in and publish \"{}\"", editor.publish_name), brixo_client::theme::Gloss::Green).clicked() {
                     action = Some(Action::WebLogin);
                 }
                 ui.small("No account yet? Sign up on the website first.");
@@ -1133,6 +1235,29 @@ fn build_ui(
     editor.also.retain(|id| model.get(*id).is_some() && Some(*id) != *selection);
     if selection.is_none() && !editor.also.is_empty() {
         *selection = Some(editor.also.remove(0));
+    }
+
+    // File shortcuts work while typing in a script too.
+    if !playing {
+        let (save_as, save_now, open, new) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::S),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::O),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::N),
+            )
+        });
+        for (pressed, a) in [(save_as, Action::SaveAs), (save_now, Action::Save), (open, Action::Open), (new, Action::New)] {
+            if pressed {
+                action = Some(a);
+            }
+        }
+    }
+    // Ctrl+W closes the script tab that's showing.
+    if let Some(t) = editor.tab.filter(|_| ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::W))) {
+        let at = editor.tabs.iter().position(|x| *x == t).unwrap_or(0);
+        editor.tabs.retain(|x| *x != t);
+        editor.tab = at.checked_sub(1).and_then(|k| editor.tabs.get(k).copied());
     }
 
     // Shortcuts, only when no text field has focus.
@@ -1236,26 +1361,84 @@ fn build_ui(
         }
     }
 
-    egui::TopBottomPanel::top("toolbar").frame(egui::Frame::side_top_panel(&ctx.style()).fill(brixo_client::theme::NAVY).inner_margin(egui::Margin::symmetric(10, 6))).show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("BRIXO").strong().size(17.0).color(brixo_client::theme::GOLD));
-            ui.separator();
-            let (label, color) = if playing {
-                ("■ Stop (F5)", egui::Color32::from_rgb(200, 70, 70))
-            } else {
-                ("▶ Play (F5)", egui::Color32::from_rgb(60, 160, 80))
-            };
-            if ui
-                .add(egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(color))
-                .clicked()
-            {
+    use brixo_client::theme::{self, site, Gloss};
+    // The banner, like the website's: navy with studs, the brick logo, Play,
+    // and publishing.
+    egui::TopBottomPanel::top("banner").exact_height(54.0).frame(egui::Frame::NONE).show(ctx, |ui| {
+        let rect = ui.max_rect();
+        theme::paint_banner(ui.painter(), rect);
+        let logo = theme::paint_small_logo(ui.painter(), rect.left_center() + egui::vec2(12.0, 3.0), 28.0);
+        theme::paint_label(
+            ui.painter(),
+            rect.left_center() + egui::vec2(24.0 + logo, 3.0),
+            egui::Align2::LEFT_CENTER,
+            "S T U D I O",
+            egui::FontId::proportional(12.0),
+            site::TAGLINE,
+        );
+        let inner = egui::Rect::from_min_max(rect.min + egui::vec2(logo + 100.0, 0.0), rect.max - egui::vec2(12.0, 0.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+            theme::on_blue(ui);
+            let (label, gloss) = if playing { ("■  Stop (F5)", Gloss::Red) } else { ("▶  Play (F5)", Gloss::Green) };
+            if theme::gloss_button(ui, label, gloss).clicked() {
                 toggle_play = true;
             }
             ui.add_enabled(!playing, egui::DragValue::new(&mut editor.players).range(1..=8).prefix("Players: "))
                 .on_hover_text("2 or more: test multiplayer with a local server and a window per player");
-            ui.separator();
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new(match play_time {
+                Some(t) => format!("Playing  {t:.1}s"),
+                None => status.clone(),
+            }).color(site::TAGLINE));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::gloss_button(ui, "Publish", Gloss::Gold).on_hover_text("Put this game on the Brixo website").clicked() {
+                    action = Some(Action::Publish);
+                }
+                let v = ui.visuals_mut();
+                v.override_text_color = Some(site::INK);
+                v.extreme_bg_color = site::FIELD;
+                v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(10, 31, 56));
+                ui.add(egui::TextEdit::singleline(&mut editor.publish_name).desired_width(130.0).hint_text("Game name"))
+                    .on_hover_text("The name players see on the Brixo website");
+            });
+        });
+    });
 
+    // The tab bar under it: the building tools.
+    egui::TopBottomPanel::top("ribbon").exact_height(32.0).frame(egui::Frame::NONE).show(ctx, |ui| {
+        let rect = ui.max_rect();
+        theme::paint_gradient(ui.painter(), rect, site::BLUE2, site::BLUE);
+        ui.painter().line_segment([rect.left_bottom() - egui::vec2(0.0, 1.0), rect.right_bottom() - egui::vec2(0.0, 1.0)], egui::Stroke::new(2.0, egui::Color32::WHITE));
+        let inner = rect.shrink2(egui::vec2(10.0, 3.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+            theme::on_blue(ui);
+            ui.spacing_mut().item_spacing.x = 4.0;
             ui.add_enabled_ui(!playing, |ui| {
+                ui.menu_button("File", |ui| {
+                    theme::menu_items(ui);
+                    for (label, keys, a) in [
+                        ("New", "Ctrl+N", Action::New),
+                        ("Open...", "Ctrl+O", Action::Open),
+                        ("Save", "Ctrl+S", Action::Save),
+                        ("Save As...", "Ctrl+Shift+S", Action::SaveAs),
+                    ] {
+                        if ui.add(egui::Button::new(label).shortcut_text(keys)).clicked() {
+                            action = Some(a);
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    ui.menu_button("Open a sample game", |ui| {
+                        theme::menu_items(ui);
+                        for (i, (name, _)) in SAMPLES.iter().enumerate() {
+                            if ui.button(*name).clicked() {
+                                action = Some(Action::OpenSample(i));
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                });
+                ui.separator();
                 ui.selectable_value(&mut editor.tool, Tool::Move, "Move (1)");
                 ui.selectable_value(&mut editor.tool, Tool::Rotate, "Rotate (2)");
                 ui.selectable_value(&mut editor.tool, Tool::Scale, "Scale (3)");
@@ -1274,7 +1457,10 @@ fn build_ui(
                     action = Some(Action::Redo);
                 }
                 ui.separator();
+                // The menus themselves are white boxes, like the rest.
+                let menu_style = theme::menu_items;
                 ui.menu_button("Add Part", |ui| {
+                    menu_style(ui);
                     for shape in Shape::ALL {
                         if ui.button(shape_label(shape)).clicked() {
                             action = Some(Action::AddShape(shape));
@@ -1288,6 +1474,7 @@ fn build_ui(
                     }
                 });
                 ui.menu_button("Add GUI", |ui| {
+                    menu_style(ui);
                     for (label, class) in [("TextLabel", Class::TextLabel), ("TextButton", Class::TextButton), ("Frame", Class::Frame)] {
                         if ui.button(label).clicked() {
                             action = Some(Action::AddGui(class));
@@ -1296,6 +1483,7 @@ fn build_ui(
                     }
                 });
                 ui.menu_button("Edit", |ui| {
+                    menu_style(ui);
                     for (label, keys, a) in [
                         ("Copy", "Ctrl+C", Action::Copy),
                         ("Paste (on top)", "Ctrl+V", Action::Paste),
@@ -1324,25 +1512,7 @@ fn build_ui(
                 if ui.button("Delete").clicked() {
                     action = Some(Action::Delete);
                 }
-                ui.separator();
-                if ui.button("Save").clicked() {
-                    action = Some(Action::Save);
-                }
-                if ui.button("Load").clicked() {
-                    action = Some(Action::Load);
-                }
             });
-            ui.separator();
-            ui.add(egui::TextEdit::singleline(&mut editor.publish_name).desired_width(110.0))
-                .on_hover_text("The name players see on the Brixo website");
-            if ui.button("Publish").on_hover_text("Put this game on the Brixo website").clicked() {
-                action = Some(Action::Publish);
-            }
-            ui.separator();
-            match play_time {
-                Some(t) => ui.label(format!("Playing  {t:.1}s")),
-                None => ui.label(status.as_str()),
-            };
         });
     });
 
@@ -1350,26 +1520,28 @@ fn build_ui(
     egui::TopBottomPanel::bottom("output")
         .resizable(true)
         .default_height(140.0)
+        .frame(box_frame())
         .show(ctx, |ui| output_panel(ui, output));
 
-    let selected_script = selection.filter(|id| model.script(*id).is_some());
-    if let Some(script_id) = selected_script {
-        egui::TopBottomPanel::bottom("script_editor")
-            .resizable(true)
-            .default_height(280.0)
-            .min_height(160.0)
-            .show(ctx, |ui| script_panel(ui, model, script_id, editor, playing));
+    // Tabs for scripts that were deleted (or undone away) close.
+    if !playing {
+        editor.tabs.retain(|id| model.script(*id).is_some());
+        if editor.tab.is_some_and(|t| !editor.tabs.contains(&t)) {
+            editor.tab = None;
+        }
     }
 
     egui::SidePanel::left("explorer")
         .default_width(220.0)
+        .frame(box_frame())
         .show(ctx, |ui| {
-            ui.heading("Explorer");
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                tree_node(ui, model, model.root(), selection, editor);
-                ui.add_space(24.0);
-                ui.weak("Drag to move things. Double-click or F2 to rename. Right-click for more.");
+            theme::title_bar(ui, "Explorer", |_| {});
+            box_body(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    tree_node(ui, model, model.root(), selection, editor);
+                    ui.add_space(24.0);
+                    ui.weak("Drag to move things. Double-click or F2 to rename. Right-click for more.");
+                });
             });
         });
 
@@ -1408,16 +1580,32 @@ fn build_ui(
 
     egui::SidePanel::right("properties")
         .default_width(260.0)
+        .frame(box_frame())
         .show(ctx, |ui| {
-            ui.add_enabled_ui(!playing, |ui| properties_panel(ui, model, *selection, editor));
+            theme::title_bar(ui, "Properties", |_| {});
+            box_body(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.add_enabled_ui(!playing, |ui| properties_panel(ui, model, *selection, editor));
+                });
+            });
         });
 
     // The central panel is the 3D viewport. It's transparent, so the scene
     // drawn underneath shows through; egui just handles its input.
+    // The middle: the World (the 3D view) and a tab for each open script.
     egui::CentralPanel::default()
         .frame(egui::Frame::default())
         .show(ctx, |ui| {
-            viewport(ui, model, selection, status, camera, editor, playing);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            tab_strip(ui, model, editor);
+            match editor.tab.filter(|id| model.script(*id).is_some()) {
+                Some(id) => {
+                    // Opaque, over the 3D scene drawn underneath.
+                    ui.painter().rect_filled(ui.available_rect_before_wrap(), 0.0, egui::Color32::WHITE);
+                    script_panel(ui, model, id, editor, playing);
+                }
+                None => viewport(ui, model, selection, status, camera, editor, playing),
+            }
         });
 
     // Apply actions after the UI is built, so nothing is borrowed twice.
@@ -1456,7 +1644,8 @@ fn build_ui(
             let parent = script_parent_for(model, *selection);
             if let Some(id) = model.create(Class::Script, "Script", parent) {
                 *selection = Some(id);
-                *status = "Added a Script. Press Play to run it".to_string();
+                open_tab(editor, id);
+                *status = "Added a Script. Write it here, then press Play to run it".to_string();
             }
         }
         Some(Action::AddFolder) => {
@@ -1604,7 +1793,7 @@ fn build_ui(
             // Log in to the website, then publish right away.
             let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)).build();
             let login = agent
-                .post(&format!("{}/api/login", editor.web_site.trim_end_matches('/')))
+                .post(&format!("{}/api/login", install::site().trim_end_matches('/')))
                 .send_json(serde_json::json!({ "username": editor.web_user, "password": editor.web_pass }));
             match login {
                 Ok(_) => {
@@ -1624,20 +1813,25 @@ fn build_ui(
                 editor.show_web_login = true;
             }
         }
-        Some(Action::Save) => match model.save_file(&scene_path()) {
-            Ok(()) => *status = format!("Saved to {}", scene_path()),
-            Err(e) => *status = format!("Save failed: {e}"),
-        },
-        Some(Action::Load) => match DataModel::load_file(&scene_path()) {
-            Ok(loaded) => {
-                editor.history.checkpoint(model);
-                *model = loaded;
-                *selection = None;
-                editor.drag = None;
-                *status = format!("Loaded {}", scene_path());
+        Some(Action::Save) => {
+            save(model, editor, status, false);
+        }
+        Some(Action::SaveAs) => {
+            save(model, editor, status, true);
+        }
+        Some(a @ (Action::New | Action::Open | Action::OpenSample(_))) => {
+            let what = match a {
+                Action::New => Pending::New,
+                Action::Open => Pending::Open,
+                Action::OpenSample(i) => Pending::OpenSample(i),
+                _ => unreachable!(),
+            };
+            if editor.unsaved() {
+                editor.pending = Some(what);
+            } else {
+                carry_out(what, model, selection, camera, editor, status);
             }
-            Err(e) => *status = format!("Load failed: {e}"),
-        },
+        }
         Some(Action::Undo) => {
             if editor.history.undo(model) {
                 after_history_jump(model, selection, editor);
@@ -1656,27 +1850,152 @@ fn build_ui(
     toggle_play
 }
 
-fn output_panel(ui: &mut egui::Ui, output: &mut Vec<LogLine>) {
-    ui.horizontal(|ui| {
-        ui.strong("Output");
-        if ui.small_button("Clear").clicked() {
-            output.clear();
+/// Opens a script in a tab (or shows its tab if it's open).
+fn open_tab(editor: &mut Editor, id: InstanceId) {
+    if !editor.tabs.contains(&id) {
+        editor.tabs.push(id);
+    }
+    editor.tab = Some(id);
+    editor.focus_code = true;
+}
+
+/// The tabs along the top of the middle: the World, then open scripts,
+/// each with a close button. Middle-click closes one too.
+fn tab_strip(ui: &mut egui::Ui, model: &DataModel, editor: &mut Editor) {
+    use brixo_client::theme::{self, site};
+    let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::hover());
+    let p = ui.painter().clone();
+    theme::paint_gradient(&p, strip, egui::Color32::from_rgb(233, 241, 250), egui::Color32::from_rgb(211, 226, 242));
+    p.line_segment([strip.left_bottom(), strip.right_bottom()], egui::Stroke::new(1.0, site::LINE));
+
+    // A script's label: its name, and where it is when two open ones share a name.
+    let label = |id: InstanceId| -> String {
+        let Some(inst) = model.get(id) else { return "?".into() };
+        let twin = editor.tabs.iter().any(|t| *t != id && model.get(*t).is_some_and(|o| o.name == inst.name));
+        match inst.parent.and_then(|p| model.get(p)) {
+            Some(parent) if twin => format!("{} › {}", parent.name, inst.name),
+            _ => inst.name.clone(),
         }
-    });
-    ui.separator();
-    egui::ScrollArea::vertical()
-        .stick_to_bottom(true)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for line in output.iter() {
-                let text = egui::RichText::new(format!("[{}] {}", line.source, line.text)).monospace();
-                if line.is_error {
-                    ui.label(text.color(egui::Color32::from_rgb(240, 95, 95)));
-                } else {
-                    ui.label(text);
-                }
+    };
+    let font = egui::FontId::proportional(13.0);
+    let mut x = strip.left() + 6.0;
+    let (mut pick, mut close) = (None, None);
+    let entries: Vec<Option<InstanceId>> = std::iter::once(None).chain(editor.tabs.iter().copied().map(Some)).collect();
+    for entry in entries {
+        let text = match entry {
+            None => "World".to_string(),
+            Some(id) => label(id),
+        };
+        let galley = p.layout_no_wrap(text.clone(), font.clone(), site::INK);
+        let width = galley.size().x + 36.0 + if entry.is_some() { 20.0 } else { 0.0 };
+        let r = egui::Rect::from_min_size(egui::pos2(x, strip.top() + 4.0), egui::vec2(width, strip.height() - 4.0));
+        x += width + 3.0;
+        if r.left() > strip.right() {
+            break;
+        }
+        let response = ui.interact(r, ui.id().with(("tab", entry)), egui::Sense::click());
+        let open = editor.tab == entry;
+        let fill = if open {
+            egui::Color32::WHITE
+        } else if response.hovered() {
+            egui::Color32::from_rgb(245, 249, 253)
+        } else {
+            egui::Color32::from_rgb(222, 233, 245)
+        };
+        let corners = egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 };
+        p.rect_filled(r, corners, fill);
+        p.rect_stroke(r, corners, egui::Stroke::new(1.0, site::LINE), egui::StrokeKind::Inside);
+        if open {
+            // Joined to the page below, like the website's open tab.
+            p.line_segment([r.left_bottom() + egui::vec2(1.0, 0.0), r.right_bottom() - egui::vec2(1.0, 0.0)], egui::Stroke::new(2.0, egui::Color32::WHITE));
+            p.line_segment([r.left_top() + egui::vec2(1.0, 1.0), r.right_top() + egui::vec2(-1.0, 1.0)], egui::Stroke::new(2.0, site::GOLD2));
+        }
+        let class = if entry.is_some() { Class::Script } else { Class::Workspace };
+        let (glyph, color) = theme::badge(class);
+        let badge = egui::Rect::from_center_size(egui::pos2(r.left() + 16.0, r.center().y), egui::vec2(16.0, 16.0));
+        p.rect_filled(badge, 3.0, color);
+        p.text(badge.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(9.5), egui::Color32::WHITE);
+        let text_color = if open { site::BLUE } else { site::INK };
+        theme::paint_label(&p, egui::pos2(r.left() + 29.0, r.center().y), egui::Align2::LEFT_CENTER, &text, font.clone(), text_color);
+        if let Some(id) = entry {
+            let x_rect = egui::Rect::from_center_size(egui::pos2(r.right() - 13.0, r.center().y), egui::vec2(16.0, 16.0));
+            let x_hover = ui.rect_contains_pointer(x_rect);
+            if x_hover {
+                p.rect_filled(x_rect, 3.0, egui::Color32::from_rgb(214, 226, 240));
             }
-        });
+            p.text(x_rect.center(), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(15.0), if x_hover { site::RED } else { site::DIM });
+            let path = {
+                let mut names = vec![];
+                let mut at = Some(id);
+                while let Some(i) = at.and_then(|a| model.get(a)) {
+                    names.push(i.name.clone());
+                    at = i.parent;
+                }
+                names.reverse();
+                names.join(" › ")
+            };
+            let response = response.on_hover_text(path);
+            if response.middle_clicked() || (response.clicked() && x_hover) {
+                close = Some(id);
+                continue;
+            }
+            if response.clicked() {
+                pick = Some(entry);
+            }
+        } else if response.clicked() {
+            pick = Some(None);
+        }
+    }
+    if let Some(t) = pick {
+        editor.tab = t;
+    }
+    if let Some(id) = close {
+        let at = editor.tabs.iter().position(|t| *t == id).unwrap_or(0);
+        editor.tabs.retain(|t| *t != id);
+        if editor.tab == Some(id) {
+            // Show the tab to its left (or the World).
+            editor.tab = at.checked_sub(1).and_then(|k| editor.tabs.get(k).copied());
+        }
+    }
+}
+
+fn output_panel(ui: &mut egui::Ui, output: &mut Vec<LogLine>) {
+    use brixo_client::theme::{self, site};
+    let mut clear = false;
+    theme::title_bar(ui, "Output", |ui| {
+        clear = ui.small_button("Clear").clicked();
+    });
+    if clear {
+        output.clear();
+    }
+    box_body(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for line in output.iter() {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(egui::RichText::new(format!("[{}]", line.source)).monospace().color(site::DIM));
+                        let text = egui::RichText::new(&line.text).monospace();
+                        ui.label(if line.is_error { text.color(site::RED) } else { text });
+                    });
+                }
+            });
+    });
+}
+
+/// A panel dressed as one of the website's boxes: white, with a blue edge.
+/// The title bar goes right at its top, so it has no margin of its own.
+fn box_frame() -> egui::Frame {
+    use brixo_client::theme::site;
+    egui::Frame::NONE.fill(egui::Color32::WHITE).stroke(egui::Stroke::new(1.0, site::LINE))
+}
+
+/// The inside of a box, under its title bar.
+fn box_body<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)).show(ui, add).inner
 }
 
 /// The code editor for the selected script, with a live syntax check.
@@ -1694,17 +2013,28 @@ fn script_panel(
     let mut enabled = script.enabled;
     let mut changed = false;
 
+    // Where it is ("Workspace › Lava › Script"), and whether it runs.
+    let mut path = vec![name.clone()];
+    let mut up = inst.parent;
+    while let Some(p) = up.and_then(|p| model.get(p)) {
+        path.push(p.name.clone());
+        up = p.parent;
+    }
+    path.reverse();
+    let path = path.join("  ›  ");
+    box_body(ui, |ui| {
     ui.horizontal(|ui| {
-        ui.strong(format!("Script: {name}"));
-        ui.separator();
-        changed |= ui
-            .add_enabled(!playing, egui::Checkbox::new(&mut enabled, "Enabled"))
-            .changed();
-        if playing {
-            ui.weak("read-only while playing");
-        }
+        ui.label(egui::RichText::new(path).color(brixo_client::theme::site::DIM));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            changed |= ui
+                .add_enabled(!playing, egui::Checkbox::new(&mut enabled, "Enabled"))
+                .on_hover_text("Off: the script doesn't run when you press Play")
+                .changed();
+            if playing {
+                ui.label(egui::RichText::new("Read-only while playing").color(brixo_client::theme::site::DIM));
+            }
+        });
     });
-    ui.separator();
 
     // Checked on every frame (parsing is fast): the error's line is shaded.
     let parsed = rovik::lexer::lex(&source).and_then(rovik::parser::parse);
@@ -1749,13 +2079,29 @@ fn script_panel(
             state.store(ui.ctx(), edit_id);
             changed = true;
         }
-        editor.completion = None;
+        // (The suggestion list is cleared just below, and rebuilt.)
         editor.completion_pick = 0;
     }
 
     let lines = source.split('\n').count();
-    let editor_height = (ui.available_height() - 24.0).max(60.0);
+    let editor_height = (ui.available_height() - 30.0).max(60.0);
     let mut output = None;
+    // The code box looks like the guide's: dark navy with a gold edge.
+    let code_box = egui::Frame::NONE
+        .fill(brixo_client::theme::site::CODE)
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(13, 27, 43)))
+        .inner_margin(egui::Margin { left: 10, right: 4, top: 4, bottom: 4 });
+    let box_response = code_box.show(ui, |ui| {
+    {
+        let v = ui.visuals_mut();
+        v.override_text_color = Some(brixo_client::theme::site::CODE_TEXT);
+        v.extreme_bg_color = brixo_client::theme::site::CODE;
+        v.selection.bg_fill = egui::Color32::from_rgb(45, 84, 130);
+        v.text_cursor.stroke = egui::Stroke::new(2.0, brixo_client::theme::site::GOLD);
+        for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
+            w.bg_stroke = egui::Stroke::NONE;
+        }
+    }
     egui::ScrollArea::vertical()
         .max_height(editor_height)
         .auto_shrink([false, false])
@@ -1766,7 +2112,7 @@ fn script_panel(
                     ui.add_space(2.0);
                     let numbers: String = (1..=lines).map(|n| format!("{n:>3}\n")).collect();
                     ui.add(
-                        egui::Label::new(egui::RichText::new(numbers.trim_end()).font(font.clone()).color(brixo_client::theme::DIM))
+                        egui::Label::new(egui::RichText::new(numbers.trim_end()).font(font.clone()).color(egui::Color32::from_rgb(110, 132, 158)))
                             .selectable(false),
                     );
                 });
@@ -1774,6 +2120,9 @@ fn script_panel(
                     let job = editing::highlight(text, error_line, font.clone());
                     ui.fonts(|f| f.layout_job(job))
                 };
+                if std::mem::take(&mut editor.focus_code) && !playing {
+                    ui.memory_mut(|m| m.request_focus(edit_id));
+                }
                 let out = egui::TextEdit::multiline(&mut source)
                     .id(edit_id)
                     .code_editor()
@@ -1783,11 +2132,17 @@ fn script_panel(
                     .layouter(&mut layouter)
                     .show(ui);
                 changed |= out.response.changed();
-                // (Filming: the visible part of the code, for zooming in.)
-                editor.code_rect = Some(out.response.rect.intersect(ui.clip_rect()));
                 output = Some(out);
             });
         });
+    });
+    // The gold edge down its left side.
+    let r = box_response.response.rect;
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(r.min, egui::vec2(4.0, r.height())),
+        0.0,
+        brixo_client::theme::site::GOLD2,
+    );
 
     // Suggestions for the word being typed, under the cursor.
     editor.completion = None;
@@ -1827,9 +2182,10 @@ fn script_panel(
             ui.weak("No syntax errors");
         }
         Err(e) => {
-            ui.colored_label(egui::Color32::from_rgb(240, 95, 95), format!("⚠ {e}"));
+            ui.colored_label(brixo_client::theme::site::RED, format!("⚠ {e}"));
         }
     }
+    });
 
     if changed && !playing {
         // One undo step per typing session, like the Properties panel.
@@ -1859,11 +2215,10 @@ fn properties_panel(
     selection: Option<InstanceId>,
     editor: &mut Editor,
 ) {
-    ui.heading("Properties");
     if !editor.also.is_empty() {
         ui.label(format!("{} selected; showing the first", editor.also.len() + 1));
+        ui.separator();
     }
-    ui.separator();
 
     let Some(id) = selection else {
         ui.label("Nothing selected.");
@@ -2003,6 +2358,12 @@ fn properties_panel(
                     changed |= ui.checkbox(&mut g.visible, "Visible").changed();
                 });
             }
+            None if class == Class::Script => {
+                if brixo_client::theme::gloss_button(ui, "Edit script", brixo_client::theme::Gloss::Blue).clicked() {
+                    open_tab(editor, id);
+                }
+                ui.label(egui::RichText::new("Or double-click it in the Explorer.").small().color(brixo_client::theme::site::DIM));
+            }
             None => {
                 ui.label("No editable properties.");
             }
@@ -2044,7 +2405,6 @@ fn viewport(
 ) {
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
-    editor.view_rect = Some(rect);
 
     // The 3D scene fills the whole window, so projection uses the screen rect.
     let screen = ui.ctx().screen_rect();
@@ -2663,7 +3023,7 @@ fn tree_node(
             } else {
                 ui.selectable_label(selected, &inst.name).interact(egui::Sense::click_and_drag())
             };
-            ui.label(egui::RichText::new(format!("{:?}", inst.class)).small().color(brixo_client::theme::DIM));
+            ui.label(egui::RichText::new(format!("{:?}", inst.class)).small().color(brixo_client::theme::site::DIM));
             row
         })
         .inner;
@@ -2676,7 +3036,7 @@ fn tree_node(
         ui.painter().rect_stroke(
             row.rect.expand(2.0),
             4.0,
-            egui::Stroke::new(1.5, brixo_client::theme::GOLD),
+            egui::Stroke::new(1.5, brixo_client::theme::site::GOLD2),
             egui::StrokeKind::Outside,
         );
     }
@@ -2686,7 +3046,11 @@ fn tree_node(
         }
     }
 
-    if row.double_clicked() && !is_root {
+    if row.double_clicked() && inst.class == Class::Script {
+        // Scripts open in a tab (F2 renames them).
+        *selection = Some(id);
+        open_tab(editor, id);
+    } else if row.double_clicked() && !is_root {
         editor.renaming = Some((id, inst.name.clone()));
     } else if row.clicked() {
         if ui.input(|i| i.modifiers.command) && selection.is_some() {
@@ -2792,7 +3156,14 @@ impl ApplicationHandler for Studio {
         };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            // Closing with unsaved changes asks first.
+            WindowEvent::CloseRequested => {
+                if self.editor.unsaved() && self.game.is_none() && self.hosted.is_none() {
+                    self.editor.pending = Some(Pending::Quit);
+                } else {
+                    event_loop.exit();
+                }
+            }
             // An audio file dropped on the window becomes a Sound in the game.
             WindowEvent::DroppedFile(path) => {
                 if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("brixo")) {
@@ -2833,10 +3204,11 @@ impl ApplicationHandler for Studio {
 
                 self.move_camera(dt);
                 self.frame(dt);
-                if self.demo.as_ref().is_some_and(|d| d.finished) {
+                if self.editor.quit {
                     event_loop.exit();
                     return;
                 }
+                self.update_title();
 
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
@@ -2846,158 +3218,6 @@ impl ApplicationHandler for Studio {
             _ => {}
         }
     }
-}
-
-fn demo_scene() -> DataModel {
-    let mut dm = DataModel::new();
-    let root = dm.root();
-
-    let baseplate = dm.create(Class::Part, "Baseplate", root).unwrap();
-    {
-        let p = dm.part_mut(baseplate).unwrap();
-        p.size = V::new(60.0, 1.0, 60.0);
-        p.position = V::new(0.0, -0.5, 0.0);
-        p.color = Color::new(99, 95, 98);
-    }
-
-    let red = dm.create(Class::Part, "RedBlock", root).unwrap();
-    {
-        let p = dm.part_mut(red).unwrap();
-        p.size = V::new(4.0, 4.0, 4.0);
-        p.position = V::new(0.0, 2.0, 0.0);
-        p.color = Color::new(200, 60, 60);
-    }
-    let spin = dm.create(Class::Script, "Spin", red).unwrap();
-    dm.script_mut(spin).unwrap().source = "-- Spins this block. Press Play!\nevery 0.05 seconds\n    self.rotation.y += 3\nend\n".to_string();
-
-    let tower = dm.create(Class::Folder, "Tower", root).unwrap();
-    for i in 0..5 {
-        let id = dm
-            .create(Class::Part, &format!("TowerBlock{i}"), tower)
-            .unwrap();
-        let p = dm.part_mut(id).unwrap();
-        p.size = V::new(2.0, 2.0, 2.0);
-        p.position = V::new(8.0, 1.0 + i as f32 * 2.0, -5.0);
-        p.rotation = V::new(0.0, i as f32 * 15.0, 0.0);
-        p.color = Color::new(220, 190, 80);
-        p.anchored = false;
-    }
-
-    // --- building examples: shapes and Models ---
-    let shaped = |dm: &mut DataModel, parent: InstanceId, name: &str, shape: Shape, pos: V, size: V, color: Color, anchored: bool| {
-        let id = dm.create(Class::Part, name, parent).unwrap();
-        let p = dm.part_mut(id).unwrap();
-        p.shape = shape;
-        p.position = pos;
-        p.size = size;
-        p.color = color;
-        p.anchored = anchored;
-        id
-    };
-    // A ramp with a ball on top: press Play and it rolls down.
-    shaped(&mut dm, root, "Ramp", Shape::Wedge, V::new(12.0, 2.0, 14.0), V::new(6.0, 4.0, 10.0), Color::new(99, 95, 98), true);
-    shaped(&mut dm, root, "Ball", Shape::Ball, V::new(12.0, 6.0, 17.5), V::new(2.0, 2.0, 2.0), Color::new(13, 105, 172), false);
-    // A tree is a Model: click it and the whole tree is selected.
-    let tree = dm.create(Class::Model, "Tree", root).unwrap();
-    shaped(&mut dm, tree, "Trunk", Shape::Cylinder, V::new(-22.0, 3.0, -4.0), V::new(1.6, 6.0, 1.6), Color::new(105, 64, 40), true);
-    shaped(&mut dm, tree, "Leaves", Shape::Ball, V::new(-22.0, 7.5, -4.0), V::new(5.0, 5.0, 5.0), Color::new(75, 151, 75), true);
-    // A loose table: its parts are welded, so it stands (and tips) as one.
-    let table = dm.create(Class::Model, "Table", root).unwrap();
-    shaped(&mut dm, table, "Top", Shape::Block, V::new(20.0, 3.3, 2.0), V::new(5.0, 0.6, 3.0), Color::new(218, 133, 65), false);
-    for (dx, dz) in [(-2.0, -1.0), (2.0, -1.0), (-2.0, 1.0), (2.0, 1.0)] {
-        shaped(&mut dm, table, "Leg", Shape::Block, V::new(20.0 + dx, 1.5, 2.0 + dz), V::new(0.6, 3.0, 0.6), Color::new(105, 64, 40), false);
-    }
-
-    // Greets players as they join a (multiplayer) game.
-    let greeter = dm.create(Class::Script, "Greeter", root).unwrap();
-    dm.script_mut(greeter).unwrap().source = "-- Runs on the server: every player gets a coin counter and a Ball Maker.\non player_joined(p)\n    print(\"Welcome, \" + p.name + \"! \" + len(players()) + \" playing\")\n    coins = create(\"TextLabel\", p)\n    coins.name = \"Coins\"\n    coins.text = \"0\"\n    coins.x = 0.02\n    coins.y = 0.1\n    coins.width = 0.1\n    coins.height = 0.07\n    coins.text_size = 30\n    coins.background = true\n    coins.text_color = {r = 245, g = 205, b = 48}\n    tool = clone(find(\"Ball Maker\"))\n    tool.parent = p\nend\n\non player_left(p)\n    print(p.name + \" left\")\nend\n".to_string();
-
-    // On-screen GUI everyone sees: a title and a button.
-    let title = dm.create(Class::TextLabel, "Title", root).unwrap();
-    {
-        let g = dm.gui_mut(title).unwrap();
-        g.text = "BRIXO DEMO: grab the coin, press 1 for the Ball Maker".into();
-        g.x = 0.1;
-        g.y = 0.02;
-        g.width = 0.8;
-        g.text_size = 22.0;
-    }
-    let jump = dm.create(Class::TextButton, "SuperJump", root).unwrap();
-    {
-        let g = dm.gui_mut(jump).unwrap();
-        g.text = "Super jump!".into();
-        g.x = 0.02;
-        g.y = 0.2;
-        g.width = 0.14;
-    }
-    let s = dm.create(Class::Script, "Boost", jump).unwrap();
-    dm.script_mut(s).unwrap().source = "-- Buttons hear who clicked them.\non clicked(p)\n    p.jump_power = 45\n    self.text = p.name + \" is bouncy!\"\nend\n".to_string();
-
-    // A tool, kept out of sight: the Greeter gives each player a copy.
-    let storage = dm.create(Class::Folder, "Storage", root).unwrap();
-    let maker = dm.create(Class::Tool, "Ball Maker", storage).unwrap();
-    let handle = dm.create(Class::Part, "Handle", maker).unwrap();
-    {
-        let p = dm.part_mut(handle).unwrap();
-        p.position = V::new(0.0, -300.0, 0.0);
-        p.size = V::new(0.4, 0.4, 2.0);
-        p.color = Color::new(105, 64, 40);
-    }
-    let tip = dm.create(Class::Part, "Tip", maker).unwrap();
-    {
-        let p = dm.part_mut(tip).unwrap();
-        p.shape = Shape::Ball;
-        p.position = V::new(0.0, -300.0, 1.3);
-        p.size = V::new(0.8, 0.8, 0.8);
-        p.color = Color::new(13, 105, 172);
-    }
-    let s = dm.create(Class::Script, "Make", maker).unwrap();
-    dm.script_mut(s).unwrap().source = "-- Click with the tool in hand: a ball drops on your head.\non activated(p)\n    ball = create(\"Part\", p.parent)\n    ball.shape = \"ball\"\n    ball.size = {x = 2, y = 2, z = 2}\n    ball.color = {r = random(0, 255), g = random(0, 255), b = random(0, 255)}\n    ball.position = {x = p.position.x, y = p.position.y + 7, z = p.position.z}\n    ball.anchored = false\nend\n".to_string();
-
-    // --- a little course for the player ---
-    let spawn = dm.create(Class::SpawnLocation, "SpawnLocation", root).unwrap();
-    dm.part_mut(spawn).unwrap().position = V::new(-12.0, 0.5, 8.0);
-
-    let coin = dm.create(Class::Part, "Coin", root).unwrap();
-    {
-        let p = dm.part_mut(coin).unwrap();
-        p.size = V::new(1.6, 1.6, 0.4);
-        p.position = V::new(-12.0, 2.5, 0.0);
-        p.color = Color::new(255, 200, 40);
-        p.can_collide = false;
-    }
-    let s = dm.create(Class::Script, "Collect", coin).unwrap();
-    dm.script_mut(s).unwrap().source = "-- Walk into me! Can collide is off, so you pass through.\non touched(other)\n    if other.class == \"player\" then\n        print(other.name + \" grabbed a coin!\")\n        other.face = \"happy\"\n        for c in other.children do\n            if c.name == \"Coins\" then\n                c.text = num(c.text) + 1\n            end\n        end\n        destroy(self)\n    end\nend\n\nevery 0.03 seconds\n    self.rotation.y += 5\nend\n".to_string();
-
-    let lava = dm.create(Class::Part, "Lava", root).unwrap();
-    {
-        let p = dm.part_mut(lava).unwrap();
-        p.size = V::new(8.0, 0.2, 4.0);
-        p.position = V::new(-12.0, 0.1, -8.0);
-        p.color = Color::new(255, 80, 20);
-    }
-    let s = dm.create(Class::Script, "Burn", lava).unwrap();
-    dm.script_mut(s).unwrap().source = "-- Touching lava sends you back to the spawn.\non touched(other)\n    if other.class == \"player\" then\n        other.health = 0\n    end\nend\n".to_string();
-
-    let platform = dm.create(Class::Part, "Platform", root).unwrap();
-    {
-        let p = dm.part_mut(platform).unwrap();
-        p.size = V::new(6.0, 2.0, 6.0);
-        p.position = V::new(-3.0, 1.0, 8.0);
-        p.color = Color::new(120, 120, 150);
-    }
-
-    // Drops onto the edge of the tower and knocks it over when you press Play.
-    let wrecker = dm.create(Class::Part, "Wrecker", root).unwrap();
-    {
-        let p = dm.part_mut(wrecker).unwrap();
-        p.size = V::new(4.0, 4.0, 4.0);
-        p.position = V::new(10.0, 22.0, -5.0);
-        p.color = Color::new(70, 110, 200);
-        p.anchored = false;
-    }
-
-    dm
 }
 
 fn main() {

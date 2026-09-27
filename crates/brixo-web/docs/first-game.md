@@ -4,9 +4,7 @@ Let's make a real game: an **obby**, an obstacle course. Jump across floating pl
 
 ## 1. Start clean
 
-Studio opens with a small demo world, which is worth pressing **Play** in once to try. For your own game, clear it out: in the **Explorer**, click the first object under Workspace, **Ctrl-click** every other one *except* **Baseplate** and **SpawnLocation**, and press **Delete**.
-
-You're left with a big grey floor and a spawn pad: where players appear.
+Open Studio (or pick **File > New**). A new game is a big grey floor, the **Baseplate**, and a spawn pad, the **SpawnLocation**: where players appear. That's all you need to start.
 
 ## 2. Build the course
 
@@ -23,7 +21,7 @@ You're left with a big grey floor and a spawn pad: where players appear.
 1. **Add Part → Part**, and make it huge and flat: Size x `80`, y `1`, z `80`. Move it just above the Baseplate, under the platforms, so the only way forward is jumping.
 2. In Properties, set its **Color** to orange-red and its **Material** to **Neon**, so it glows.
 3. Rename it **Lava** (double-click it in the Explorer).
-4. With Lava selected, press **Add Script**. A script appears inside it, and the script editor opens. Type:
+4. With Lava selected, press **Add Script**. A script appears inside it and opens in its own tab. Type:
 
 ```rovik run in=part:Lava
 -- Lava: anyone who touches it is knocked out.
@@ -41,7 +39,7 @@ Here's what it says:
 - `other.health = 0` knocks them out. They fall apart, and come back at the spawn a few seconds later.
 - Lines starting with `--` are **comments**: notes for people, which Rovik ignores.
 
-Make sure the spawn pad is *above* the lava (or out of it), or players will be knocked out the moment they appear.
+Click the **World** tab to get back to building. Make sure the spawn pad is *above* the lava (or out of it), or players will be knocked out the moment they appear.
 
 ## 4. Add the finish
 

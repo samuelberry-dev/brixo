@@ -2,11 +2,11 @@ When your game is ready, **Publish** puts it on playbrixo.com, where anyone can 
 
 ## Publish
 
-1. In the toolbar, type your game's name in the box next to **Publish**. It's what players see on the website.
+1. At the top right of Studio, type your game's name in the box next to **Publish**. It's what players see on the website. (It starts as the name you saved the game under.)
 2. Press **Publish**.
 3. The first time, Studio asks you to log in with your playbrixo.com account. After that it remembers you.
 
-The status bar says **Published "Your Game" to the Brixo website**. Your game is now on your profile and in [Games](/games).
+The status line at the top says **Published "Your Game" to the Brixo website**. Your game is now on your profile and in [Games](/games).
 
 **To update it**, just press **Publish** again with the same name: the website keeps the one game and replaces it with your new version. A new name makes a new game.
 
@@ -23,7 +23,7 @@ On a game's page, press **Play**. Brixo Player opens and puts you in the game. A
 
 ## Test multiplayer before you publish
 
-You don't need a friend to test a multiplayer game. In Studio, set **Players** in the toolbar to **2** (or more), then press **Play**. Studio starts a real server on your computer and opens a window for each player, so you can see what each one sees, and click between them.
+You don't need a friend to test a multiplayer game. In Studio, set **Players** (next to Play) to **2** (or more), then press **Play**. Studio starts a real server on your computer and opens a window for each player, so you can see what each one sees, and click between them.
 
 ## Where scripts run
 

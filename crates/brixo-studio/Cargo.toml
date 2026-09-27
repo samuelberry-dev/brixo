@@ -20,6 +20,9 @@ brixo-client = { path = "../brixo-client" }
 brixo-server = { path = "../brixo-server" }
 ureq = { version = "2", features = ["json", "cookies"] }
 serde_json = "1"
+# Open and Save As boxes (native ones on Windows and Mac).
+rfd = "0.17"
+brixo-samples = { path = "../brixo-samples" }
 
 [build-dependencies]
 winresource = "0.1"

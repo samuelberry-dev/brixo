@@ -118,14 +118,15 @@ pub fn tokens(src: &str) -> Vec<(std::ops::Range<usize>, Kind)> {
 pub fn highlight(src: &str, error_line: Option<usize>, font: egui::FontId) -> egui::text::LayoutJob {
     use brixo_client::theme;
     let colour = |k: Kind| match k {
-        Kind::Plain => theme::TEXT,
-        Kind::Keyword => egui::Color32::from_rgb(198, 146, 233),
-        Kind::Function => egui::Color32::from_rgb(97, 202, 225),
-        Kind::Event => egui::Color32::from_rgb(245, 205, 48),
-        Kind::Field => egui::Color32::from_rgb(150, 195, 255),
-        Kind::Str => egui::Color32::from_rgb(152, 214, 125),
-        Kind::Number => egui::Color32::from_rgb(247, 162, 95),
-        Kind::Comment => egui::Color32::from_rgb(120, 135, 155),
+        Kind::Plain => theme::site::CODE_TEXT,
+        // The same colours as the code in the website's guide.
+        Kind::Keyword => egui::Color32::from_rgb(255, 207, 92),
+        Kind::Function => egui::Color32::from_rgb(127, 209, 255),
+        Kind::Event => egui::Color32::from_rgb(245, 154, 224),
+        Kind::Field => egui::Color32::from_rgb(170, 200, 240),
+        Kind::Str => egui::Color32::from_rgb(165, 227, 140),
+        Kind::Number => egui::Color32::from_rgb(255, 162, 122),
+        Kind::Comment => egui::Color32::from_rgb(127, 147, 168),
     };
     // Where the error line starts and ends, in bytes.
     let err = error_line.and_then(|n| {

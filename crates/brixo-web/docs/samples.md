@@ -1,7 +1,7 @@
 Brixo's three sample games are on the [Games](/games) page. They're also the best way to learn how bigger games fit together, because you can **open them in Studio** and read every script:
 
-1. Download one below.
-2. **Drag the file onto the Brixo Studio window.** It opens in place of what you had (Ctrl+Z brings that back).
+1. In Studio, pick **File > Open a sample game**. Or download one below and **drag the file onto the Studio window** (or open it with **File > Open**).
+2. It opens as a new game. Studio asks first if you have unsaved changes.
 3. Click through the Explorer, read the scripts, press Play, and change things to see what happens.
 
 ![Coin Tycoon, Flagfall and Spire Wars](img/samples.png)

@@ -2,7 +2,7 @@ Brixo is a place to **build games and play them with your friends**. You make a 
 
 This guide teaches all of it, from your first brick to a full team game with weapons, rounds and a scoreboard. You don't need to have programmed before.
 
-![Brixo Studio with a game open: the 3D world in the middle, the Explorer and Properties on the sides, a script at the bottom](img/studio-overview.png)
+![Brixo Studio with a game open: the 3D world in the middle, the Explorer and Properties on the sides, Output along the bottom](img/studio-overview.png)
 
 ## How this guide works
 

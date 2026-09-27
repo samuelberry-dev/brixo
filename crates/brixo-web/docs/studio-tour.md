@@ -1,15 +1,22 @@
 Open Brixo Studio. This page shows you around. It takes five minutes, and everything later in the guide assumes you know where these things are.
 
-![Brixo Studio: the toolbar along the top, the 3D world in the middle, the Explorer on the left, Properties on the right, and the Output panel along the bottom](img/studio-overview.png)
+![Brixo Studio: Play and Publish along the top, the tools under them, the 3D world in the middle, the Explorer on the left, Properties on the right, and Output along the bottom](img/studio-overview.png)
 
-## The toolbar
+## Along the top
 
-Along the top, from left to right:
+The navy bar at the very top has:
 
 | Button | What it does |
 |---|---|
 | **▶ Play (F5)** | Runs your game so you can play it. Press again (**■ Stop**) to go back to building. Nothing you do while playing changes your game: Stop puts everything back. |
 | **Players** | How many players Play starts. Set it to 2 or more to test multiplayer: you get a window per player. |
+| **Name** and **Publish** | On the right: the name players will see, and the button that puts your game on the website. |
+
+The blue bar under it has the building tools, from left to right:
+
+| Button | What it does |
+|---|---|
+| **File** | **New**, **Open...**, **Save**, **Save As...**, and **Open a sample game**. See [Saving your game](#saving-your-game). |
 | **Move (1)**, **Rotate (2)**, **Scale (3)** | Which handles appear on the selected part. The number keys switch too. |
 | **Snap** | Moves in whole studs and turns in 15° steps. Leave it on for neat building. |
 | **Undo**, **Redo** | Ctrl+Z and Ctrl+Y (or Ctrl+Shift+Z). |
@@ -17,11 +24,17 @@ Along the top, from left to right:
 | **Add GUI** | Adds a TextLabel, TextButton or Frame: text and buttons on the players' screens. |
 | **Edit** | Copy, paste, duplicate, group into a Model, ungroup, focus. |
 | **Add Spawn** | Adds a SpawnLocation, where players appear. |
-| **Add Script** | Adds a Script inside whatever's selected. |
+| **Add Script** | Adds a Script inside whatever's selected, and opens it. |
 | **Add Folder** | Adds a Folder, for keeping things organized. |
 | **Delete** | Deletes what's selected (so does the Delete key). |
-| **Save**, **Load** | Keeps your game on your computer and opens it again. |
-| **Name** and **Publish** | The name players will see, and the button that puts your game on the website. |
+
+## Saving your game
+
+**File > Save** (Ctrl+S) keeps your game in a `.brixo` file on your computer. The first time, it asks what to call it and where to put it: it starts in the **My Games** folder inside your **Brixo** folder. After that, Save just saves. **Save As...** (Ctrl+Shift+S) saves a copy under a new name.
+
+**File > Open...** (Ctrl+O) opens a game you saved, and **New** (Ctrl+N) starts a fresh one: a big grey baseplate and a spawn pad. You can also **drag a .brixo file onto the Studio window** to open it. **Open a sample game** opens one of Brixo's [sample games](samples) to look around in.
+
+The window's title shows your game's name, with a `*` when it has changes you haven't saved. If you try to open another game or close Studio with unsaved changes, Studio asks whether to save them first.
 
 ## Moving around
 
@@ -55,7 +68,7 @@ The Explorer lists **every object in your game** as a tree: things inside other 
 
 - Click to select (the same as clicking in the 3D view).
 - **Drag** an object onto another to move it inside. That's how you put a script into a part, or parts into a folder.
-- **Double-click** or **F2** to rename. Names matter: scripts find things by name.
+- **Double-click** or **F2** to rename. Names matter: scripts find things by name. (Double-clicking a **Script** opens it instead; F2 still renames it.)
 - **Right-click** for more: rename, duplicate, copy, paste into, group into a Model, ungroup and delete.
 
 ## Properties
@@ -64,11 +77,13 @@ The Explorer lists **every object in your game** as a tree: things inside other 
 
 Properties shows **everything about the selected object**, and lets you change it: name, position, size, rotation, color, material, shape, and switches like **Anchored** (stays put instead of falling) and **Can Collide** (solid, or something you walk through). Hover over any of them for a hint. Every property here can also be read and changed by scripts, with the same names in lowercase: `anchored`, `can_collide`, `color` and so on. See [Parts](parts).
 
-## The script editor
+## Scripts
 
-![The script editor, open under the 3D view. Rovik is colored as you type, and a line with a mistake turns red straight away, with what is wrong written underneath](img/studio-script.png)
+![A script open in its own tab. Rovik is colored as you type, and a line with a mistake turns red straight away, with what is wrong written underneath](img/studio-script.png)
 
-Select a Script and the editor opens under the 3D view. It colors your code, numbers the lines, and **checks it as you type**: a mistake shows up in red, on its line, before you even press Play. It also suggests names as you type: use the arrow keys to choose one and **Tab** to accept.
+**Double-click a Script** in the Explorer (or select it and press **Edit script** in Properties) and it opens in its own **tab**, filling the middle of Studio. The **World** tab is the 3D view. Keep as many scripts open as you like and click between them; **×** (or Ctrl+W, or a middle-click) closes a tab. Pressing **Play** switches back to the World.
+
+The editor colors your code, numbers the lines, and **checks it as you type**: a mistake shows up in red, on its line, with what's wrong written underneath, before you even press Play. It also suggests names as you type: use the arrow keys to choose one and **Tab** to accept. Above the code is where the script is (`Workspace › Lava › Script`), and **Enabled**: switch it off and the script doesn't run.
 
 ## Output
 

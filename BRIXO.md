@@ -94,8 +94,9 @@ without it the build warns and carries on), with ProductName/FileDescription
 so Task Manager says "Brixo Player"; windows use `filming::brixo_icon()`.
 Release builds hide the console (`windows_subsystem`). Player and Studio check
 `/api/version` in the background and show "A new ... is out" (never for "dev"
-builds). Installed Studio saves `scene.brixo` in `~/Brixo`, finds Player next
-to itself or installed, and publishes to `install::site()` (BRIXO_SITE
+builds). Studio saves games wherever you choose (File > Save / Save As,
+native boxes via `rfd`; they start in `~/Brixo/My Games`, not `~/Brixo/games`,
+which is Player's library), finds Player next to itself or installed, and publishes to `install::site()` (BRIXO_SITE
 overrides, default https://playbrixo.com).
 
 Built-in protection (`src/limits.rs`, in memory): 10 wrong logins per 15 min
@@ -377,8 +378,10 @@ wait(0.5)
     speed the footage back up afterwards.
   - `BRIXO_WINDOW_SIZE` ("1920x1080", borderless at the top-left) and
     `BRIXO_WINDOW_TITLE`: for screen recorders (player and studio).
-  - `BRIXO_STUDIO_DEMO` (`build` / `code`) with `BRIXO_DEMO_EVENTS`: the studio
-    performs the trailer's studio shots itself and writes when and where.
+  - (The studio's self-filming mode, `BRIXO_STUDIO_DEMO`, and its demo
+    world are gone: they were built for the old layout. `tools/film.py`'s
+    studio shots need redoing against the new Studio if the trailer is
+    ever re-filmed.)
   - `BRIXO_WEB_DB`, `PORT`: the website's database and port.
   - `BRIXO_PUBLIC_HOST`, `BRIXO_GAME_PORTS`, `BRIXO_WEB_BIND`: where players
     reach game servers, which ports they use, where the site listens.
@@ -412,15 +415,22 @@ the mouse, snapped to whole studs); the Explorer has drag-and-drop to move
 things between folders and models, rename in place (double-click or F2) and a
 right-click menu; Ctrl+C / Ctrl+X / Ctrl+V go through the system clipboard
 (`DataModel::to_clipboard` / `paste_clipboard`), so things copy between
-games; the script editor has syntax colouring, line numbers, the error line
+games; scripts open in tabs beside the World tab (double-click a Script,
+or Properties > Edit script; Play switches to the World; Ctrl+W closes a
+tab); the script editor has syntax colouring, line numbers, the error line
 shaded, and autocomplete (arrows to choose, Tab to accept, Escape to hide).
 The testable parts live in `brixo-studio/src/editing.rs`.
 
 **Studio:** Explorer (Ctrl-click multi-select), Properties (parts, GUI, materials,
 velocity), Move/Rotate/Scale gizmos with snapping, group move/rotate, undo/redo,
 copy/paste/duplicate, group/ungroup (Ctrl+G/U), F to focus, Add Part/GUI/Tool,
-script editor with live syntax check, Output panel, Play/Stop (F5), Players count
-(local server + a window per player), Publish, Open from library.
+script tabs with live syntax check, Output panel, Play/Stop (F5), Players count
+(local server + a window per player), Publish, File menu (New = a baseplate
+and a spawn; Open; Save / Save As with a `*` in the title and "save your
+changes first?" before New, Open, a dropped file or closing; Open a sample
+game). Studio is dressed like the website (`theme::apply_site`: white boxes,
+glossy blue title bars, the stud banner and brick logo, the guide's dark code
+box); the Player keeps the dark `theme::apply` for menus over the game.
 
 **Avatar:** blocky body, round head, no shoes (the pants reach the ground; the
 `shoes_color` value still exists for scripts and the network, it just isn't
