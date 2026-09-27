@@ -91,10 +91,11 @@ fn a_round_of_spire_wars() {
     check(&game);
     assert!(game.world().player(bob).unwrap().health < 100.0, "Bob, an enemy in front, was hit");
     assert_eq!(game.world().player(eve).unwrap().health, 100.0, "Eve, a teammate, wasn't");
-    game.activate(ann);
-    run(&mut game, 0.5);
-    game.activate(ann);
-    run(&mut game, 0.6);
+    // (The standard kit's sword: 22 a hit, so a few more swings.)
+    for _ in 0..4 {
+        game.activate(ann);
+        run(&mut game, 0.5);
+    }
     check(&game);
     assert!(game.world().player(bob).unwrap().dead > 0.0);
     assert_eq!(text(&game, ann, "kos"), "1");
@@ -107,7 +108,7 @@ fn a_round_of_spire_wars() {
     game.equip(ann, Some(1));
     run(&mut game, 0.1);
     let before = tower_bricks(&game).0;
-    game.activate(ann);
+    game.activate_at(ann, Some(brixo_core::Vec3::new(-75.0, 8.0, -75.0)));
     run(&mut game, 1.0);
     check(&game);
     let after = tower_bricks(&game).0;

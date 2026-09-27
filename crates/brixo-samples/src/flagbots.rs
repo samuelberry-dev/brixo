@@ -53,8 +53,10 @@ pub struct Action {
     pub jump: bool,
     /// Switch to this backpack slot.
     pub equip: Option<usize>,
-    /// Use what's in hand.
+    /// Use what's in hand...
     pub activate: bool,
+    /// ...aimed here, as a player would click on their target.
+    pub aim: Option<Vec3>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -292,6 +294,14 @@ impl FlagBot {
                     self.next_shot = now + 0.25;
                 } else {
                     act.activate = true;
+                    // Clicked roughly on them: people miss, and a bot with
+                    // perfect aim would knock out everyone it meets.
+                    let wobble = 2.5 + ed * 0.12;
+                    act.aim = Some(Vec3::new(
+                        ep.x + (self.rand() - 0.5) * 2.0 * wobble,
+                        ep.y + (self.rand() - 0.5) * wobble,
+                        ep.z + (self.rand() - 0.5) * 2.0 * wobble,
+                    ));
                     let wait = match slot {
                         SWORD => 0.45,
                         SLINGSHOT => 0.35,

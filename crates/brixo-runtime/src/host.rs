@@ -278,7 +278,7 @@ fn fields_for(class: Class) -> Vec<&'static str> {
             "transparency", "velocity", "floating", "bounce",
         ]),
         Class::Player => f.extend([
-            "position", "size", "rotation", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look",
+            "position", "size", "rotation", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
             "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped",
         ]),
         Class::TextLabel | Class::TextButton | Class::Frame => f.extend([
@@ -514,6 +514,15 @@ impl Host for WorldHost {
                 "volume" if world.sound(id).is_some() => Ok(Value::Num(world.sound(id).unwrap().volume as f64)),
                 "swinging" if world.player(id).is_some() => Ok(Value::Bool(world.player(id).unwrap().swing > 0.0)),
                 // Which way the player faces, flat: {x, y = 0, z}, length 1.
+                "mouse" if world.player(id).is_some() => {
+                    // Where they last clicked with a tool (read-only).
+                    let m = world.player(id).unwrap().mouse;
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert("x".to_string(), Value::Num(m.x as f64));
+                    map.insert("y".to_string(), Value::Num(m.y as f64));
+                    map.insert("z".to_string(), Value::Num(m.z as f64));
+                    Ok(Value::map(map))
+                }
                 "look" if world.player(id).is_some() => {
                     let yaw = world.player(id).unwrap().body.rotation.y.to_radians();
                     let mut m = std::collections::BTreeMap::new();
@@ -601,6 +610,7 @@ impl Host for WorldHost {
                     other => Err(format!("name has to be text, not a {}", other.type_name())),
                 },
                 "class" => Err("class can't be changed".to_string()),
+                "mouse" | "look" | "swinging" if world.player(id).is_some() => Err(format!("{name} can't be changed")),
                 "x" | "y" | "width" | "height" | "text_size" | "text" | "background" | "visible" | "text_color"
                 | "background_color"
                     if world.gui(id).is_some() =>

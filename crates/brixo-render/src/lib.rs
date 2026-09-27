@@ -1256,44 +1256,87 @@ pub fn pick(
     ndc_x: f32,
     ndc_y: f32,
 ) -> Option<brixo_core::InstanceId> {
+    let (near, dir) = cursor_ray(camera, aspect, ndc_x, ndc_y);
+    cast(model, near, dir, false, &|_| false).map(|(_, id)| id)
+}
+
+/// Where the mouse points in the world: the spot on the nearest part or
+/// character under the cursor, or a point far along the ray when there's
+/// nothing but sky. `skip` leaves things out (your own character and the
+/// tool in your hand, so you don't aim at yourself).
+pub fn pick_point(
+    model: &DataModel,
+    camera: &Camera,
+    aspect: f32,
+    ndc_x: f32,
+    ndc_y: f32,
+    skip: &dyn Fn(brixo_core::InstanceId) -> bool,
+) -> brixo_core::Vec3 {
+    let (near, dir) = cursor_ray(camera, aspect, ndc_x, ndc_y);
+    let t = cast(model, near, dir, true, skip).map_or(400.0, |(t, _)| t.min(400.0));
+    let at = near + dir * t;
+    brixo_core::Vec3::new(at.x, at.y, at.z)
+}
+
+/// A world-space ray from the camera through the cursor: where it starts
+/// (on the near plane) and which way it goes.
+fn cursor_ray(camera: &Camera, aspect: f32, ndc_x: f32, ndc_y: f32) -> (Vec3, Vec3) {
     // Unproject two points to get a world-space ray through the cursor.
     let inv = camera.view_proj(aspect).inverse();
     let near = inv * glam::Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
     let far = inv * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
     let near = near.truncate() / near.w;
     let far = far.truncate() / far.w;
-    let dir = (far - near).normalize();
+    (near, (far - near).normalize())
+}
 
+/// The nearest thing the ray hits: how far along it (in studs, since `dir`
+/// is a unit vector) and what. Characters count too when `players` is set.
+fn cast(
+    model: &DataModel,
+    near: Vec3,
+    dir: Vec3,
+    players: bool,
+    skip: &dyn Fn(brixo_core::InstanceId) -> bool,
+) -> Option<(f32, brixo_core::InstanceId)> {
     let mut best: Option<(f32, brixo_core::InstanceId)> = None;
+    let mut consider = |id, m: Mat4| {
+        let inv_m = m.inverse();
+        // Test in the thing's own space, where every box is a unit cube.
+        let local_origin = inv_m.transform_point3(near);
+        let local_dir = inv_m.transform_vector3(dir);
+        if let Some(t) = ray_unit_cube(local_origin, local_dir) {
+            if t >= 0.0 && best.map_or(true, |(bt, _)| t < bt) {
+                best = Some((t, id));
+            }
+        }
+    };
     let mut stack = vec![model.root()];
     while let Some(id) = stack.pop() {
         let Some(inst) = model.get(id) else { continue };
         stack.extend(inst.children.iter().copied());
-
-        // Parts and SpawnLocations can be picked.
-        let Some(p) = model.part(id) else { continue };
-
-        let rotation = Quat::from_euler(
-            glam::EulerRot::YXZ,
-            p.rotation.y.to_radians(),
-            p.rotation.x.to_radians(),
-            p.rotation.z.to_radians(),
-        );
-        let m =
-            Mat4::from_scale_rotation_translation(to_glam(p.size), rotation, to_glam(p.position));
-        let inv_m = m.inverse();
-
-        // Test in the part's own space, where every box is a unit cube.
-        let local_origin = inv_m.transform_point3(near);
-        let local_dir = inv_m.transform_vector3(dir);
-
-        if let Some(t) = ray_unit_cube(local_origin, local_dir) {
-            if best.map_or(true, |(bt, _)| t < bt) {
-                best = Some((t, id));
+        if skip(id) {
+            continue;
+        }
+        if let Some(p) = model.part(id) {
+            // Parts and SpawnLocations.
+            let rotation = Quat::from_euler(
+                glam::EulerRot::YXZ,
+                p.rotation.y.to_radians(),
+                p.rotation.x.to_radians(),
+                p.rotation.z.to_radians(),
+            );
+            consider(id, Mat4::from_scale_rotation_translation(to_glam(p.size), rotation, to_glam(p.position)));
+        } else if let (true, Some(p)) = (players, model.player(id)) {
+            // A character: roughly its box, arms included.
+            if p.dead > 0.0 {
+                continue;
             }
+            let rotation = Quat::from_rotation_y(p.body.rotation.y.to_radians());
+            consider(id, Mat4::from_scale_rotation_translation(Vec3::new(3.7, 5.3, 1.1), rotation, to_glam(p.body.position)));
         }
     }
-    best.map(|(_, id)| id)
+    best
 }
 
 /// Slab test against the cube spanning -0.5..0.5 on each axis.

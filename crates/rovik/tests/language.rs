@@ -283,3 +283,9 @@ fn forks_draw_different_random_numbers() {
     let seen: std::collections::HashSet<String> = out.lock().unwrap().iter().cloned().collect();
     assert!(seen.len() >= 7, "forks repeated numbers: {seen:?}");
 }
+
+#[test]
+fn trig_functions_work_in_radians() {
+    let src = "print(round(sin(0)), round(cos(0)), round(atan2(1, 1) * 4 * 1000), round(acos(-1) * 1000), round(asin(1.0000001) * 1000))";
+    assert_eq!(out(src), ["0 1 3142 3142 1571"]);
+}

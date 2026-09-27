@@ -417,8 +417,10 @@ impl Player {
         let camera = &mut self.camera;
         let (chat, chat_open, chat_text) = (&self.chat, &mut self.chat_open, &mut self.chat_text);
         let mut said: Option<String> = None;
-        // Clicks on the game's GUI and hotbar, and whether a click swung a tool.
-        let mut gui_input: Option<(GuiEvents, bool)> = None;
+        // Clicks on the game's GUI and hotbar, and whether a click swung a
+        // tool (and where in the world the mouse pointed).
+        let mut gui_input: Option<(GuiEvents, Option<brixo_core::Vec3>)> = None;
+        let locked = self.locked;
         let update = self.update.lock().unwrap().clone();
         let update_hidden = &mut self.update_hidden;
         let full_output = gpu.egui_ctx.run(raw_input, |ctx| { match &mut self.screen {
@@ -477,7 +479,23 @@ impl Player {
                     && !events.pointer_on_gui
                     && !ctx.is_pointer_over_area()
                     && ctx.input(|i| i.pointer.primary_clicked());
-                gui_input = live.then_some((events, swing));
+                // Tools aim where you click (the middle of the screen when
+                // the mouse is locked, in first person).
+                let aim = swing.then(|| {
+                    let ndc = match ctx.input(|i| i.pointer.interact_pos()) {
+                        Some(p) if !locked => (
+                            (p.x - area.left()) / area.width() * 2.0 - 1.0,
+                            1.0 - (p.y - area.top()) / area.height() * 2.0,
+                        ),
+                        _ => (0.0, 0.0),
+                    };
+                    let me = match &s.backend {
+                        Backend::Local(game) => game.player_id(),
+                        Backend::Online(net) => net.me,
+                    };
+                    brixo_client::aim_point(&s.view, camera, area.width() / area.height(), me, ndc)
+                });
+                gui_input = live.then_some((events, aim));
                 if live && !ctx.wants_pointer_input() {
                     look_around(ctx, camera, &mut s.follow);
                 }
@@ -549,8 +567,8 @@ impl Player {
                         if let Some(slot) = events.hotbar {
                             game.equip(me, Some(slot));
                         }
-                        if swing {
-                            game.activate(me);
+                        if let Some(aim) = swing {
+                            game.activate_at(me, Some(aim));
                         }
                     }
                 }
@@ -561,8 +579,8 @@ impl Player {
                     if let Some(slot) = events.hotbar {
                         net.equip(slot);
                     }
-                    if swing {
-                        net.activate();
+                    if let Some(aim) = swing {
+                        net.activate_at(aim);
                     }
                 }
             }

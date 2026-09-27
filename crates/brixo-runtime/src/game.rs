@@ -248,6 +248,11 @@ pub struct Game {
     /// How each held tool's parts sit around its first part (the handle),
     /// as it was built: offset and extra turn, in the holder's frame.
     grips: HashMap<InstanceId, Vec<(InstanceId, glam::Vec3, glam::Quat)>>,
+    /// Where each team's SpawnLocation was last seen standing: a team whose
+    /// pad got knocked off the world still comes back home.
+    team_spawns: HashMap<String, BVec3>,
+    /// When loose parts that fell off the world were last cleared away.
+    last_sweep: f64,
     /// Players whose `player_joined` hasn't fired yet (scripts weren't
     /// running when they arrived).
     unannounced: Vec<InstanceId>,
@@ -294,6 +299,8 @@ impl Game {
             local_player: None,
             players: Vec::new(),
             grips: HashMap::new(),
+            team_spawns: HashMap::new(),
+            last_sweep: 0.0,
             chat: Vec::new(),
             last_chat: HashMap::new(),
             unannounced: Vec::new(),
@@ -462,8 +469,16 @@ impl Game {
     }
 
     /// The player clicked with a tool in hand: scripts in the tool hear
-    /// `on activated(player)`.
+    /// `on activated(player)`. (Without a mouse point: they aim straight
+    /// ahead. See `activate_at`.)
     pub fn activate(&mut self, player: InstanceId) -> bool {
+        self.activate_at(player, None)
+    }
+
+    /// Clicked with a tool in hand, the mouse pointing at `aim` in the
+    /// world: scripts read it as `player.mouse`, and the character turns to
+    /// face it, the way a gear aims where you click.
+    pub fn activate_at(&mut self, player: InstanceId, aim: Option<BVec3>) -> bool {
         let tool = {
             let world = self.world.lock();
             world.player(player).and_then(|p| p.equipped).filter(|t| world.player_of(*t) == Some(player))
@@ -472,8 +487,32 @@ impl Game {
         if self.world.lock().player(player).is_some_and(|p| p.dead > 0.0) {
             return false; // the dead don't swing
         }
+        let mut turn = None;
         if let Some(p) = self.world.lock().player_mut(player) {
             p.swing = SWING_TIME;
+            let at = p.body.position;
+            let aim = aim.filter(|a| a.x.is_finite() && a.y.is_finite() && a.z.is_finite());
+            match aim {
+                Some(a) => {
+                    p.mouse = a;
+                    let (dx, dz) = (a.x - at.x, a.z - at.z);
+                    if dx * dx + dz * dz > 0.25 {
+                        let yaw = dx.atan2(dz);
+                        p.body.rotation.y = yaw.to_degrees();
+                        turn = Some(yaw);
+                    }
+                }
+                None => {
+                    // No mouse: a point far straight ahead, at chest height.
+                    let yaw = p.body.rotation.y.to_radians();
+                    p.mouse = BVec3::new(at.x + yaw.sin() * 100.0, at.y + 1.0, at.z + yaw.cos() * 100.0);
+                }
+            }
+        }
+        // (Physics owns which way a character faces: tell it too, or the
+        // next step would turn them back.)
+        if let Some(yaw) = turn {
+            self.physics.face(player, yaw);
         }
         let world = self.world.clone();
         self.fire_where(
@@ -613,13 +652,16 @@ impl Game {
             .walk()
             .into_iter()
             .find(|id| world.get(*id).is_some_and(|i| i.class == Class::SpawnLocation) && team(*id).as_ref() == Some(&mine));
-        match pad.and_then(|id| world.part(id)) {
-            Some(p) => {
-                const OFFSETS: [(f32, f32); 5] = [(0.0, 0.0), (2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0)];
-                let (dx, dz) = OFFSETS[n % OFFSETS.len()];
-                BVec3::new(p.position.x + dx, p.position.y + p.size.y / 2.0 + 2.55, p.position.z + dz)
-            }
-            None => self.spawn_spot(n),
+        const OFFSETS: [(f32, f32); 5] = [(0.0, 0.0), (2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0)];
+        let (dx, dz) = OFFSETS[n % OFFSETS.len()];
+        // A pad that fell off the world doesn't count: respawning on it
+        // would only fall again, forever.
+        match pad.and_then(|id| world.part(id)).filter(|p| p.position.y > FALL_LIMIT + 10.0) {
+            Some(p) => BVec3::new(p.position.x + dx, p.position.y + p.size.y / 2.0 + 2.55, p.position.z + dz),
+            None => match self.team_spawns.get(&mine) {
+                Some(home) => BVec3::new(home.x + dx, home.y, home.z + dz),
+                None => self.spawn_spot(n),
+            },
         }
     }
 
@@ -636,6 +678,7 @@ impl Game {
     /// hears it and scripts hear `on died(player)`. A few seconds later they
     /// respawn at the spawn point with full health.
     fn check_respawn(&mut self, dt: f32) {
+        self.remember_team_spawns();
         let mut died = Vec::new();
         let mut respawned = Vec::new();
         {
@@ -1093,6 +1136,45 @@ impl Game {
         }
     }
 
+    /// Notes where each team's SpawnLocation stands while it's still on the
+    /// world (see `team_spawns`).
+    fn remember_team_spawns(&mut self) {
+        let world = self.world.lock();
+        for id in world.walk() {
+            let Some(inst) = world.get(id) else { continue };
+            if inst.class != Class::SpawnLocation {
+                continue;
+            }
+            let Some(brixo_core::Attribute::Str(team)) = inst.attributes.get("team") else { continue };
+            if let Some(p) = world.part(id).filter(|p| p.position.y > FALL_LIMIT + 10.0) {
+                let spot = BVec3::new(p.position.x, p.position.y + p.size.y / 2.0 + 2.55, p.position.z);
+                self.team_spawns.insert(team.clone(), spot);
+            }
+        }
+    }
+
+    /// Loose parts that fall off the world are gone for good, like in any
+    /// Roblox-style game: otherwise they'd fall forever out of sight, still
+    /// being simulated, and a spawn pad down there would keep sending
+    /// people to their doom. (Anchored parts stay: games keep templates
+    /// hidden far below the map.)
+    fn clear_fallen_parts(&mut self) {
+        if self.time - self.last_sweep < 0.25 {
+            return;
+        }
+        self.last_sweep = self.time;
+        let mut world = self.world.lock();
+        let fallen: Vec<InstanceId> = world
+            .walk()
+            .into_iter()
+            .filter(|id| world.part(*id).is_some_and(|p| !p.anchored && p.position.y < FALL_LIMIT))
+            .filter(|id| world.player_of(*id).is_none())
+            .collect();
+        for id in fallen {
+            world.remove(id);
+        }
+    }
+
     /// Simulates physics (which also finds touches), then runs `on touched`.
     fn run_physics(&mut self, dt: f64) {
         let listeners: HashSet<InstanceId> = self
@@ -1110,6 +1192,7 @@ impl Game {
             self.fire_touched(b, a);
         }
         self.check_respawn(dt as f32);
+        self.clear_fallen_parts();
     }
 
     /// Runs `on touched` for every script inside `part`, passing `other`.

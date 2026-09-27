@@ -26,8 +26,10 @@ pub enum ToServer {
     Click { button: u64 },
     /// Pressed a hotbar key: hold that backpack slot (again to put it away).
     Equip { slot: u32 },
-    /// Clicked with a tool in hand.
+    /// Clicked with a tool in hand (from an older Player: aims straight ahead).
     Activate,
+    /// Clicked with a tool in hand, the mouse pointing at this spot.
+    ActivateAt { x: f32, y: f32, z: f32 },
     /// Said something in chat.
     Chat { text: String },
 }

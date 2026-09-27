@@ -55,7 +55,7 @@ fn play(seconds: f64, seed: u64) -> (usize, f64, f64, f64, String) {
                     game.equip(*id, Some(slot));
                 }
                 if a.activate {
-                    game.activate(*id);
+                    game.activate_at(*id, a.aim);
                 }
             }
             let w = game.world_within(Duration::from_secs(5));

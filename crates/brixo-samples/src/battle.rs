@@ -58,10 +58,19 @@ fn smallest_team()
     return best
 end
 
+-- Where each team's tower stands.
+HOMES = {Red = {x = -75, z = -75}, Blue = {x = 75, z = -75}, Green = {x = -75, z = 75}, Yellow = {x = 75, z = 75}}
+
 fn to_spawn(p)
     pad = find(p.team + " Spawn")
-    if pad != nil then
+    -- The pad sits on top of the tower. If the tower's been knocked down
+    -- and the pad went with it (off the world, or it's the spare copy
+    -- stored far below), start on the ground where the tower stood.
+    if pad != nil and pad.position.y > -20 then
         p.position = {x = pad.position.x, y = pad.position.y + 3.5, z = pad.position.z}
+    else
+        home = HOMES[p.team]
+        p.position = {x = home.x, y = 6, z = home.z}
     end
 end
 
@@ -217,166 +226,12 @@ fn hurt(p, other, amount)
 end
 "#;
 
-const SWORD: &str = r#"
--- Chop: hits enemies in reach, in front of you.
-on activated(p)
-    if not ready(self, 0.45) then
-        return
-    end
-    play_sound("whoosh")
-    f = p.look
-    for other in players() do
-        dx = other.position.x - p.position.x
-        dz = other.position.z - p.position.z
-        d = sqrt(dx * dx + dz * dz)
-        ahead = (dx * f.x + dz * f.z) / max(d, 0.01)
-        if enemy(p, other) and d < 7 and ahead > 0.3 and abs(other.position.y - p.position.y) < 4 then
-            hurt(p, other, 35)
-        end
-    end
-end
-"#;
 
-const ROCKET_LAUNCHER: &str = r#"
--- A rocket that flies straight until it hits something.
-on activated(p)
-    if not ready(self, 1.6) then
-        return
-    end
-    f = p.look
-    r = clone(find("Rocket Template"))
-    r.name = "Rocket"
-    r.owner = p.name
-    r.position = {x = p.position.x + f.x * 4, y = p.position.y + 1.8, z = p.position.z + f.z * 4}
-    r.rotation = {x = 0, y = p.rotation.y, z = 0}
-    r.anchored = false
-    r.parent = find("Projectiles")
-    r.velocity = {x = f.x * 75, y = 0, z = f.z * 75}
-    play_sound("whoosh")
-end
-"#;
 
-const ROCKET: &str = r#"
--- Boom on impact; blows bricks out of whatever it hits.
-armed_at = time()
-gone = false
-fn boom()
-    if gone then
-        return
-    end
-    gone = true
-    hit = explode(self.position, 7, 110)
-    for v in hit do
-        v.last_hit_by = self.owner
-    end
-    destroy(self)
-end
-on touched(other)
-    if gone or self.parent.name == "Storage" or time() - armed_at < 0.08 then
-        return
-    end
-    if other.class == "player" and other.name == self.owner then
-        return
-    end
-    boom()
-end
-wait(5)
-if not gone and self.parent.name != "Storage" then
-    boom()
-end
-"#;
 
-const SUPERBALL: &str = r#"
--- Throw a ball that bounces around, hurting enemies it hits.
-on activated(p)
-    if not ready(self, 1.8) then
-        return
-    end
-    f = p.look
-    b = clone(find("Superball Ball"))
-    b.name = "Superball"
-    b.owner = p.name
-    b.color = {r = random(60, 255), g = random(60, 255), b = random(60, 255)}
-    b.position = {x = p.position.x + f.x * 3, y = p.position.y + 1.5, z = p.position.z + f.z * 3}
-    b.anchored = false
-    b.parent = find("Projectiles")
-    b.velocity = {x = f.x * 85, y = 14, z = f.z * 85}
-    play_sound("pop")
-end
-"#;
 
-const BOUNCING_BALL: &str = r#"
--- Hurts each enemy once per bounce-through; disappears after a while.
-hit_at = {}
-on touched(other)
-    if self.parent.name == "Storage" or other.class != "player" then
-        return
-    end
-    owner = find(self.owner)
-    if owner == nil or not enemy(owner, other) then
-        return
-    end
-    last = hit_at[other.name]
-    if last == nil or time() - last > 0.6 then
-        hit_at[other.name] = time()
-        hurt(owner, other, self.damage)
-    end
-end
-wait(self.lifetime)
-if self.parent.name != "Storage" then
-    destroy(self)
-end
-"#;
 
-const SLINGSHOT: &str = r#"
--- Quick pellets on an arc.
-on activated(p)
-    if not ready(self, 0.35) then
-        return
-    end
-    f = p.look
-    b = clone(find("Pellet Template"))
-    b.name = "Pellet"
-    b.owner = p.name
-    b.position = {x = p.position.x + f.x * 3, y = p.position.y + 1.8, z = p.position.z + f.z * 3}
-    b.anchored = false
-    b.parent = find("Projectiles")
-    b.velocity = {x = f.x * 95, y = 10, z = f.z * 95}
-    play_sound("click")
-end
-"#;
 
-const TROWEL: &str = r#"
--- Builds a wall of your team's bricks in front of you: cover, or steps up
--- somebody's tower. It crumbles away after a while.
-on activated(p)
-    if not ready(self, 3.5) then
-        return
-    end
-    f = p.look
-    side = {x = f.z, z = -f.x}
-    cx = p.position.x + f.x * 6
-    cz = p.position.z + f.z * 6
-    base = p.position.y - 2.5
-    wall = create("Folder", find("Projectiles"))
-    wall.name = "Trowel Wall"
-    for row in [0, 1, 2] do
-        for col in [-1, 0, 1] do
-            b = create("Part", wall)
-            b.name = "Wall Brick"
-            b.size = {x = 4, y = 2, z = 2}
-            b.position = {x = cx + side.x * col * 4, y = base + 1 + row * 2, z = cz + side.z * col * 4}
-            b.rotation = {x = 0, y = p.rotation.y, z = 0}
-            b.color = p.shirt_color
-            b.material = "brick"
-            b.breakable = true
-        end
-    end
-    play_sound("buy")
-    wait(25)
-    destroy(wall)
-end
-"#;
 
 const TIMEBOMB: &str = r#"
 -- Drops a bomb at your feet. Run.
@@ -606,57 +461,15 @@ pub fn spire_wars() -> DataModel {
 
     // The weapons.
     let v = Vec3::new;
-    tool(&mut b, storage, "Sword", true, &[
-        ("Handle", v(0.0, 0.0, 0.0), v(0.35, 0.35, 1.2), (105, 64, 40), Wood, Block),
-        ("Guard", v(0.0, 0.0, 0.7), v(1.4, 0.3, 0.3), (245, 205, 48), Metal, Block),
-        ("Blade", v(0.0, 0.0, 2.8), v(0.2, 0.55, 3.8), (205, 210, 220), Metal, Block),
-    ], SWORD);
-    tool(&mut b, storage, "Rocket Launcher", false, &[
-        ("Handle", v(0.0, 0.0, 0.0), v(0.4, 0.9, 0.5), (27, 42, 53), Metal, Block),
-        ("Tube", v(0.0, 0.55, 0.6), v(0.9, 0.9, 3.4), (70, 90, 60), Metal, Cylinder),
-        ("Tip", v(0.0, 0.55, 2.35), v(1.0, 1.0, 0.25), (255, 120, 20), Neon, Cylinder),
-    ], ROCKET_LAUNCHER);
-    tool(&mut b, storage, "Superball", false, &[
-        ("Handle", v(0.0, 0.0, 0.3), v(1.6, 1.6, 1.6), (107, 50, 124), Neon, Ball),
-    ], SUPERBALL);
-    tool(&mut b, storage, "Slingshot", false, &[
-        ("Handle", v(0.0, 0.0, 0.0), v(0.3, 1.2, 0.3), (105, 64, 40), Wood, Block),
-        ("Fork L", v(-0.4, 0.8, 0.0), v(0.25, 0.8, 0.25), (105, 64, 40), Wood, Block),
-        ("Fork R", v(0.4, 0.8, 0.0), v(0.25, 0.8, 0.25), (105, 64, 40), Wood, Block),
-        ("Band", v(0.0, 1.1, 0.0), v(0.9, 0.1, 0.1), (196, 40, 28), Plastic, Block),
-    ], SLINGSHOT);
-    tool(&mut b, storage, "Trowel", false, &[
-        ("Handle", v(0.0, 0.0, 0.0), v(0.3, 0.3, 1.0), (105, 64, 40), Wood, Block),
-        ("Blade", v(0.0, -0.1, 1.2), v(1.1, 0.1, 1.4), (200, 205, 215), Metal, Block),
-    ], TROWEL);
+    // Brixo's standard gear kit (the same one Flagfall uses), plus the
+    // Timebomb, which is Spire Wars' own.
+    crate::gears::install(&mut b.dm, storage);
     tool(&mut b, storage, "Timebomb", false, &[
         ("Handle", v(0.0, 0.0, 0.3), v(1.1, 1.1, 1.1), (30, 30, 34), Metal, Ball),
         ("Fuse", v(0.0, 0.7, 0.3), v(0.2, 0.5, 0.2), (255, 60, 40), Neon, Cylinder),
     ], TIMEBOMB);
 
-    // What the weapons make (cloned, so they bring their scripts).
-    let rocket = b.part(storage, "Rocket Template", v(20.0, -300.0, 0.0), v(0.7, 0.7, 2.2), (220, 220, 220), Metal, Cylinder);
-    b.dm.part_mut(rocket).unwrap().floating = true;
-    b.dm.part_mut(rocket).unwrap().anchored = true;
-    b.script(rocket, "Fly", ROCKET);
-    let ball = b.part(storage, "Superball Ball", v(24.0, -300.0, 0.0), v(2.0, 2.0, 2.0), (107, 50, 124), Neon, Ball);
-    {
-        let p = b.dm.part_mut(ball).unwrap();
-        p.bounce = 0.95;
-        p.anchored = true;
-    }
-    b.attr(ball, "damage", Attribute::Num(25.0));
-    b.attr(ball, "lifetime", Attribute::Num(6.0));
-    b.script(ball, "Bounce", &format!("{WEAPON_HELPERS}{BOUNCING_BALL}"));
-    let pellet = b.part(storage, "Pellet Template", v(28.0, -300.0, 0.0), v(0.7, 0.7, 0.7), (60, 60, 64), Metal, Ball);
-    {
-        let p = b.dm.part_mut(pellet).unwrap();
-        p.bounce = 0.5;
-        p.anchored = true;
-    }
-    b.attr(pellet, "damage", Attribute::Num(12.0));
-    b.attr(pellet, "lifetime", Attribute::Num(3.0));
-    b.script(pellet, "Hit", &format!("{WEAPON_HELPERS}{BOUNCING_BALL}"));
+    // What the Timebomb drops (cloned, so it brings its script).
     let ticking = b.part(storage, "Ticking Bomb Template", v(32.0, -300.0, 0.0), v(1.6, 1.6, 1.6), (30, 30, 34), Metal, Ball);
     b.dm.part_mut(ticking).unwrap().anchored = true;
     b.script(ticking, "Tick", TICKING);

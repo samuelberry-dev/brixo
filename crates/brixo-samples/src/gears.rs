@@ -42,6 +42,36 @@ fn hurt(p, other, amount)
     other.health -= amount
     other.last_hit_by = p.name
 end
+
+-- Where a shot starts (`ahead` studs in front of you, `up` above your
+-- middle, `right` to your right: the gear in your right hand) and which
+-- way it flies: toward where you clicked (p.mouse).
+fn aim(p, ahead, up, right)
+    f = p.look
+    from = {x = p.position.x + f.x * ahead - f.z * right, y = p.position.y + up, z = p.position.z + f.z * ahead + f.x * right}
+    t = p.mouse
+    dx = t.x - from.x
+    dy = t.y - from.y
+    dz = t.z - from.z
+    d = sqrt(dx * dx + dy * dy + dz * dz)
+    if d < 1 then
+        return {from = from, dir = {x = f.x, y = 0, z = f.z}}
+    end
+    return {from = from, dir = {x = dx / d, y = dy / d, z = dz / d}}
+end
+
+-- Is `other` part of the gear in `name`'s hand (or their backpack)? A shot
+-- starts at the muzzle, so it can brush its own gun on the way out.
+fn own_gear(name, other)
+    holder = other.parent
+    return holder != nil and holder.class == "tool" and holder.parent != nil and holder.parent.name == name
+end
+
+-- Turns a long part (a rocket: its length runs along its y) to point
+-- along `d`, a direction of length 1.
+fn point_along(part, d)
+    part.rotation = {x = acos(d.y) * 57.2958, y = atan2(d.x, d.z) * 57.2958, z = 0}
+end
 "#;
 
 const SWORD: &str = r#"
@@ -74,16 +104,16 @@ on activated(p)
     if not ready(self, 0.2) then
         return
     end
-    f = p.look
+    a = aim(p, 3.2, 1.9, 1.43)
     b = clone(find("Pellet Template"))
     b.name = "Pellet"
     b.owner = p.name
     b.damage = 8
-    -- (From chest height, so it meets people square on.)
-    b.position = {x = p.position.x + f.x * 2.5, y = p.position.y + 0.8, z = p.position.z + f.z * 2.5}
+    b.position = a.from
     b.anchored = false
     b.parent = find("Projectiles")
-    b.velocity = {x = f.x * 85, y = 4, z = f.z * 85}
+    -- A little lift, so it arcs onto what you clicked instead of dipping short.
+    b.velocity = {x = a.dir.x * 90, y = a.dir.y * 90 + 3, z = a.dir.z * 90}
     play_sound("twang")
 end
 "#;
@@ -102,7 +132,7 @@ fn expire()
     destroy(self)
 end
 on touched(other)
-    if gone or self.parent.name == "Storage" then
+    if gone or self.parent.name == "Storage" or own_gear(self.owner, other) then
         return
     end
     owner = find(self.owner)
@@ -140,15 +170,16 @@ on activated(p)
     if not ready(self, 3.0) then
         return
     end
-    f = p.look
+    -- Out of the front of the tube, toward where you clicked.
+    a = aim(p, 5.8, 1.7, 1.43)
     r = clone(find("Rocket Template"))
     r.name = "Rocket"
     r.owner = p.name
-    r.position = {x = p.position.x + f.x * 4, y = p.position.y + 1.8, z = p.position.z + f.z * 4}
-    r.rotation = {x = 0, y = p.rotation.y, z = 0}
+    r.position = a.from
+    point_along(r, a.dir)
     r.anchored = false
     r.parent = find("Projectiles")
-    r.velocity = {x = f.x * 60, y = 0, z = f.z * 60}
+    r.velocity = {x = a.dir.x * 60, y = a.dir.y * 60, z = a.dir.z * 60}
     play_sound("whoosh")
 end
 "#;
@@ -169,7 +200,7 @@ fn boom()
     destroy(self)
 end
 on touched(other)
-    if gone or self.parent.name == "Storage" or time() - armed_at < 0.08 then
+    if gone or self.parent.name == "Storage" or time() - armed_at < 0.08 or own_gear(self.owner, other) then
         return
     end
     if other.class == "player" and other.name == self.owner then
@@ -192,16 +223,16 @@ on activated(p)
     if not ready(self, 1.8) then
         return
     end
-    f = p.look
+    a = aim(p, 3.4, 1.0, 1.43)
     b = clone(find("Superball Ball"))
     b.name = "Superball"
     b.owner = p.name
     b.damage = 25
     b.color = {r = random(60, 255), g = random(60, 255), b = random(60, 255)}
-    b.position = {x = p.position.x + f.x * 3, y = p.position.y + 1.5, z = p.position.z + f.z * 3}
+    b.position = a.from
     b.anchored = false
     b.parent = find("Projectiles")
-    b.velocity = {x = f.x * 65, y = 8, z = f.z * 65}
+    b.velocity = {x = a.dir.x * 70, y = a.dir.y * 70 + 5, z = a.dir.z * 70}
     play_sound("pop")
 end
 "#;
@@ -209,7 +240,7 @@ end
 const SUPERBALL_BALL: &str = r#"
 hit_at = {}
 on touched(other)
-    if self.parent.name == "Storage" then
+    if self.parent.name == "Storage" or own_gear(self.owner, other) then
         return
     end
     owner = find(self.owner)
@@ -247,16 +278,36 @@ on activated(p)
     if not ready(self, 5.0) then
         return
     end
+    -- Where you clicked, if it's in reach; otherwise 6 studs ahead.
     f = p.look
     side = {x = f.z, z = -f.x}
-    cx = p.position.x + f.x * 6
-    cz = p.position.z + f.z * 6
-    base = p.position.y - 2.5
+    feet = p.position.y - 2.5
+    t = p.mouse
+    dx = t.x - p.position.x
+    dz = t.z - p.position.z
+    reach = sqrt(dx * dx + dz * dz)
+    if reach > 4 and reach < 30 and abs(t.y - feet) < 12 then
+        cx = t.x
+        cz = t.z
+        base = t.y
+    else
+        cx = p.position.x + f.x * 6
+        cz = p.position.z + f.z * 6
+        base = feet
+    end
     wall = create("Folder", find("Projectiles"))
     wall.name = "Trowel Wall"
-    r = random(0, 255)
-    g = random(0, 255)
-    bl = random(0, 255)
+    -- Your team's colour, or a random one when there are no teams.
+    if p.team != nil then
+        c = p.shirt_color
+        r = c.r
+        g = c.g
+        bl = c.b
+    else
+        r = random(0, 255)
+        g = random(0, 255)
+        bl = random(0, 255)
+    end
     for row in [0, 1, 2] do
         for col in [-1, 0, 1] do
             b = create("Part", wall)
@@ -286,16 +337,15 @@ on activated(p)
     if not ready(self, 0.5) then
         return
     end
-    f = p.look
+    a = aim(p, 3.4, 1.7, 1.43)
     b = clone(find("Paintball Template"))
     b.name = "Paintball"
     b.owner = p.name
     b.color = p.shirt_color
-    -- (From chest height, so it meets people square on.)
-    b.position = {x = p.position.x + f.x * 2.5, y = p.position.y + 0.8, z = p.position.z + f.z * 2.5}
+    b.position = a.from
     b.anchored = false
     b.parent = find("Projectiles")
-    b.velocity = {x = f.x * 130, y = 1, z = f.z * 130}
+    b.velocity = {x = a.dir.x * 130, y = a.dir.y * 130 + 1, z = a.dir.z * 130}
     play_sound("click")
 end
 "#;
@@ -305,7 +355,7 @@ const PAINTBALL: &str = r#"
 -- which would otherwise splat (and destroy) it twice.
 gone = false
 on touched(other)
-    if gone or self.parent.name == "Storage" then
+    if gone or self.parent.name == "Storage" or own_gear(self.owner, other) then
         return
     end
     gone = true
@@ -370,19 +420,51 @@ impl Builder<'_> {
     }
 
     /// A weapon template: parts pointing along +Z with the handle first (the
-    /// renderer and runtime hold it by that convention — see
-    /// `brixo_core::held_arm_angle`), its script, and whether it's held
-    /// straight up (a sword) rather than out in front.
-    fn tool(&mut self, storage: InstanceId, name: &str, grip_up: bool, parts: &[(&str, Vec3, Vec3, Rgb, Material, Shape)], script: &str) {
+    /// hand holds the first part: see `brixo_core::held_arm_angle`), its
+    /// script, and whether it's held straight up (a sword) rather than out
+    /// in front.
+    fn tool(&mut self, storage: InstanceId, name: &str, grip_up: bool, parts: &[G], script: &str) {
         let t = self.dm.create(Class::Tool, &format!("{name} Template"), storage).unwrap();
-        for (pname, pos, size, color, material, shape) in parts {
-            self.part(t, pname, Vec3::new(pos.x, pos.y - 300.0, pos.z), *size, *color, *material, *shape);
+        for g in parts {
+            let id = self.part(t, g.name, Vec3::new(g.at.x, g.at.y - 300.0, g.at.z), g.size, g.color, g.material, g.shape);
+            self.dm.part_mut(id).unwrap().rotation = g.turn;
         }
         if grip_up {
             self.attr(t, "grip", Attribute::Str("up".into()));
         }
         self.script(t, "Use", script);
     }
+}
+
+/// One piece of a gear's model.
+#[derive(Clone, Copy)]
+struct G {
+    name: &'static str,
+    at: Vec3,
+    size: Vec3,
+    /// Degrees, like any part's rotation.
+    turn: Vec3,
+    color: Rgb,
+    material: Material,
+    shape: Shape,
+}
+
+/// A plain (unturned) piece.
+fn g(name: &'static str, at: Vec3, size: Vec3, color: Rgb, material: Material, shape: Shape) -> G {
+    G { name, at, size, turn: Vec3::new(0.0, 0.0, 0.0), color, material, shape }
+}
+
+/// A cylinder lying along the gear (+Z): `across` wide, `length` long.
+/// (Cylinders stand up along their y, so it's turned 90 degrees.)
+fn rod(name: &'static str, at: Vec3, across: f32, length: f32, color: Rgb, material: Material) -> G {
+    G { name, at, size: Vec3::new(across, length, across), turn: Vec3::new(90.0, 0.0, 0.0), color, material, shape: Shape::Cylinder }
+}
+
+/// A flat point: a square turned 45 degrees about y, so a corner points
+/// forward (+Z). `width` is corner to corner.
+fn point(name: &'static str, at: Vec3, width: f32, thick: f32, color: Rgb, material: Material) -> G {
+    let side = width / std::f32::consts::SQRT_2;
+    G { name, at, size: Vec3::new(side, thick, side), turn: Vec3::new(0.0, 45.0, 0.0), color, material, shape: Shape::Block }
 }
 
 /// Adds all six weapon templates (and what they fire) to `storage`, a
@@ -392,39 +474,51 @@ pub fn install(dm: &mut DataModel, storage: InstanceId) {
     let v = Vec3::new;
     use Material::*;
     use Shape::*;
+    const STEEL: Rgb = (205, 210, 218);
+    const GOLD: Rgb = (212, 170, 50);
+    const DARK: Rgb = (32, 34, 38);
+    const WOOD: Rgb = (96, 64, 42);
 
-    // --- Sword: a crossguard, a wrapped grip, and a tapered double-edged
-    // blade (two thin blocks meeting at a point would need a wedge; a
-    // single blade with a wedge tip reads cleanly at this scale).
+    // --- Sword: held straight up. A wrapped grip, a gold crossguard and
+    // pommel, and a broad steel blade with a darker fuller down the middle
+    // and a proper point.
     b.tool(storage, "Sword", true, &[
-        ("Handle", v(0.0, 0.0, 0.0), v(0.4, 0.4, 1.1), (78, 53, 36), Wood, Cylinder),
-        ("Pommel", v(0.0, 0.0, -0.65), v(0.55, 0.55, 0.3), (140, 120, 40), Metal, Ball),
-        ("Guard", v(0.0, 0.0, 0.65), v(1.6, 0.28, 0.32), (140, 120, 40), Metal, Block),
-        ("Blade", v(0.0, 0.0, 2.7), v(0.22, 0.5, 3.6), (210, 214, 222), Metal, Block),
-        ("Tip", v(0.0, 0.0, 4.75), v(0.22, 0.5, 0.9), (210, 214, 222), Metal, Wedge),
+        rod("Handle", v(0.0, 0.0, 0.0), 0.34, 1.1, (70, 45, 30), Wood),
+        g("Pommel", v(0.0, 0.0, -0.66), v(0.46, 0.46, 0.46), GOLD, Metal, Ball),
+        g("Guard", v(0.0, 0.0, 0.66), v(1.5, 0.26, 0.3), GOLD, Metal, Block),
+        g("Blade", v(0.0, 0.0, 2.6), v(0.52, 0.12, 3.6), STEEL, Metal, Block),
+        g("Fuller", v(0.0, 0.0, 2.45), v(0.12, 0.14, 3.0), (150, 156, 166), Metal, Block),
+        point("Tip", v(0.0, 0.0, 4.4), 0.52, 0.12, STEEL, Metal),
     ], SWORD);
 
-    // --- Slingshot: a forked wooden body with a visible band.
+    // --- Slingshot: a forked wooden body with a red band and a pouch.
     b.tool(storage, "Slingshot", false, &[
-        ("Handle", v(0.0, -0.4, 0.0), v(0.35, 1.1, 0.35), (96, 64, 42), Wood, Cylinder),
-        ("Fork L", v(-0.35, 0.55, 0.15), v(0.22, 0.9, 0.22), (96, 64, 42), Wood, Cylinder),
-        ("Fork R", v(0.35, 0.55, 0.15), v(0.22, 0.9, 0.22), (96, 64, 42), Wood, Cylinder),
-        ("Band", v(0.0, 1.0, 0.15), v(0.85, 0.08, 0.08), (196, 40, 28), Plastic, Block),
-        ("Pouch", v(0.0, 0.65, 0.15), v(0.3, 0.15, 0.1), (60, 40, 30), Plastic, Block),
+        g("Handle", v(0.0, 0.0, 0.0), v(0.3, 1.0, 0.3), WOOD, Wood, Cylinder),
+        g("Fork L", v(-0.32, 0.8, 0.0), v(0.2, 0.8, 0.2), WOOD, Wood, Cylinder),
+        g("Fork R", v(0.32, 0.8, 0.0), v(0.2, 0.8, 0.2), WOOD, Wood, Cylinder),
+        g("Yoke", v(0.0, 0.45, 0.0), v(0.84, 0.2, 0.22), WOOD, Wood, Block),
+        g("Band", v(0.0, 1.12, 0.0), v(0.66, 0.07, 0.07), (196, 40, 28), Plastic, Block),
+        g("Pouch", v(0.0, 1.12, -0.12), v(0.24, 0.16, 0.12), (60, 40, 30), Plastic, Block),
     ], SLINGSHOT);
     let pellet = b.part(storage, "Pellet Template", v(20.0, -300.0, 0.0), v(0.6, 0.6, 0.6), (196, 40, 28), Plastic, Ball);
     b.dm.part_mut(pellet).unwrap().bounce = 0.55;
     b.script(pellet, "Fly", PELLET);
 
-    // --- Rocket Launcher: a shoulder tube with a handle, a sight, and a
-    // muzzle that glows.
+    // --- Rocket Launcher: a long olive tube over a pistol grip, with dark
+    // end caps, a yellow warning band, a sight on top and a glowing muzzle.
+    const OLIVE: Rgb = (84, 104, 64);
     b.tool(storage, "Rocket Launcher", false, &[
-        ("Grip", v(0.0, -0.9, 0.0), v(0.4, 0.9, 0.5), (27, 42, 53), Metal, Block),
-        ("Tube", v(0.0, -0.35, 0.6), v(0.95, 0.95, 3.6), (70, 90, 60), Metal, Cylinder),
-        ("Sight", v(0.0, 0.25, 0.2), v(0.15, 0.35, 0.7), (20, 20, 24), Metal, Block),
-        ("Muzzle", v(0.0, -0.35, 2.5), v(1.05, 1.05, 0.3), (255, 120, 20), Neon, Cylinder),
+        g("Grip", v(0.0, 0.0, 0.0), v(0.34, 0.8, 0.44), DARK, Plastic, Block),
+        rod("Tube", v(0.0, 0.7, 1.0), 0.86, 4.2, OLIVE, Plastic),
+        rod("Back Cap", v(0.0, 0.7, -1.15), 1.0, 0.3, DARK, Metal),
+        rod("Front Cap", v(0.0, 0.7, 3.15), 1.0, 0.3, DARK, Metal),
+        rod("Muzzle", v(0.0, 0.7, 3.31), 0.62, 0.04, (255, 120, 20), Neon),
+        rod("Band", v(0.0, 0.7, 2.25), 0.9, 0.22, (245, 200, 40), Plastic),
+        g("Sight", v(0.0, 1.24, 1.3), v(0.14, 0.3, 0.46), DARK, Metal, Block),
+        g("Trigger Guard", v(0.0, 0.3, 0.3), v(0.12, 0.2, 0.36), DARK, Metal, Block),
     ], ROCKET_LAUNCHER);
-    let rocket = b.part(storage, "Rocket Template", v(24.0, -300.0, 0.0), v(0.7, 0.7, 2.2), (215, 215, 220), Metal, Cylinder);
+    // The rocket: long along its y (scripts turn it to point where it flies).
+    let rocket = b.part(storage, "Rocket Template", v(24.0, -300.0, 0.0), v(0.55, 2.2, 0.55), (215, 215, 220), Metal, Cylinder);
     {
         let p = b.dm.part_mut(rocket).unwrap();
         p.floating = true;
@@ -434,8 +528,8 @@ pub fn install(dm: &mut DataModel, storage: InstanceId) {
     // --- Superball: a two-tone ball with a visible seam, so it reads as a
     // ball rather than a plain sphere.
     b.tool(storage, "Superball", false, &[
-        ("Body", v(0.0, 0.0, 0.35), v(1.5, 1.5, 1.5), (107, 50, 124), Neon, Ball),
-        ("Seam", v(0.0, 0.0, 0.35), v(1.55, 0.15, 1.55), (60, 25, 75), Plastic, Ball),
+        g("Body", v(0.0, 0.0, 0.35), v(1.5, 1.5, 1.5), (107, 50, 124), Neon, Ball),
+        g("Seam", v(0.0, 0.0, 0.35), v(1.55, 0.15, 1.55), (60, 25, 75), Plastic, Ball),
     ], SUPERBALL);
     let ball = b.part(storage, "Superball Ball", v(28.0, -300.0, 0.0), v(1.9, 1.9, 1.9), (107, 50, 124), Neon, Ball);
     {
@@ -444,19 +538,23 @@ pub fn install(dm: &mut DataModel, storage: InstanceId) {
     }
     b.script(ball, "Bounce", SUPERBALL_BALL);
 
-    // --- Trowel: a proper spade shape, angled blade and a wooden shaft.
+    // --- Trowel: a wooden handle, a steel collar, and a flat pointed blade.
     b.tool(storage, "Trowel", false, &[
-        ("Handle", v(0.0, 0.0, 0.0), v(0.3, 0.3, 1.0), (96, 64, 42), Wood, Cylinder),
-        ("Ferrule", v(0.0, 0.0, 0.55), v(0.4, 0.4, 0.25), (140, 140, 145), Metal, Cylinder),
-        ("Blade", v(0.0, -0.05, 1.15), v(1.0, 0.08, 1.3), (190, 195, 200), Metal, Wedge),
+        rod("Handle", v(0.0, 0.0, 0.0), 0.3, 1.0, WOOD, Wood),
+        rod("Ferrule", v(0.0, 0.0, 0.6), 0.36, 0.22, (150, 150, 156), Metal),
+        g("Neck", v(0.0, 0.0, 0.85), v(0.1, 0.1, 0.4), (150, 150, 156), Metal, Block),
+        g("Blade", v(0.0, -0.05, 1.55), v(1.1, 0.12, 1.1), STEEL, Metal, Block),
+        point("Tip", v(0.0, -0.05, 2.1), 1.1, 0.12, STEEL, Metal),
     ], TROWEL);
 
-    // --- Paintball Gun: a hopper-fed marker with a barrel and a grip.
+    // --- Paintball Gun: a pistol grip under a boxy body, a hopper on top
+    // and a long barrel.
     b.tool(storage, "Paintball Gun", false, &[
-        ("Body", v(0.0, 0.0, 0.0), v(0.5, 0.6, 1.3), (40, 40, 44), Metal, Block),
-        ("Hopper", v(0.0, 0.55, -0.2), v(0.7, 0.7, 0.7), (20, 20, 24), Plastic, Cylinder),
-        ("Barrel", v(0.0, 0.05, 1.1), v(0.25, 0.25, 1.4), (25, 25, 28), Metal, Cylinder),
-        ("Grip", v(0.0, -0.55, -0.3), v(0.35, 0.7, 0.4), (25, 25, 28), Plastic, Block),
+        g("Grip", v(0.0, 0.0, 0.0), v(0.34, 0.8, 0.44), (25, 25, 28), Plastic, Block),
+        g("Body", v(0.0, 0.62, 0.35), v(0.5, 0.55, 1.5), (40, 40, 44), Metal, Block),
+        g("Hopper", v(0.0, 1.25, 0.15), v(0.7, 0.7, 0.7), (40, 150, 70), Plastic, Cylinder),
+        rod("Barrel", v(0.0, 0.7, 1.9), 0.24, 1.6, (25, 25, 28), Metal),
+        g("Trigger Guard", v(0.0, 0.28, 0.3), v(0.12, 0.2, 0.36), (25, 25, 28), Metal, Block),
     ], PAINTBALL_GUN);
     let paintball = b.part(storage, "Paintball Template", v(32.0, -300.0, 0.0), v(0.4, 0.4, 0.4), (255, 255, 255), Plastic, Ball);
     b.dm.part_mut(paintball).unwrap().bounce = 0.15;

@@ -200,3 +200,48 @@ fn collapses_only_touch_the_structure_that_was_hit() {
     assert!(!w.part(near).unwrap().anchored);
     assert!(far.iter().all(|b| w.part(*b).unwrap().anchored), "the far-away group was left alone");
 }
+
+#[test]
+fn loose_parts_that_fall_off_the_world_are_cleared_away_but_anchored_ones_stay() {
+    let mut dm = arena();
+    let root = dm.root();
+    // A loose brick over nothing (the floor is 200 wide), and a hidden
+    // template kept far below the map, anchored.
+    let brick = dm.create(Class::Part, "Brick", root).unwrap();
+    dm.part_mut(brick).unwrap().position = Vec3::new(150.0, 5.0, 0.0);
+    dm.part_mut(brick).unwrap().anchored = false;
+    let template = dm.create(Class::Part, "Template", root).unwrap();
+    dm.part_mut(template).unwrap().position = Vec3::new(0.0, -300.0, 0.0);
+    let mut game = Game::start(dm);
+    run(&mut game, 4.0);
+    assert!(game.world().get(brick).is_none(), "the brick fell off the world and is gone");
+    assert!(game.world().get(template).is_some(), "anchored parts below the map stay");
+}
+
+#[test]
+fn a_team_whose_spawn_fell_off_the_world_respawns_at_home_not_in_the_void() {
+    let mut dm = arena();
+    let root = dm.root();
+    // Red's pad up on a (pretend) tower at x = 40.
+    let pad = dm.create(Class::SpawnLocation, "Red Spawn", root).unwrap();
+    dm.part_mut(pad).unwrap().position = Vec3::new(40.0, 20.0, 0.0);
+    dm.get_mut(pad).unwrap().attributes.insert("team".into(), brixo_core::Attribute::Str("Red".into()));
+    let mut game = Game::start(dm);
+    run(&mut game, 0.5);
+    let me = game.player_id().unwrap();
+    game.world().get_mut(me).unwrap().attributes.insert("team".into(), brixo_core::Attribute::Str("Red".into()));
+    run(&mut game, 0.2);
+
+    // The tower comes down: the pad drops off the edge of the world...
+    game.world().part_mut(pad).unwrap().position = Vec3::new(40.0, -200.0, 0.0);
+    // ...and Red's player gets knocked out.
+    game.world().player_mut(me).unwrap().health = 0.0;
+    run(&mut game, 5.0);
+    let p = *game.world().player(me).unwrap();
+    assert_eq!(p.dead, 0.0, "respawned");
+    assert!(p.body.position.y > 0.0, "not sent down to the fallen pad (at y = {})", p.body.position.y);
+    assert!((p.body.position.x - 40.0).abs() < 3.0, "back where Red's pad stood");
+    // And they stay alive: no dying over and over.
+    run(&mut game, 5.0);
+    assert!(game.world().player(me).unwrap().health > 0.0);
+}

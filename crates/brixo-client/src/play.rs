@@ -239,6 +239,21 @@ pub fn first_hit(world: &DataModel, origin: Vec3, dir: Vec3, max: f32) -> Option
     best
 }
 
+/// Where the mouse points in the world when a tool is clicked: the spot on
+/// whatever's under the cursor (`ndc`, -1..1 with y up; the middle of the
+/// screen when the mouse is locked), or far off into the sky. Your own
+/// character and tools don't count, so you never aim at yourself.
+pub fn aim_point(
+    world: &brixo_core::DataModel,
+    camera: &brixo_render::Camera,
+    aspect: f32,
+    me: Option<brixo_core::InstanceId>,
+    ndc: (f32, f32),
+) -> brixo_core::Vec3 {
+    let mine = |id: brixo_core::InstanceId| me.is_some_and(|m| id == m || world.player_of(id) == Some(m));
+    brixo_render::pick_point(world, camera, aspect, ndc.0, ndc.1, &mine)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

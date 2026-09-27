@@ -161,7 +161,10 @@ fn non_colliding_parts_fall_through_but_still_touch() {
     dm.part_mut(ghost).unwrap().can_collide = false;
     let mut game = Game::start(dm);
     run(&mut game, 2.0);
-    assert!(y_of(&game, ghost) < -5.0, "should fall through, y = {}", y_of(&game, ghost));
+    // It fell through the floor, and on off the bottom of the world, where
+    // loose parts are cleared away.
+    let y = game.world().part(ghost).map(|p| p.position.y);
+    assert!(y.is_none_or(|y| y < -5.0), "should fall through, y = {y:?}");
     assert_eq!(texts(&script_log(&game)), ["ghost passed"]);
 }
 

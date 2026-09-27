@@ -263,7 +263,7 @@ impl Server {
                         self.game.chat(player, &text);
                     }
                 }
-                Event::Message(msg @ (ToServer::Click { .. } | ToServer::Equip { .. } | ToServer::Activate)) => {
+                Event::Message(msg @ (ToServer::Click { .. } | ToServer::Equip { .. } | ToServer::Activate | ToServer::ActivateAt { .. })) => {
                     // The game checks each request against this player: a
                     // client can't press someone else's button or tool.
                     let Some(player) = self.connections.get(&conn).and_then(|c| c.player) else { continue };
@@ -272,6 +272,9 @@ impl Server {
                             self.game.click(player, InstanceId::from_raw(button));
                         }
                         ToServer::Equip { slot } => self.game.equip(player, Some(slot as usize)),
+                        ToServer::ActivateAt { x, y, z } => {
+                            self.game.activate_at(player, Some(brixo_core::Vec3::new(x, y, z)));
+                        }
                         _ => {
                             self.game.activate(player);
                         }

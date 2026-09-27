@@ -599,6 +599,14 @@ impl Physics {
     }
 
     /// Where the player's character is, if there is one.
+    /// Turns a character to face `yaw` (radians, 0 = +Z), the way it faces
+    /// where it walks: a tool aimed with the mouse turns you toward the shot.
+    pub fn face(&mut self, id: InstanceId, yaw: f32) {
+        if let Some(c) = self.characters.get_mut(&id) {
+            c.yaw = yaw;
+        }
+    }
+
     pub fn character_position(&self, id: InstanceId) -> Option<Vec3> {
         let c = self.characters.get(&id)?;
         self.bodies.get(c.body).map(|b| b.translation())

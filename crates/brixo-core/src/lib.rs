@@ -487,6 +487,10 @@ pub struct PlayerProps {
     /// The hats they're wearing (up to MAX_HATS).
     #[serde(default)]
     pub hats: [Option<Hat>; MAX_HATS],
+    /// Where in the world their mouse pointed the last time they clicked
+    /// with a tool (scripts read it as `player.mouse`): what a gear aims at.
+    #[serde(default)]
+    pub mouse: Vec3,
     pub camera_mode: CameraMode,
     /// The Tool in the player's hand, if any (one of the Tools inside the
     /// player, which make up their backpack).
@@ -526,6 +530,7 @@ impl Default for PlayerProps {
             pants_color: Color::new(74, 85, 120),
             shoes_color: Color::new(43, 43, 51),
             hats: [None; MAX_HATS],
+            mouse: Vec3::new(0.0, 0.0, 0.0),
             camera_mode: CameraMode::Default,
             equipped: None,
             speed: 0.0,

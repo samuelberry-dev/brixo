@@ -739,6 +739,26 @@ impl Interpreter {
                 }
                 Ok(Value::Num(n.sqrt()))
             }
+            // Angles are in radians, like every other language's maths
+            // (multiply by 57.2958 for the degrees rotations use).
+            Builtin::Sin | Builtin::Cos => {
+                need(1)?;
+                let n = num(&args[0], "its angle")?;
+                Ok(Value::Num(if b == Builtin::Sin { n.sin() } else { n.cos() }))
+            }
+            Builtin::Asin | Builtin::Acos => {
+                need(1)?;
+                // Rounding can push a value a hair past 1: clamp rather than
+                // make every caller do it.
+                let n = num(&args[0], "its value")?.clamp(-1.0, 1.0);
+                Ok(Value::Num(if b == Builtin::Asin { n.asin() } else { n.acos() }))
+            }
+            Builtin::Atan2 => {
+                need(2)?;
+                let y = num(&args[0], "its first value (y)")?;
+                let x = num(&args[1], "its second value (x)")?;
+                Ok(Value::Num(y.atan2(x)))
+            }
 
             Builtin::Min | Builtin::Max => {
                 if args.is_empty() {

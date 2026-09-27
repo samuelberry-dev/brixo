@@ -126,6 +126,11 @@ impl NetClient {
         self.send(ToServer::Activate);
     }
 
+    /// You clicked with a tool in hand, the mouse pointing at `aim`.
+    pub fn activate_at(&mut self, aim: brixo_core::Vec3) {
+        self.send(ToServer::ActivateAt { x: aim.x, y: aim.y, z: aim.z });
+    }
+
     /// Tells the server what you're pressing (only when it changes).
     pub fn send_input(&mut self, input: PlayerInput) {
         if !self.connected || self.last_input == Some(input) {

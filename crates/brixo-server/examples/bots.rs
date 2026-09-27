@@ -85,7 +85,10 @@ fn main() {
                     bot.net.equip(slot);
                 }
                 if act.activate {
-                    bot.net.activate();
+                    match act.aim {
+                        Some(aim) => bot.net.activate_at(aim),
+                        None => bot.net.activate(),
+                    }
                 }
                 continue;
             }

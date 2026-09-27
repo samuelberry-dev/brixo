@@ -42,6 +42,12 @@ fn slot(names: &[&str], name: &str) -> usize {
     names.iter().position(|n| *n == name).unwrap()
 }
 
+/// Clicks with the tool in hand, the mouse on `who` (at chest height).
+fn click_on(game: &mut Game, by: InstanceId, who: InstanceId) -> bool {
+    let at = world(game).player(who).unwrap().body.position;
+    game.activate_at(by, Some(Vec3::new(at.x, at.y + 0.5, at.z)))
+}
+
 fn heard(game: &mut Game, name: &str) -> bool {
     game.take_sounds().iter().any(|s| matches!(s, SoundEvent::Play { name: n, .. } if n == name))
 }
@@ -146,15 +152,15 @@ fn every_gear_works_and_everyone_gets_the_whole_kit() {
         w.part(id).unwrap().position
     };
     // Fire a real rocket at point-blank range into the wall.
-    // (14 studs back: the launcher starts its rocket 4 studs in front of
-    // you, so any closer and it appears past the wall; and the blast
+    // (14 studs back: the launcher starts its rocket at its muzzle, about
+    // 6 studs in front of you, so any closer and it appears past the wall; and the blast
     // (8 studs, plus a player's width) would catch the shooter too.)
     place(&mut game, ann, center.x - 14.0, center.z);
     face(&mut game, ann, 1.0, 0.0);
     run(&mut game, 3.1); // clear the launcher's own reload from earlier
     game.equip(ann, Some(slot(&names, "Rocket Launcher")));
     run(&mut game, 0.1);
-    game.activate(ann);
+    game.activate_at(ann, Some(center));
     run(&mut game, 0.6);
     check(&game);
     let standing = {
@@ -176,7 +182,7 @@ fn every_gear_works_and_everyone_gets_the_whole_kit() {
     run(&mut game, 0.1);
     let before_hp = world(&game).player(bob).unwrap().health;
     game.take_sounds();
-    game.activate(ann);
+    click_on(&mut game, ann, bob);
     run(&mut game, 0.5);
     check(&game);
     assert!(world(&game).player(bob).unwrap().health < before_hp, "hit for damage: {before_hp} -> ?");
@@ -190,7 +196,7 @@ fn every_gear_works_and_everyone_gets_the_whole_kit() {
     run(&mut game, 0.1);
     let hp_before = world(&game).player(bob).unwrap().health;
     game.take_sounds();
-    game.activate(ann);
+    click_on(&mut game, ann, bob);
     run(&mut game, 0.3);
     check(&game);
     let hp_after = world(&game).player(bob).unwrap().health;
@@ -200,4 +206,47 @@ fn every_gear_works_and_everyone_gets_the_whole_kit() {
     run(&mut game, 1.0);
     check(&game);
     assert!(world(&game).find_first("Splat").is_none(), "and it fades away");
+}
+
+#[test]
+fn gears_fire_where_you_click_and_you_turn_to_face_it() {
+    let mut game = Game::start_server(brixo_samples::gears::gear_range());
+    let ann = game.add_player("Ann");
+    run(&mut game, 1.0);
+    check(&game);
+    let names = brixo_samples::gears::NAMES;
+    place(&mut game, ann, 0.0, 0.0);
+    face(&mut game, ann, 0.0, 1.0); // facing +Z
+    run(&mut game, 0.3);
+
+    // Click up and off to the side (+X, high): the character turns that
+    // way and the rocket flies at the spot, climbing.
+    game.equip(ann, Some(slot(&names, "Rocket Launcher")));
+    run(&mut game, 0.1);
+    let target = Vec3::new(40.0, 20.0, 0.0);
+    assert!(game.activate_at(ann, Some(target)));
+    run(&mut game, 0.15);
+    check(&game);
+    let p = *world(&game).player(ann).unwrap();
+    assert_eq!((p.mouse.x, p.mouse.y, p.mouse.z), (40.0, 20.0, 0.0), "scripts see where you clicked");
+    assert!((p.body.rotation.y - 90.0).abs() < 1.0, "turned to face the click (yaw {})", p.body.rotation.y);
+    let rocket = world(&game).find_first("Rocket").expect("a rocket flew");
+    let r = *world(&game).part(rocket).unwrap();
+    assert!(r.velocity.x > 40.0 && r.velocity.y > 15.0 && r.velocity.z.abs() < 8.0, "toward the click: {:?}", r.velocity);
+    // Pointing the way it flies: its length (its y) runs along the velocity.
+    // (Turned by x, then y: its y axis ends up at (sin x sin y, cos x, sin x cos y).)
+    let (ax, ay) = (r.rotation.x.to_radians(), r.rotation.y.to_radians());
+    let along = [ax.sin() * ay.sin(), ax.cos(), ax.sin() * ay.cos()];
+    let speed = (r.velocity.x.powi(2) + r.velocity.y.powi(2) + r.velocity.z.powi(2)).sqrt();
+    let dot = (along[0] * r.velocity.x + along[1] * r.velocity.y + along[2] * r.velocity.z) / speed;
+    assert!(dot > 0.98, "rocket points where it flies ({along:?} vs {:?})", r.velocity);
+
+    // An older Player that sends no mouse point: straight ahead, as before.
+    run(&mut game, 3.5);
+    assert!(game.activate(ann));
+    run(&mut game, 0.15);
+    let p = *world(&game).player(ann).unwrap();
+    let (dx, dz) = (p.mouse.x - p.body.position.x, p.mouse.z - p.body.position.z);
+    let yaw = p.body.rotation.y.to_radians();
+    assert!((dx * yaw.sin() + dz * yaw.cos()) / (dx * dx + dz * dz).sqrt() > 0.99, "aims where they face");
 }

@@ -206,13 +206,22 @@ wait(0.5)
   class error with "did you mean". Custom fields: `player.cash = 100`
   (numbers, text, true/false).
 - Builtins: `print len str num type push pop insert remove keys wait floor round
-  abs min max sqrt random(lo, hi)`.
+  abs min max sqrt sin cos asin acos atan2(y, x) random(lo, hi)`. Angles are in
+  radians; part rotations are in degrees (multiply by 57.2958).
 - Host functions: `find destroy clone time players create play_sound play_music
   stop_music explode`. `explode(position, radius[, power])` knocks out players
   in range (and returns them), throws loose parts, and shows a fireball.
 - Events: `on touched(other)`, `on clicked(player)`, `on activated(player)`,
   `on player_joined(p)`, `on player_left(p)`, `on died(p)`, `every N seconds`.
-- Players also have `look` (facing direction, `{x, y = 0, z}`) and `swinging`.
+- Players also have `look` (facing direction, `{x, y = 0, z}`), `swinging`, and
+  `mouse`: the spot in the world their mouse pointed at when they last clicked
+  with a tool (like Roblox's `Mouse.Hit`). Clicking also turns the character to
+  face that spot, so `look` points there too. All three are read-only. (An older
+  Player that sends no mouse point gets a spot far straight ahead.)
+- Loose (unanchored) parts that fall below the world's edge (y < -60, where
+  players die) are destroyed. Anchored parts stay, so templates can be kept far
+  below the map. A team whose SpawnLocation fell off the world respawns where the
+  pad last stood.
 - Parts also have `floating` (no gravity) and `bounce` (0 to 1).
 - `play_sound` / `play_music` take a built-in name or a Sound object
   (`play_sound(find("Horn"))`); Sounds have `volume`.
@@ -338,7 +347,14 @@ wait(0.5)
 - **Gears:** `brixo_samples::gears` has the standard kit (Sword, Slingshot,
   Rocket Launcher, Superball, Trowel, Paintball Gun). `install(dm, storage)`
   adds the templates; clone `"<Name> Template"` into players. Gear Range
-  (`brixo-samples gear`) is the test map.
+  (`brixo-samples gear`) is the test map. Flagfall and Spire Wars both use it
+  (Spire adds its own Timebomb). Everything that shoots aims at `player.mouse`
+  and leaves from the gear in the right hand (`aim(p, ahead, up, right)` in its
+  helpers); shots ignore the shooter's own gear (`own_gear`). Models are built
+  pointing along +Z, the first part in the hand; **cylinders stand along their
+  y**, so a barrel or handle lying along the gear is turned 90 degrees on x
+  (`rod(...)` in gears.rs). Rockets are long along their y and turned to point
+  where they fly (`point_along`). Bots (`flagbots`) aim with some wobble.
 - **Test hooks** (inert unless set):
   - `BRIXO_SOUND_LOG`: log sounds with timestamps (first line: `# epoch <unix time>`).
   - `BRIXO_GOTO_FILE`: the player walks toward "x z" in that file.

@@ -28,6 +28,11 @@ pub enum Builtin {
     Min,
     Max,
     Sqrt,
+    Sin,
+    Cos,
+    Asin,
+    Acos,
+    Atan2,
     Random,
 }
 
@@ -50,6 +55,11 @@ impl Builtin {
         ("min", Builtin::Min),
         ("max", Builtin::Max),
         ("sqrt", Builtin::Sqrt),
+        ("sin", Builtin::Sin),
+        ("cos", Builtin::Cos),
+        ("asin", Builtin::Asin),
+        ("acos", Builtin::Acos),
+        ("atan2", Builtin::Atan2),
         ("random", Builtin::Random),
     ];
 

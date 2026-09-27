@@ -283,7 +283,9 @@ struct Editor {
     group_drag: Option<(PartProps, Vec<(InstanceId, PartProps)>)>,
     /// During Play: GUI clicks, hotbar picks and tool swings from the
     /// viewport, handed to the game after the UI is built.
-    play_input: Option<(GuiEvents, bool)>,
+    /// Play mode's clicks: GUI and hotbar, and a tool swing aimed at a
+    /// spot in the world.
+    play_input: Option<(GuiEvents, Option<brixo_core::Vec3>)>,
     /// A Sound to play once (its Preview button).
     preview: Option<InstanceId>,
     /// Filming: an action for build_ui to take this frame, a Play/Stop
@@ -888,8 +890,8 @@ impl Studio {
                 if let Some(slot) = events.hotbar {
                     g.equip(me, Some(slot));
                 }
-                if swing {
-                    g.activate(me);
+                if let Some(aim) = swing {
+                    g.activate_at(me, Some(aim));
                 }
             }
         }
@@ -2145,7 +2147,11 @@ fn viewport(
     if let Some(me) = me {
         draw_hotbar(ui.ctx(), rect, model, me, &mut events);
         events.hotbar = events.hotbar.or_else(|| hotbar_key(ui.ctx()));
-        let swing = response.clicked() && !events.pointer_on_gui;
+        // A click swings the tool in hand, aimed where the mouse points.
+        let swing = (response.clicked() && !events.pointer_on_gui)
+            .then(|| response.interact_pointer_pos())
+            .flatten()
+            .map(|pos| brixo_client::aim_point(model, camera, screen.width() / screen.height(), Some(me), ndc(screen, pos)));
         editor.play_input = Some((events, swing));
     }
 
