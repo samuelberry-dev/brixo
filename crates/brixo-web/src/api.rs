@@ -103,6 +103,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/admin/ban", post(admin_ban))
         .route("/api/admin/hide", post(admin_hide))
         .route("/api/admin/reset", post(admin_reset))
+        .route("/api/admin/admin-only", post(admin_only))
         .route("/api/reset/check", post(reset_check))
         .route("/api/reset", post(reset_password))
         .route("/api/me/password", put(change_password))
@@ -664,8 +665,10 @@ async fn play(State(app): State<Arc<App>>, headers: HeaderMap, Path(game_id): Pa
     if !app.limits.take(&format!("play:{}", u.id), limits::PLAYS) {
         return Err(slow_down());
     }
-    // Taken down (or by a banned account): as if it isn't there.
-    if app.db.game(game_id).map_err(oops)?.is_none() {
+    // Taken down (or by a banned account): as if it isn't there. Games
+    // for admins only are there for admins.
+    let listed = app.db.game(game_id).map_err(oops)?.is_some();
+    if !listed && !(u.admin && app.db.admin_can_play(game_id).map_err(oops)?) {
         return Err(ApiError(StatusCode::NOT_FOUND, "no such game".into()));
     }
     let data = app.db.game_data(game_id).map_err(oops)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such game".into()))?;
@@ -772,6 +775,17 @@ pub fn seed_samples(app: &App) {
             let _ = app.db.set_thumbnail(id, png);
         }
     }
+    // The Test Lab: every feature in one place, for admins only.
+    let data = brixo_samples::lab::test_lab().to_json().expect("samples serialize");
+    if let Ok(id) = app.db.publish(owner.id, "Test Lab", &data) {
+        let _ = app.db.set_game_info(
+            id,
+            owner.id,
+            "Every Brixo feature in one place, for testing: lighting controls, cars, doors, hinges and motors, every gear, \
+             pads, teleporters, coins, teams, saved stats and the leaderboard. Admins only.",
+        );
+        let _ = app.db.set_admin_only(id, true);
+    }
     let _ = app.db.set_blurb(owner.id, "The official Brixo account. We make the sample games.");
 }
 
@@ -855,6 +869,26 @@ async fn admin_reset(State(app): State<Arc<App>>, headers: HeaderMap, Json(r): J
         None => Err(ApiError(StatusCode::NOT_FOUND, "no such account".into())),
         Some((token, name)) => Ok(Json(serde_json::json!({ "token": token, "username": name, "minutes": crate::db::RESET_SECONDS / 60 }))),
     }
+}
+
+#[derive(Deserialize)]
+struct AdminOnlyRequest {
+    id: i64,
+    admin_only: bool,
+}
+
+/// Makes a game admins-only (hidden from everyone else; admins play it
+/// from the Admin page), or public again. Going admins-only shuts its
+/// server, so nobody else is left inside.
+async fn admin_only(State(app): State<Arc<App>>, headers: HeaderMap, Json(r): Json<AdminOnlyRequest>) -> Result<StatusCode> {
+    admin(&app, &headers)?;
+    if !app.db.set_admin_only(r.id, r.admin_only).map_err(oops)? {
+        return Err(ApiError(StatusCode::NOT_FOUND, "no such game".into()));
+    }
+    if r.admin_only {
+        app.servers.stop(r.id);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

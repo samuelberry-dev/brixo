@@ -27,8 +27,11 @@
         <input class="find" id="gfind" placeholder="Find a game or maker" value="${esc(filter.games)}">
         <table class="admin"><tr><th>Game</th><th>By</th><th>Visits</th><th>Published</th><th></th></tr>
         ${games.map((g) => `<tr class="${g.hidden || g.owner_banned ? "off" : ""}">
-          <td>${g.hidden || g.owner_banned ? esc(g.name) : `<a href="/games/${g.id}">${esc(g.name)}</a>`}
-              ${g.hidden ? `<span class="tag">taken down</span>` : ""}${g.owner_banned ? `<span class="tag">maker banned</span>` : ""}</td>
+          <td>${g.hidden || g.owner_banned || g.admin_only ? esc(g.name) : `<a href="/games/${g.id}">${esc(g.name)}</a>`}
+              ${g.hidden ? `<span class="tag">taken down</span>` : ""}${g.owner_banned ? `<span class="tag">maker banned</span>` : ""}${g.admin_only ? `<span class="tag gold">admins only</span>` : ""}
+              ${g.admin_only && !g.hidden ? `<div><button class="btn small green" data-play="${g.id}" data-name="${esc(g.name)}">Play</button>
+                <a href="#" data-public="${g.id}" style="font-size:10px">make public</a></div>`
+                : g.hidden ? "" : `<div><a href="#" data-private="${g.id}" style="font-size:10px">admins only</a></div>`}</td>
           <td>${esc(g.owner)}</td><td>${num(g.visits)}</td><td>${when(g.created)}</td>
           <td>${g.hidden
             ? `<button class="btn small gray" data-show="${g.id}">Put back</button>`
@@ -66,6 +69,15 @@
     content.querySelectorAll("[data-show]").forEach((b) => b.onclick = () => act("/api/admin/hide", { id: Number(b.dataset.show), hidden: false }, "put it back"));
     content.querySelectorAll("[data-ban]").forEach((b) => b.onclick = () => {
       if (confirm(`Ban ${b.dataset.ban}?`)) act("/api/admin/ban", { username: b.dataset.ban, banned: true }, "ban them");
+    });
+    content.querySelectorAll("[data-play]").forEach((b) => b.onclick = () => playGame({ id: Number(b.dataset.play), name: b.dataset.name }, b));
+    content.querySelectorAll("[data-public]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      if (confirm("Make this game public? Everyone will see it in Games.")) act("/api/admin/admin-only", { id: Number(a.dataset.public), admin_only: false }, "make it public");
+    });
+    content.querySelectorAll("[data-private]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      if (confirm("Make this game admins only? It disappears from Games, and anyone playing it is sent home.")) act("/api/admin/admin-only", { id: Number(a.dataset.private), admin_only: true }, "make it admins only");
     });
     content.querySelectorAll("[data-reset]").forEach((b) => b.onclick = async () => {
       if (!confirm(`Make a password reset link for ${b.dataset.reset}?`)) return;

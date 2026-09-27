@@ -495,3 +495,34 @@ fn admins_make_reset_links_and_people_change_their_own_password() {
     // The page itself is there.
     assert_eq!(status(browser().get(&format!("{site}/reset")).call()), 200);
 }
+
+#[test]
+fn the_test_lab_is_for_admins_only() {
+    let (site, app) = start_site();
+    let boss = browser();
+    boss.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Boss", "password": "abcdefgh"})).unwrap();
+    app.db.set_admin(&"Boss".to_string(), true).unwrap();
+    let kid = browser();
+    kid.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "Kid", "password": "abcdefgh"})).unwrap();
+
+    // Not in the catalog, for anyone.
+    let games: serde_json::Value = kid.get(&format!("{site}/api/games")).call().unwrap().into_json().unwrap();
+    assert!(!games.as_array().unwrap().iter().any(|g| g["name"] == "Test Lab"));
+    // Admins see it on the Admin page, marked admins only.
+    let overview: serde_json::Value = boss.get(&format!("{site}/api/admin")).call().unwrap().into_json().unwrap();
+    let lab = overview["games"].as_array().unwrap().iter().find(|g| g["name"] == "Test Lab").expect("the lab is there").clone();
+    assert_eq!(lab["admin_only"], true);
+    let id = lab["id"].as_i64().unwrap();
+    // Only admins can play it.
+    assert_eq!(status(kid.post(&format!("{site}/api/games/{id}/play")).call()), 404);
+    assert_eq!(status(browser().get(&format!("{site}/api/games/{id}")).call()), 404);
+    let pass: serde_json::Value = boss.post(&format!("{site}/api/games/{id}/play")).call().unwrap().into_json().unwrap();
+    let mut c = NetClient::connect_with_ticket(pass["server"].as_str().unwrap(), pass["ticket"].as_str().unwrap()).unwrap();
+    wait_until(&mut c, "the admin joined the lab", |c| c.me.is_some());
+    // Made public, it's in the catalog; back to admins only, it's gone again.
+    assert_eq!(status(kid.post(&format!("{site}/api/admin/admin-only")).send_json(serde_json::json!({"id": id, "admin_only": false}))), 403);
+    boss.post(&format!("{site}/api/admin/admin-only")).send_json(serde_json::json!({"id": id, "admin_only": false})).unwrap();
+    assert_eq!(status(kid.get(&format!("{site}/api/games/{id}")).call()), 200);
+    boss.post(&format!("{site}/api/admin/admin-only")).send_json(serde_json::json!({"id": id, "admin_only": true})).unwrap();
+    assert_eq!(status(kid.get(&format!("{site}/api/games/{id}")).call()), 404);
+}

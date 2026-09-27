@@ -5,6 +5,7 @@ mod battle;
 pub mod flagbots;
 pub mod flagfall;
 pub mod gears;
+pub mod lab;
 pub mod synth;
 mod tycoon;
 

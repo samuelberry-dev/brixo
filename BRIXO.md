@@ -664,6 +664,26 @@ carrying home, returning, chasing the carrier or escorting as needed. The
 `bots` server example uses it automatically on a Flagfall server, and
 `tests/flagbots.rs` plays a 5-minute bots-only match headless.
 
+**Test Lab** (`brixo_samples::lab::test_lab`, `brixo-samples lab`): every
+feature in one map, for testing. Doors and hinges (north: swing door that
+opens away from you, saloon doors, drawbridge on a lever between high banks
+over "water" that sends you back, trapdoor stage, swinging sign, the old
+sliding door), garage (east: two cars, wheels named "Wheel L"/"Wheel R";
+buttons over each car set motors, negative speed drives +Z, Stop brakes by
+holding each wheel's `hinge_angle`, buttons show only while someone's
+within 25 studs), playground (west: spinner, carousel, windmill as a Model
+with a hinged first part, swing), gear range (south: the whole kit, targets,
+a breakable tower in a Folder so it breaks apart, Explode and Rebuild from
+a Storage template 300 studs down), movement (north-east: pads,
+teleporters, conveyor, moving platform, lava, ball pit), plaza coins that
+respawn, team pads, and on screen the leaderboard (coins, KOs from
+`last_hit_by`, saved visits) and a Lab controls panel (cloned per player
+from Storage: lighting presets, fog, brightness, sky, day cycle, music).
+`tests/lab.rs` drives it all headless. On the site it's published by Brixo
+as **admins only** (`games.admin_only`: out of every listing, 404 to
+others, played from the Admin page's Play button; any game can be switched
+with "admins only" / "make public", `POST /api/admin/admin-only`).
+
 **Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 39 pages of
 Markdown in `crates/brixo-web/docs/` (getting started, Rovik, building,
 players and GUI, lighting, 13 how-tos, reference), compiled into the binary

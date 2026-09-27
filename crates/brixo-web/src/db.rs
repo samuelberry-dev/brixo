@@ -64,6 +64,8 @@ pub struct AdminGame {
     pub created: i64,
     pub hidden: bool,
     pub owner_banned: bool,
+    /// Only admins can see and play it (the Test Lab).
+    pub admin_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,7 +86,7 @@ pub fn now() -> i64 {
 }
 
 /// Games anyone can see and play: not taken down, and not by a banned account.
-const LISTED: &str = "g.hidden = 0 AND u.banned = 0";
+const LISTED: &str = "g.hidden = 0 AND u.banned = 0 AND g.admin_only = 0";
 
 const GAME_COLUMNS: &str = "g.id, g.name, u.username, g.description, g.visits, g.created, g.thumbnail IS NOT NULL";
 
@@ -209,6 +211,8 @@ impl Db {
         add_column(&conn, "users", "banned", "INTEGER NOT NULL DEFAULT 0")?;
         add_column(&conn, "users", "admin", "INTEGER NOT NULL DEFAULT 0")?;
         add_column(&conn, "games", "hidden", "INTEGER NOT NULL DEFAULT 0")?;
+        // Games only admins can see and play (the Test Lab).
+        add_column(&conn, "games", "admin_only", "INTEGER NOT NULL DEFAULT 0")?;
         // Password reset links an admin makes (one per account, one use).
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS resets (
@@ -405,6 +409,19 @@ impl Db {
         Ok(conn.execute("UPDATE games SET hidden = ?1 WHERE id = ?2", params![hidden as i64, game_id])? > 0)
     }
 
+    /// Makes a game admins-only (or public again). False if there's no such game.
+    pub fn set_admin_only(&self, game_id: i64, admin_only: bool) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn.execute("UPDATE games SET admin_only = ?1 WHERE id = ?2", params![admin_only as i64, game_id])? > 0)
+    }
+
+    /// Whether an admin can play this game: it exists and isn't taken
+    /// down (admins-only games included).
+    pub fn admin_can_play(&self, game_id: i64) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn.query_row("SELECT COUNT(*) FROM games WHERE id = ?1 AND hidden = 0", [game_id], |r| r.get::<_, i64>(0))? > 0)
+    }
+
     /// For the admin page: the newest accounts, with their game counts.
     pub fn admin_users(&self, limit: i64) -> rusqlite::Result<Vec<AdminUser>> {
         let conn = self.0.lock().unwrap();
@@ -422,7 +439,7 @@ impl Db {
     pub fn admin_games(&self, limit: i64) -> rusqlite::Result<Vec<AdminGame>> {
         let conn = self.0.lock().unwrap();
         let mut q = conn.prepare(
-            "SELECT g.id, g.name, u.username, g.visits, g.created, g.hidden, u.banned FROM games g JOIN users u ON u.id = g.owner_id
+            "SELECT g.id, g.name, u.username, g.visits, g.created, g.hidden, u.banned, g.admin_only FROM games g JOIN users u ON u.id = g.owner_id
              ORDER BY g.id DESC LIMIT ?1",
         )?;
         let rows = q.query_map([limit], |r| {
@@ -434,6 +451,7 @@ impl Db {
                 created: r.get(4)?,
                 hidden: r.get::<_, i64>(5)? != 0,
                 owner_banned: r.get::<_, i64>(6)? != 0,
+                admin_only: r.get::<_, i64>(7)? != 0,
             })
         })?;
         rows.collect()

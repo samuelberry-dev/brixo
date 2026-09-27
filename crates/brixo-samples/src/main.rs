@@ -1,4 +1,4 @@
-//! `brixo-samples [tycoon|spire|flag|gears] [file]`: writes a sample game as a file,
+//! `brixo-samples [tycoon|spire|flag|gears|lab] [file]`: writes a sample game as a file,
 //! to open and change in Brixo Studio. (The Brixo website publishes both to
 //! its catalog by itself.)
 fn main() {
@@ -7,6 +7,7 @@ fn main() {
         "battle" | "spire" => (brixo_samples::spire_wars(), "spire-wars.brixo"),
         "flag" | "flagfall" | "ctf" => (brixo_samples::flagfall(), "flagfall.brixo"),
         "gear" | "gears" | "range" => (brixo_samples::gears::gear_range(), "gear-range.brixo"),
+        "lab" | "test" => (brixo_samples::lab::test_lab(), "test-lab.brixo"),
         _ => (brixo_samples::coin_tycoon(), "coin-tycoon.brixo"),
     };
     let path = std::env::args().nth(2).unwrap_or_else(|| default.to_string());
