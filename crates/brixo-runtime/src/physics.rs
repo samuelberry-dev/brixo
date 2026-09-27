@@ -72,6 +72,9 @@ struct Character {
     jump_was_held: bool,
     /// Facing direction, radians around Y.
     yaw: f32,
+    /// Sideways momentum from a launch (a jump pad, a blast): it carries the
+    /// character along and dies away, quickly on the ground, slowly in the air.
+    push: Vec3,
     /// Where we last put the character, to spot scripts teleporting it.
     synced_position: BVec3,
     /// What the character stood on last step, and where that was: if it
@@ -394,6 +397,7 @@ impl Physics {
             jump_buffer: 0.0,
             jump_was_held: false,
             yaw: 0.0,
+            push: Vec3::ZERO,
             synced_position: position,
             ground: None,
             speed: 0.0,
@@ -477,7 +481,11 @@ impl Physics {
                 }
             }
         }
-        let desired = dir * player.walk_speed * dt + Vec3::Y * c.vertical_speed * dt + carry;
+        let desired = dir * player.walk_speed * dt + Vec3::Y * c.vertical_speed * dt + carry + c.push * dt;
+        c.push *= (-(if c.grounded { 8.0 } else { 0.6 }) * dt).exp();
+        if c.push.length_squared() < 0.01 {
+            c.push = Vec3::ZERO;
+        }
 
         let Some(body) = self.bodies.get(c.body) else { return };
         let pose = *body.position();
@@ -599,6 +607,19 @@ impl Physics {
     }
 
     /// Where the player's character is, if there is one.
+    /// Throws a character: `velocity.y` up (or down), the rest sideways as
+    /// momentum that wears off. What a script's `player.velocity = ...` does.
+    pub fn launch(&mut self, id: InstanceId, velocity: Vec3) {
+        if let Some(c) = self.characters.get_mut(&id) {
+            c.vertical_speed = velocity.y;
+            c.push = Vec3::new(velocity.x, 0.0, velocity.z);
+            if velocity.y > 0.0 {
+                c.grounded = false;
+                c.coyote = 0.0;
+            }
+        }
+    }
+
     /// Turns a character to face `yaw` (radians, 0 = +Z), the way it faces
     /// where it walks: a tool aimed with the mouse turns you toward the shot.
     pub fn face(&mut self, id: InstanceId, yaw: f32) {

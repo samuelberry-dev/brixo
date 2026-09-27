@@ -481,6 +481,17 @@ impl Studio {
         if let Some(status) = opened_status {
             studio.status = status;
         }
+        // For screenshots (the website guide's): BRIXO_STUDIO_CAMERA="x y z
+        // lx ly lz" starts the camera at x,y,z looking at lx,ly,lz.
+        if let Ok(spec) = std::env::var("BRIXO_STUDIO_CAMERA") {
+            let n: Vec<f32> = spec.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+            if let [x, y, z, lx, ly, lz] = n[..] {
+                let d = Vec3::new(lx - x, ly - y, lz - z).normalize_or_zero();
+                studio.camera.position = Vec3::new(x, y, z);
+                studio.camera.yaw = d.z.atan2(d.x);
+                studio.camera.pitch = d.y.clamp(-1.0, 1.0).asin();
+            }
+        }
         studio
     }
 
@@ -555,6 +566,28 @@ impl Studio {
     }
 
     /// An audio file dropped on the window: checked, then added as a Sound.
+    /// A .brixo game file dropped on the window (like a sample game from
+    /// the website's guide): opens it in place of what's there. Undo brings
+    /// the old one back.
+    fn open_dropped_game(&mut self, path: &std::path::Path) {
+        if self.game.is_some() || self.hosted.is_some() {
+            self.status = "Stop the game first, then drop the file in again".into();
+            return;
+        }
+        match DataModel::load_file(&path.to_string_lossy()) {
+            Ok(loaded) => {
+                self.editor.history.checkpoint(&self.model);
+                self.model = loaded;
+                self.selection = None;
+                self.editor.drag = None;
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Game").to_string();
+                self.status = format!("Opened {name}. (Ctrl+Z goes back to what you had.)");
+                self.editor.publish_name = name;
+            }
+            Err(e) => self.status = format!("Couldn't open that game: {e}"),
+        }
+    }
+
     fn import_audio(&mut self, path: &std::path::Path) {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         if !["mp3", "wav", "ogg"].contains(&ext.as_str()) {
@@ -2761,7 +2794,13 @@ impl ApplicationHandler for Studio {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             // An audio file dropped on the window becomes a Sound in the game.
-            WindowEvent::DroppedFile(path) => self.import_audio(&path),
+            WindowEvent::DroppedFile(path) => {
+                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("brixo")) {
+                    self.open_dropped_game(&path);
+                } else {
+                    self.import_audio(&path);
+                }
+            }
 
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = self.gpu.as_mut() {

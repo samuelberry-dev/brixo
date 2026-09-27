@@ -167,7 +167,7 @@ fn part_turn(p: &brixo_core::PartProps) -> glam::Quat {
 pub const FALL_LIMIT: f32 = -60.0;
 
 /// Events scripts can use with `on`.
-pub const EVENTS: &[&str] = &["touched", "player_joined", "player_left", "clicked", "activated", "died"];
+pub const EVENTS: &[&str] = &["touched", "player_joined", "player_left", "clicked", "activated", "died", "respawned"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LogLine {
@@ -217,6 +217,8 @@ struct ScriptInfo {
     joined_handlers: Vec<Value>,
     left_handlers: Vec<Value>,
     died_handlers: Vec<Value>,
+    /// `on respawned(player)`: back from a knockout, at their spawn.
+    respawned_handlers: Vec<Value>,
     clicked_handlers: Vec<Value>,
     activated_handlers: Vec<Value>,
     timers: Vec<Timer>,
@@ -694,7 +696,7 @@ impl Game {
                         p.dead = 0.0;
                         p.health = p.max_health;
                         p.body.position = spots[&id];
-                        respawned.push(name);
+                        respawned.push((id, name));
                     }
                 } else if p.health <= 0.0 || p.body.position.y < FALL_LIMIT {
                     let fell = p.health > 0.0;
@@ -710,8 +712,9 @@ impl Game {
             self.sounds.lock().unwrap().push(crate::host::SoundEvent::Play { name: "death".into(), player: None });
             self.fire_everywhere(|s| &s.died_handlers, id);
         }
-        for name in respawned {
+        for (id, name) in respawned {
             self.push_log("Brixo", format!("{name} respawned"), false);
+            self.fire_everywhere(|s| &s.respawned_handlers, id);
         }
     }
 
@@ -931,6 +934,7 @@ impl Game {
             joined_handlers: Vec::new(),
             left_handlers: Vec::new(),
             died_handlers: Vec::new(),
+            respawned_handlers: Vec::new(),
             clicked_handlers: Vec::new(),
             activated_handlers: Vec::new(),
             timers: Vec::new(),
@@ -953,6 +957,7 @@ impl Game {
                 script.joined_handlers.clear();
                 script.left_handlers.clear();
                 script.died_handlers.clear();
+                script.respawned_handlers.clear();
                 script.clicked_handlers.clear();
                 script.activated_handlers.clear();
                 script.timers.clear();
@@ -978,6 +983,9 @@ impl Game {
                 }
                 Trigger::Event(name) if name == "died" => {
                     self.scripts[index].died_handlers.push(handler.function.clone());
+                }
+                Trigger::Event(name) if name == "respawned" => {
+                    self.scripts[index].respawned_handlers.push(handler.function.clone());
                 }
                 Trigger::Event(name) if name == "clicked" => {
                     self.scripts[index].clicked_handlers.push(handler.function.clone());
@@ -1177,6 +1185,20 @@ impl Game {
 
     /// Simulates physics (which also finds touches), then runs `on touched`.
     fn run_physics(&mut self, dt: f64) {
+        // A script set a player's velocity: throw them (jump pads, launchers).
+        {
+            let mut world = self.world.lock();
+            for &id in &self.players {
+                let Some(p) = world.player_mut(id) else { continue };
+                let v = p.body.velocity;
+                if v != BVec3::new(0.0, 0.0, 0.0) {
+                    p.body.velocity = BVec3::new(0.0, 0.0, 0.0);
+                    if p.dead == 0.0 {
+                        self.physics.launch(id, glam::Vec3::new(v.x, v.y, v.z));
+                    }
+                }
+            }
+        }
         let listeners: HashSet<InstanceId> = self
             .scripts
             .iter()

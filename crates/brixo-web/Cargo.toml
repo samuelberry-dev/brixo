@@ -24,6 +24,8 @@ rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rpassword = "7"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+rovik = { path = "../rovik" }
 
 [dev-dependencies]
 ureq = { version = "2", features = ["json", "cookies"] }

@@ -4,5 +4,6 @@
 
 pub mod api;
 pub mod db;
+pub mod docs;
 pub mod limits;
 pub mod servers;

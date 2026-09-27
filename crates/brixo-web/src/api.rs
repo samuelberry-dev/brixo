@@ -103,6 +103,14 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/", get(|| async { Html(include_str!("web/index.html")) }))
         .route("/games", get(|| async { Html(include_str!("web/games.html")) }))
         .route("/games/:id", get(|| async { Html(include_str!("web/game.html")) }))
+        // The guide to making games (docs.rs).
+        .route("/learn", get(|| async { axum::response::Redirect::permanent("/learn/welcome") }))
+        .route("/learn/search.json", get(|| async {
+            ([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "public, max-age=600")], crate::docs::search_index())
+        }))
+        .route("/learn/:slug", get(learn_page))
+        .route("/learn/samples/:file", get(sample_file))
+        .route("/learn/img/:file", get(learn_image))
         .route("/users/:name", get(|| async { Html(include_str!("web/profile.html")) }))
         .route("/download", get(|| async { Html(include_str!("web/download.html")) }))
         .route("/login", get(|| async { Html(include_str!("web/login.html")) }))
@@ -322,6 +330,42 @@ async fn logout(State(app): State<Arc<App>>, headers: HeaderMap) -> StatusCode {
         let _ = app.db.end_session(&t);
     }
     StatusCode::NO_CONTENT
+}
+
+async fn learn_page(Path(slug): Path<String>) -> Response {
+    match crate::docs::page(&slug) {
+        Some(html) => Html(html).into_response(),
+        None => (StatusCode::NOT_FOUND, Html("<!DOCTYPE html><p>There's no guide page with that name. <a href=\"/learn\">Back to Learn Brixo</a></p>")).into_response(),
+    }
+}
+
+/// A sample game as a .brixo file, to drop onto Studio and read.
+async fn sample_file(Path(file): Path<String>) -> Response {
+    let (make, name): (fn() -> brixo_core::DataModel, &str) = match file.as_str() {
+        "coin-tycoon.brixo" => (brixo_samples::coin_tycoon, "Coin Tycoon"),
+        "flagfall.brixo" => (brixo_samples::flagfall, "Flagfall"),
+        "spire-wars.brixo" => (brixo_samples::spire_wars, "Spire Wars"),
+        "gear-range.brixo" => (brixo_samples::gears::gear_range, "Gear Range"),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    match make().to_json() {
+        Ok(json) => (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}.brixo\"")),
+            ],
+            json,
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn learn_image(Path(file): Path<String>) -> Response {
+    match crate::docs::image(&file) {
+        Some(bytes) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], bytes).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<User>> {

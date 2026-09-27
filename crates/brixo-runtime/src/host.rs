@@ -278,7 +278,7 @@ fn fields_for(class: Class) -> Vec<&'static str> {
             "transparency", "velocity", "floating", "bounce",
         ]),
         Class::Player => f.extend([
-            "position", "size", "rotation", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
+            "position", "size", "rotation", "velocity", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
             "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped",
         ]),
         Class::TextLabel | Class::TextButton | Class::Frame => f.extend([

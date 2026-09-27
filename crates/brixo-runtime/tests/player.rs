@@ -344,3 +344,28 @@ fn things_resting_on_your_head_dont_stop_you_walking() {
     assert!(pos(&game).z - head_z > 7.0, "walked out from under the crate: {:?}", pos(&game));
 }
 
+
+#[test]
+fn setting_a_players_velocity_launches_them_like_a_jump_pad() {
+    let mut dm = arena();
+    // A pad off to the side that throws whoever steps on it up and forward (+Z).
+    let pad = block(&mut dm, "Pad", Vec3::new(0.0, 0.1, 10.0), Vec3::new(4.0, 0.2, 4.0));
+    script(&mut dm, pad, "on touched(other)\n if other.class == \"player\" then\n  other.velocity = {x = 0, y = 70, z = 40}\n end\nend");
+    let mut game = Game::start(dm);
+    idle(&mut game, 0.5);
+    let start = pos(&game);
+    // Walk onto the pad.
+    let mut peak = start.y;
+    for _ in 0..(2.5 / FRAME) as usize {
+        let p = pos(&game);
+        let input = if p.z < 9.0 { forward() } else { PlayerInput::default() };
+        game.set_input(input);
+        game.step(FRAME);
+        peak = peak.max(pos(&game).y);
+    }
+    assert!(peak > start.y + 15.0, "thrown high: peak {peak} from {}", start.y);
+    let end = pos(&game);
+    assert!(end.z > 20.0, "and carried forward by the push: z = {}", end.z);
+    assert!((end.y - start.y).abs() < 1.0, "landed again: y = {}", end.y);
+    assert!(log_texts(&game).iter().all(|l| !l.contains("error")));
+}

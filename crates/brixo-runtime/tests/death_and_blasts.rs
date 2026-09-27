@@ -245,3 +245,20 @@ fn a_team_whose_spawn_fell_off_the_world_respawns_at_home_not_in_the_void() {
     run(&mut game, 5.0);
     assert!(game.world().player(me).unwrap().health > 0.0);
 }
+
+#[test]
+fn respawned_tells_scripts_when_a_player_is_back_so_they_can_move_them() {
+    let mut dm = arena();
+    let root = dm.root();
+    // A checkpoint system in miniature: send them to x = 30 when they're back.
+    script(&mut dm, root, "on respawned(p)\n print(p.name + \" is back\")\n p.position = {x = 30, y = 4, z = 0}\nend");
+    let mut game = Game::start(dm);
+    run(&mut game, 0.5);
+    let me = game.player_id().unwrap();
+    game.take_log();
+    game.world().player_mut(me).unwrap().health = 0.0;
+    run(&mut game, 4.5);
+    assert!(log(&game).iter().any(|l| l == "Player is back"), "scripts heard it");
+    let at = game.world().player(me).unwrap().body.position;
+    assert!((at.x - 30.0).abs() < 1.0, "and moved them: {at:?}");
+}

@@ -192,3 +192,54 @@ ol.steps { margin: 4px 0 8px 18px; padding: 0; } ol.steps li { margin-bottom: 4p
 /* --- footer -------------------------------------------------------------- */
 #footer { border-top: 1px solid var(--line); background: var(--soft); padding: 10px; text-align: center; font-size: 10px; color: var(--dim); }
 #footer a { margin: 0 6px; }
+
+/* --- learn (the guide) ------------------------------------------------------ */
+.learn { display: flex; gap: 10px; align-items: flex-start; }
+.learn-side { width: 220px; flex: none; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; }
+.learn-side .inner { padding: 6px 8px; }
+.learn-side input { width: 100%; font: 11px Verdana, sans-serif; padding: 4px 6px; border: 1px solid #7fa4cc; margin-bottom: 6px; }
+.learn-side .sec { font-weight: bold; font-size: 10px; color: var(--navy); text-transform: uppercase; letter-spacing: .5px; margin: 8px 0 3px; }
+.learn-side ul { list-style: none; margin: 0; padding: 0; }
+.learn-side li a { display: block; padding: 2px 6px; font-size: 11px; border-left: 3px solid transparent; }
+.learn-side li a:hover { background: var(--soft); }
+.learn-side li a.on { background: #e3eefb; border-left-color: var(--gold2); font-weight: bold; color: var(--navy); }
+.learn-side .hit { display: block; padding: 5px 6px; border-bottom: 1px dotted #c3d4e8; }
+.learn-side .hit b { display: block; font-size: 11px; }
+.learn-side .hit span { display: block; font-size: 10px; color: var(--dim); line-height: 1.3; }
+.learn-main { flex: 1; min-width: 0; }
+.doc { padding: 10px 16px 14px !important; font-size: 12.5px; line-height: 1.6; }
+.doc h1 { font-size: 22px; color: var(--navy); margin: 2px 0 10px; font-family: Trebuchet MS, Verdana, sans-serif; }
+.doc h2 { clear: both; font-size: 16px; color: var(--navy); margin: 22px 0 6px; padding-bottom: 3px; border-bottom: 2px solid #dbe7f4; font-family: Trebuchet MS, Verdana, sans-serif; }
+.doc h3 { font-size: 13px; color: var(--navy2); margin: 16px 0 4px; }
+.doc .hash { color: #b9cde4; margin-right: 6px; font-weight: normal; visibility: hidden; }
+.doc h2:hover .hash, .doc h3:hover .hash { visibility: visible; }
+.doc p { margin: 0 0 10px; }
+.doc ul, .doc ol { margin: 0 0 10px; padding-left: 22px; }
+.doc li { margin-bottom: 3px; }
+.doc code { font: 12px Consolas, "Courier New", monospace; background: #eef3f9; border: 1px solid #d6e2ef; padding: 0 3px; border-radius: 2px; }
+.doc .codebox { position: relative; margin: 0 0 12px; }
+.doc pre.code { background: #16263a; color: #e6edf5; border: 1px solid #0d1b2b; border-left: 4px solid var(--gold2);
+  padding: 10px 12px; margin: 0; overflow-x: auto; font: 12.5px/1.5 Consolas, "Courier New", monospace; }
+.doc pre.code code { background: none; border: 0; padding: 0; color: inherit; font: inherit; }
+.doc pre .k { color: #ffcf5c; font-weight: bold; }
+.doc pre .f { color: #7fd1ff; }
+.doc pre .s { color: #a5e38c; }
+.doc pre .n { color: #ffa27a; }
+.doc pre .c { color: #7f93a8; font-style: italic; }
+.doc pre .self { color: #f59ae0; }
+.doc .copy { position: absolute; top: 5px; right: 5px; font: bold 10px Verdana, sans-serif; padding: 2px 7px; cursor: pointer;
+  background: #2a4467; color: #dce8f6; border: 1px solid #45648c; border-radius: 2px; opacity: .8; }
+.doc .copy:hover { opacity: 1; background: var(--blue); }
+.doc figure { margin: 6px 0 14px; border: 1px solid var(--line); background: var(--soft); padding: 5px; display: inline-block; max-width: 100%; }
+.doc figure img { display: block; max-width: 100%; height: auto; border: 1px solid #c2d3e6; }
+.doc figcaption { font-size: 11px; color: var(--dim); padding: 4px 2px 0; }
+.doc blockquote { margin: 0 0 12px; padding: 7px 10px; background: #fffbe6; border: 1px solid #ecd67e; border-left: 4px solid var(--gold2); }
+.doc blockquote p { margin: 0; }
+.doc table { border-collapse: collapse; margin: 0 0 12px; width: 100%; font-size: 11.5px; }
+.doc th { background: var(--navy2); color: #fff; text-align: left; padding: 4px 7px; }
+.doc td { border: 1px solid #d0deed; padding: 4px 7px; vertical-align: top; }
+.doc tr:nth-child(even) td { background: #f5f9fd; }
+.doc .toc { float: right; width: 190px; margin: 0 0 10px 14px; background: var(--soft); border: 1px solid #c3d4e8; padding: 6px 9px; font-size: 11px; }
+.doc .toc ul { padding-left: 16px; margin: 4px 0 0; }
+.doc .pager { clear: both; display: flex; justify-content: space-between; border-top: 1px solid #dbe7f4; margin-top: 20px; padding-top: 10px; font-weight: bold; }
+.doc .pager .next { margin-left: auto; }

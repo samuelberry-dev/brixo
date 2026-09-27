@@ -212,7 +212,12 @@ wait(0.5)
   stop_music explode`. `explode(position, radius[, power])` knocks out players
   in range (and returns them), throws loose parts, and shows a fireball.
 - Events: `on touched(other)`, `on clicked(player)`, `on activated(player)`,
-  `on player_joined(p)`, `on player_left(p)`, `on died(p)`, `every N seconds`.
+  `on player_joined(p)`, `on player_left(p)`, `on died(p)`, `on respawned(p)`
+  (after they're back at a spawn: move them to a checkpoint here),
+  `every N seconds`.
+- Setting a player's `velocity` launches them (jump pads, knockback): it's
+  turned into a push that fades fast on the ground and slowly in the air
+  (`physics.launch`, `Character.push`).
 - Players also have `look` (facing direction, `{x, y = 0, z}`), `swinging`, and
   `mouse`: the spot in the world their mouse pointed at when they last clicked
   with a tool (like Roblox's `Mouse.Hit`). Clicking also turns the character to
@@ -361,6 +366,8 @@ wait(0.5)
   - `BRIXO_ACTION_FILE`: lines another program appends ("equip 6", "use", "jump").
   - `BRIXO_POSITION_FILE`: the player writes "x y z" there every frame.
   - `BRIXO_CAMERA_FILE`: "x y z lx ly lz" places the camera (position, look-at).
+  - `BRIXO_STUDIO_CAMERA` (Studio): "x y z lx ly lz" starts the build camera
+    there. Used for the Learn guide's Studio screenshots.
   - `BRIXO_CINEMATIC`: no interface at all.
   - `BRIXO_WATCH_FILE` (player): every player (name, position, facing,
     knocked out, team, flag carried) and every beacon part, each frame. The
@@ -506,6 +513,25 @@ routes in a different order), one defender per four; everyone switches to
 carrying home, returning, chasing the carrier or escorting as needed. The
 `bots` server example uses it automatically on a Flagfall server, and
 `tests/flagbots.rs` plays a 5-minute bots-only match headless.
+
+**Learn guide** (playbrixo.com/learn, `brixo-web/src/docs.rs`): 36 pages of
+Markdown in `crates/brixo-web/docs/` (getting started, Rovik, building,
+players and GUI, 11 how-tos, reference), compiled into the binary
+(`pages!`/`images!` lists: a new page or picture must be added there) and
+rendered with pulldown-cmark. Routes: `/learn/:slug`, `/learn/img/:file`,
+`/learn/search.json` (the sidebar search), `/learn/samples/<name>.brixo`
+(Coin Tycoon, Flagfall, Spire Wars, Gear Range, built fresh from
+brixo-samples; Studio opens a .brixo dropped on its window). Code-block
+markers, all enforced by `tests/docs.rs`: ` ```rovik ` must parse;
+` ```rovik run in=class:Name with=class:Name,... ` (underscores for spaces)
+must run 3 s in a real game without an error; ` ```rovik broken ` must NOT
+parse (error examples); ` ```rovik sketch ` isn't checked (fragments). The
+how-tos also have behaviour tests (the kill brick kills, coins count, the
+laser hits who you click...), and every link and picture must exist.
+Screenshots in `docs/img/` are real (Player with `BRIXO_CAMERA_FILE`, Studio
+with `BRIXO_STUDIO_CAMERA`, scenes built from the guide's own recipes); retake
+them when the look of the game changes. Change the engine, then run the docs
+tests: they catch the guide going stale.
 
 ---
 

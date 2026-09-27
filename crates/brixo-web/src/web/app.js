@@ -28,7 +28,7 @@ function when(secs) {
 }
 
 const TABS = [["home", "/", "Home"], ["games", "/games", "Games"], ["avatar", "/avatar", "Character"],
-              ["profile", null, "Profile"], ["download", "/download", "Get Brixo"]];
+              ["profile", null, "Profile"], ["learn", "/learn", "Learn"], ["download", "/download", "Get Brixo"]];
 
 // Draws the banner, tab bar and footer around the page. Returns the
 // logged-in user, or null.
@@ -58,7 +58,7 @@ async function shell(page) {
   }).join("");
   document.getElementById("nav").innerHTML = `<div class="tabs">${tabs}</div><div class="online" id="online"></div>`;
   document.getElementById("footer").innerHTML =
-    `<div><a href="/">Home</a>|<a href="/games">Games</a>|<a href="/download">Get Brixo</a>${me ? "" : `|<a href="/signup">Sign up</a>`}</div>
+    `<div><a href="/">Home</a>|<a href="/games">Games</a>|<a href="/learn">Learn</a>|<a href="/download">Get Brixo</a>${me ? "" : `|<a href="/signup">Sign up</a>`}</div>
      <div style="margin-top:4px">Brixo &copy; ${new Date().getFullYear()}. Every game here was built with Brixo Studio.</div>`;
   const out = document.getElementById("logout");
   if (out) out.onclick = async (e) => { e.preventDefault(); await api("/api/logout", "POST"); location.href = "/"; };
@@ -332,4 +332,72 @@ function avatarSvg(a, small) {
   const [w, h] = small ? [44, 54] : [180, 260];
   const look = JSON.stringify({ skin: a.skin, shirt: a.shirt, pants: a.pants, face: a.face, hats: a.hats || [] });
   return `<img class="avatar-pic" width="${w}" height="${h}" alt="" data-look='${look.replace(/'/g, "&#39;")}'>`;
+}
+
+
+// --- Learn pages ---------------------------------------------------------------
+// Colours Rovik code the way the Studio script editor does, adds a Copy
+// button to each block, and runs the sidebar's search.
+
+const ROVIK_KEYWORDS = new Set("fn end if then elseif else while do for in return break continue and or not true false nil on every seconds".split(" "));
+const ROVIK_BUILTINS = new Set(("print len str num type push pop insert remove keys wait floor round abs min max sqrt sin cos asin acos atan2 random " +
+  "find destroy clone time players create play_sound play_music stop_music explode").split(" "));
+
+function highlightRovik(src) {
+  const out = [];
+  const re = /(\*\*\*[\s\S]*?\*\*\*|--[^\n]*)|("(?:[^"\\\n]|\\.)*"?)|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z_][A-Za-z0-9_]*\b)|([\s\S])/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const t = esc(m[0]);
+    if (m[1]) out.push(`<span class="c">${t}</span>`);
+    else if (m[2]) out.push(`<span class="s">${t}</span>`);
+    else if (m[3]) out.push(`<span class="n">${t}</span>`);
+    else if (m[4] && ROVIK_KEYWORDS.has(m[4])) out.push(`<span class="k">${t}</span>`);
+    else if (m[4] && ROVIK_BUILTINS.has(m[4]) && src[re.lastIndex] === "(") out.push(`<span class="f">${t}</span>`);
+    else if (m[4] === "self") out.push(`<span class="self">${t}</span>`);
+    else out.push(t);
+  }
+  return out.join("");
+}
+
+function learnPage() {
+  for (const pre of document.querySelectorAll("pre.code")) {
+    const code = pre.querySelector("code");
+    const text = code.textContent;
+    if (pre.classList.contains("rovik")) code.innerHTML = highlightRovik(text);
+    const b = document.createElement("button");
+    b.className = "copy";
+    b.textContent = "Copy";
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(text); b.textContent = "Copied!"; }
+      catch (e) { b.textContent = "Select and copy"; }
+      setTimeout(() => (b.textContent = "Copy"), 1500);
+    };
+    pre.parentElement.appendChild(b);
+  }
+  const box = document.getElementById("learn-search");
+  const results = document.getElementById("learn-results");
+  const index = document.getElementById("learn-index");
+  let data = null;
+  box.addEventListener("input", async () => {
+    const q = box.value.trim().toLowerCase();
+    if (!q) { results.innerHTML = ""; index.style.display = ""; return; }
+    if (!data) data = await fetch("/learn/search.json").then((r) => r.json()).catch(() => []);
+    const words = q.split(/\s+/);
+    const scored = data.map((p) => {
+      const title = p.title.toLowerCase(), heads = p.heads.toLowerCase(), text = p.text.toLowerCase();
+      let score = 0;
+      for (const w of words) {
+        if (!text.includes(w) && !title.includes(w) && !heads.includes(w)) return null;
+        score += (title.includes(w) ? 10 : 0) + (heads.includes(w) ? 4 : 0) + Math.min(text.split(w).length - 1, 5);
+      }
+      const at = text.indexOf(words[0]);
+      const snip = p.text.slice(Math.max(0, at - 40), at + 80);
+      return { p, score, snip };
+    }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 8);
+    index.style.display = "none";
+    results.innerHTML = scored.length
+      ? scored.map((r) => `<a class="hit" href="/learn/${r.p.slug}"><b>${esc(r.p.title)}</b><span>&hellip;${esc(r.snip)}&hellip;</span></a>`).join("")
+      : `<p class="hint">Nothing found for "${esc(box.value)}".</p>`;
+  });
 }
