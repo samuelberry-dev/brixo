@@ -4,7 +4,7 @@ Brixo's sample games are on the [Games](/games) page. They're also the best way 
 2. It opens as a new game. Studio asks first if you have unsaved changes.
 3. Click through the Explorer, read the scripts, press Play, and change things to see what happens.
 
-![Coin Tycoon, Flagfall and Spire Wars](img/samples.png)
+![Coin Tycoon, Flagfall, Spire Wars and Brickport Speedway](img/samples.png)
 
 | Game | Download |
 |---|---|

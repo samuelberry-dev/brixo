@@ -30,9 +30,15 @@
           <tr><td>Joined</td><td>${when(p.created) || "the early days"}</td></tr>
           <tr><td>Games made</td><td>${num(p.games.length)}</td></tr>
           <tr><td>Game visits</td><td>${num(visits)}</td></tr>
+          <tr><td>Friends</td><td>${num(p.friend_count)}</td></tr>
         </table>
+        <div id="friendbtn"></div>
         ${mine ? `<p style="margin-top:8px"><a href="/avatar">&raquo; Change your character</a><br><a href="#" id="pw">&raquo; Change your password</a></p><div id="pwbox"></div>` : ""}
       </div></div>
+      ${p.friend_count ? `<div class="box"><h2>Friends (${num(p.friend_count)})</h2><div class="inner">
+        <div class="profile-friends">${p.friends.map((f) => `<a href="/users/${encodeURIComponent(f.username)}">${avatarSvg(f.avatar, true)}${esc(f.username)}</a>`).join("")}</div>
+        ${mine ? `<p style="margin:8px 0 0"><a href="/friends">&raquo; All your friends</a></p>` : ""}
+      </div></div>` : ""}
     </div><div class="main">
       <div class="box"><h2>${esc(p.username)}'s Games</h2><div class="inner">
         ${p.games.length ? `<div class="grid">${popular(p.games).map(gameCard).join("")}</div>`
@@ -41,6 +47,26 @@
                  : `<p>${esc(p.username)} hasn't published any games yet.</p>`}
       </div></div>
     </div></div>`;
+
+  // Add Friend (and friends, asked, or answering theirs).
+  const fb = document.getElementById("friendbtn");
+  const drawFriend = (rel, message) => {
+    if (!me || mine || !rel) { fb.innerHTML = ""; return; }
+    const who = esc(p.username);
+    fb.innerHTML = (rel === "friends" ? `<p class="hint" style="color:#2f7d32;font-weight:bold">&#10003; Friends</p>`
+      : rel === "sent" ? `<button class="btn small gray" disabled>Request sent</button>`
+      : rel === "received" ? `<p class="hint">${who} wants to be friends.</p><button class="btn small green" id="fyes">Accept</button> <button class="btn small gray" id="fno">Decline</button>`
+      : `<button class="btn small gold" id="fadd">Add Friend</button>`) + (message ? `<div class="hint">${esc(message)}</div>` : "");
+    const on = (id, f) => { const b = document.getElementById(id); if (b) b.onclick = f; };
+    const go = async (path, next) => {
+      try { const r = await api(path, "POST", { username: p.username }); drawFriend(next(r), r && r.message); }
+      catch (err) { drawFriend(rel, err.message); }
+    };
+    on("fadd", () => go("/api/friends/add", (r) => r.result));
+    on("fyes", () => go("/api/friends/accept", () => "friends"));
+    on("fno", () => go("/api/friends/decline", () => "none"));
+  };
+  drawFriend(p.relation);
 
   const box = document.getElementById("blurb");
   const show = () => {

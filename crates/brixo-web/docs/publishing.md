@@ -18,6 +18,8 @@ On the website, open your game's page. As its owner you'll see **Edit** next to 
 
 On a game's page, press **Play**. Brixo Player opens and puts you in the game. Anyone else who presses Play joins **the same server**, so you play together. Send friends the link to your game's page.
 
+**Add them as friends** on the website: open their profile (click their name anywhere) and press **Add Friend**, or type their name on the [Friends](/friends) page. Once they say yes, the Friends page shows who's online and **which game they're in**, with a **Join** button that puts you in the same server.
+
 - The page and the Games list show **how many people are playing** each game right now.
 - A little while after everyone leaves, the server stops. The next person to press Play starts a fresh one, so every new session begins from your game as you built it.
 

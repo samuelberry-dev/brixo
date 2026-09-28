@@ -161,7 +161,7 @@
       "children": [],
       "props": {
         "Script": {
-          "source": "-- The template in Storage waits to be copied: don't run there.\nif self.parent.name == \"Storage\" then\n    return\nend\n\ngone = false\nfn pop()\n    if not gone then\n        gone = true\n        destroy(self)\n    end\nend\n\non touched(other)\n    if gone then\n        return\n    end\n    -- Brushing the shooter's own gun on the way out doesn't count.\n    if other.parent != nil and other.parent.class == \"tool\" then\n        return\n    end\n    if other.class == \"player\" then\n        if other.name == self.owner then\n            return\n        end\n        shooter = find(self.owner)\n        if shooter != nil and other.health > 0 and (shooter.team == nil or other.team != shooter.team) then\n            other.health -= 20\n            other.last_hit_by = self.owner\n            play_sound_at(\"hit\", other)\n        end\n    end\n    pop()\nend\n\nwait(3)\npop()   -- gone after 3 seconds if it didn't hit anything",
+          "source": "-- The template in Storage waits to be copied: don't run there.\nif self.parent.name == \"Storage\" then\n    return\nend\n\ngone = false\nfn pop()\n    if not gone then\n        gone = true\n        destroy(self)\n    end\nend\n\non touched(other)\n    if gone then\n        return\n    end\n    -- Brushing the shooter's own gun on the way out doesn't count.\n    if other.parent != nil and other.parent.class == \"tool\" then\n        return\n    end\n    if other.class == \"player\" then\n        if other.name == self.owner then\n            return\n        end\n        shooter = find(self.owner)\n        if shooter != nil and other.health > 0 and (shooter.team == nil or other.team != shooter.team) then\n            other.health -= 20\n            other.last_hit_by = self.owner\n            play_sound_at(\"hit\", other)\n        end\n    end\n    pop()\nend\n\n-- Acceleration tuning\nstart_scale = 0.1   -- speed at launch, as a multiple of the gun's base speed\nend_scale = 4       -- speed at the end of its life, same units\nlifetime = 3\nstep = 0.05\n\n-- Fired by something that didn't set a direction: old behavior, no acceleration.\nif self.ux == nil then\n    print(\"plasma ball has no direction, flying at launch speed\")\n    wait(lifetime)\n    pop()\n    return\nend\n\nstarted = time()\nwhile not gone do\n    t = time() - started\n    if t >= lifetime then\n        break\n    end\n    scale = start_scale + (end_scale - start_scale) * (t / lifetime)\n    speed = self.base_speed * scale\n    self.velocity = {x = self.ux * speed, y = self.uy * speed, z = self.uz * speed}\n    wait(step)\nend\n\npop()   -- gone after 3 seconds if it didn't hit anything",
           "enabled": true
         }
       }
@@ -234,7 +234,7 @@
       "children": [],
       "props": {
         "Script": {
-          "source": "ready_at = 0\n\non activated(p)\n    if time() < ready_at then\n        return\n    end\n    ready_at = time() + 0.35\n\n    f = p.look\n    from = {x = p.position.x + f.x * 3, y = p.position.y + 1.5, z = p.position.z + f.z * 3}\n    t = p.mouse\n    dx = t.x - from.x\n    dy = t.y - from.y\n    dz = t.z - from.z\n    d = max(sqrt(dx * dx + dy * dy + dz * dz), 0.01)\n\n    ball = clone(find(\"Plasma Ball\"))\n    ball.name = \"Plasma\"\n    ball.owner = p.name            -- so its script knows who fired it\n    ball.position = from\n    ball.floating = true           -- no gravity: flies straight\n    ball.anchored = false\n    ball.velocity = {x = dx / d * 90, y = dy / d * 90, z = dz / d * 90}\n    ball.parent = find(\"Workspace\")\n    play_sound_at(\"twang\", p)\nend",
+          "source": "BASE_SPEED = 90\nSTART_SCALE = 0.1   -- keep in sync with start_scale in the Plasma Ball script\n\nready_at = 0\n\non activated(p)\n    if time() < ready_at then\n        return\n    end\n    ready_at = time() + 0.35\n\n    f = p.look\n    from = {x = p.position.x + f.x * 3, y = p.position.y + 1.5, z = p.position.z + f.z * 3}\n    t = p.mouse\n    dx = t.x - from.x\n    dy = t.y - from.y\n    dz = t.z - from.z\n    d = max(sqrt(dx * dx + dy * dy + dz * dz), 0.01)\n    ux = dx / d\n    uy = dy / d\n    uz = dz / d\n\n    ball = clone(find(\"Plasma Ball\"))\n    ball.name = \"Plasma\"\n    ball.owner = p.name            -- so its script knows who fired it\n    ball.position = from\n    ball.floating = true           -- no gravity: flies straight\n    ball.anchored = false\n\n    -- direction and base speed for the ball's script to read\n    ball.ux = ux\n    ball.uy = uy\n    ball.uz = uz\n    ball.base_speed = BASE_SPEED\n\n    local_speed = BASE_SPEED * START_SCALE\n    ball.velocity = {x = ux * local_speed, y = uy * local_speed, z = uz * local_speed}\n    ball.parent = find(\"Workspace\")\n    play_sound_at(\"twang\", p)\nend",
           "enabled": true
         }
       }
@@ -253,7 +253,7 @@
     {
       "id": 9,
       "class": "Part",
-      "name": "Cylinder",
+      "name": "BlasterGiver",
       "parent": 0,
       "children": [
         10

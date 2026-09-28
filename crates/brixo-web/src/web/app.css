@@ -266,3 +266,24 @@ input.find { width: 100%; font: 12px Verdana, sans-serif; padding: 5px; border: 
 .toolbox-item .noimg { line-height: 92px; color: #7d8a99; }
 .tbform label { display: block; margin: 6px 0; font-weight: bold; font-size: 12px; }
 .tbform input:not([type=file]), .tbform textarea { display: block; width: 100%; box-sizing: border-box; font: 12px monospace; }
+
+/* Friends. */
+.badge { display: inline-block; min-width: 14px; padding: 0 4px; border-radius: 8px; background: #c4281c; color: #fff; font-size: 10px;
+         line-height: 15px; text-align: center; text-shadow: none; border: 1px solid #fff; vertical-align: 1px; }
+.friends { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.friend { display: flex; gap: 8px; align-items: center; padding: 5px; border: 1px solid #c9d9ea; background: #f6f9fd; margin-bottom: 6px; }
+.friends .friend { margin-bottom: 0; }
+.friend .pic { flex: none; background: linear-gradient(#dbe8f5, #fff); border: 1px solid #b9cde3; }
+.friend .pic img { display: block; }
+.friend .who { flex: 1; min-width: 0; font-size: 12px; }
+.friend .status { color: #6b7a8c; font-size: 11px; margin: 2px 0; }
+.friend .status.online { color: #2f7d32; font-weight: bold; }
+.friend .status.playing { color: #1d6fb8; font-weight: bold; }
+.friend .status.online::before, .friend .status.playing::before { content: "\25CF  "; }
+.friend .unfriend { font-size: 10px; color: #8a96a3; }
+.addfriend { display: flex; gap: 6px; }
+.addfriend input { flex: 1; min-width: 0; }
+.notice { background: #e8f5e3; border: 1px solid #9dcb8e; color: #2f5d22; padding: 7px 10px; margin-bottom: 10px; font-weight: bold; }
+.content-error, #content > .error { background: #fbe9e7; border: 1px solid #e5a49b; padding: 7px 10px; margin-bottom: 10px; }
+.profile-friends { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; text-align: center; font-size: 10px; }
+.profile-friends img { display: block; margin: 0 auto; }

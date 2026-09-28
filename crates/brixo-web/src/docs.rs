@@ -51,6 +51,7 @@ pages! {
         ("errors", "Reading errors"),
     ],
     "Building worlds" => [
+        ("toolbox", "The Toolbox"),
         ("parts", "Parts"),
         ("models-folders", "Models, folders and templates"),
         ("spawns-teams", "Spawns and teams"),
@@ -98,6 +99,7 @@ macro_rules! images {
 
 images! {
     "studio-overview.png",
+    "studio-toolbox.png",
     "studio-explorer.png",
     "studio-properties.png",
     "studio-script.png",

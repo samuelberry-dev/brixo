@@ -574,3 +574,74 @@ fn the_toolbox_lists_serves_and_takes_admins_additions() {
     assert!(!items.iter().any(|i| i["name"] == "Kart"));
     assert_eq!(status(agent.get(&format!("{site}/api/toolbox/{id}")).call()), 404);
 }
+
+#[test]
+fn friends_ask_accept_see_whos_playing_and_join_them() {
+    let (site, app) = start_site();
+    let sign_up = |name: &str| {
+        let b = browser();
+        b.post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": name, "password": "correct horse"})).unwrap();
+        b
+    };
+    let (ann, bob, cat) = (sign_up("Ann"), sign_up("Bob"), sign_up("Cat"));
+    let post = |who: &ureq::Agent, path: &str, name: &str| status(who.post(&format!("{site}{path}")).send_json(serde_json::json!({"username": name})));
+    let get = |who: &ureq::Agent, path: &str| -> serde_json::Value { who.get(&format!("{site}{path}")).call().unwrap().into_json().unwrap() };
+
+    // Ann asks Bob. Bob sees it (the Friends tab counts it), and on Ann's profile.
+    let r: serde_json::Value = ann.post(&format!("{site}/api/friends/add")).send_json(serde_json::json!({"username": "bob"})).unwrap().into_json().unwrap();
+    assert_eq!(r["result"], "sent");
+    assert_eq!(get(&bob, "/api/me")["friend_requests"], 1);
+    assert_eq!(get(&bob, "/api/users/Ann")["relation"], "received");
+    assert_eq!(get(&ann, "/api/users/Bob")["relation"], "sent");
+    assert_eq!(get(&ann, "/api/friends")["sent"][0]["username"], "Bob");
+    assert_eq!(post(&ann, "/api/friends/add", "Ann"), 400, "not yourself");
+    assert_eq!(post(&ann, "/api/friends/add", "Nobody"), 404);
+
+    // Bob says yes: friends both ways, the request's gone.
+    assert_eq!(post(&bob, "/api/friends/accept", "Ann"), 204);
+    assert_eq!(get(&bob, "/api/me")["friend_requests"], 0);
+    let f = get(&ann, "/api/friends");
+    assert_eq!(f["friends"][0]["username"], "Bob");
+    assert_eq!(f["friends"][0]["status"], "online", "Bob's on the website");
+    assert_eq!(get(&bob, "/api/users/Ann")["relation"], "friends");
+    assert_eq!(get(&cat, "/api/users/Ann")["friend_count"], 1);
+
+    // Asking someone who's already asked you makes you friends.
+    assert_eq!(post(&cat, "/api/friends/add", "Ann"), 200);
+    let r: serde_json::Value = ann.post(&format!("{site}/api/friends/add")).send_json(serde_json::json!({"username": "Cat"})).unwrap().into_json().unwrap();
+    assert_eq!(r["result"], "friends");
+    assert_eq!(get(&ann, "/api/friends")["friends"].as_array().unwrap().len(), 2);
+
+    // Bob plays Coin Tycoon: Ann sees where he is, with the game to join.
+    let games: serde_json::Value = bob.get(&format!("{site}/api/games")).call().unwrap().into_json().unwrap();
+    let game_id = games.as_array().unwrap().iter().find(|g| g["name"] == "Coin Tycoon").unwrap()["id"].as_i64().unwrap();
+    let pass: serde_json::Value = bob.post(&format!("{site}/api/games/{game_id}/play")).call().unwrap().into_json().unwrap();
+    let server = pass["server"].as_str().unwrap().to_string();
+    let mut bobs = NetClient::connect_with_ticket(&server, pass["ticket"].as_str().unwrap()).unwrap();
+    wait_until(&mut bobs, "Bob joined", |c| c.me.is_some());
+    std::thread::sleep(Duration::from_millis(200));
+    let f = get(&ann, "/api/friends");
+    let b = f["friends"].as_array().unwrap().iter().find(|x| x["username"] == "Bob").unwrap().clone();
+    assert_eq!(b["status"], "playing", "{f}");
+    assert_eq!(b["game"]["id"], game_id);
+    assert_eq!(b["game"]["name"], "Coin Tycoon");
+    assert_eq!(f["friends"][0]["username"], "Bob", "playing friends come first");
+    // Join: Play on that game puts Ann in Bob's server.
+    let pass: serde_json::Value = ann.post(&format!("{site}/api/games/{game_id}/play")).call().unwrap().into_json().unwrap();
+    assert_eq!(pass["server"].as_str().unwrap(), server);
+    // Cat's not Bob's friend: Cat can't see where he is.
+    assert!(get(&cat, "/api/friends")["friends"].as_array().unwrap().iter().all(|x| x["username"] != "Bob"));
+
+    // Unfriending.
+    assert_eq!(post(&ann, "/api/friends/remove", "Bob"), 204);
+    assert!(get(&bob, "/api/friends")["friends"].as_array().unwrap().is_empty());
+    assert_eq!(get(&ann, "/api/users/Bob")["relation"], "none");
+    // Taking back a request.
+    assert_eq!(post(&ann, "/api/friends/add", "Bob"), 200);
+    assert_eq!(post(&ann, "/api/friends/decline", "Bob"), 204);
+    assert_eq!(get(&bob, "/api/me")["friend_requests"], 0);
+    // Banned accounts drop off friends lists.
+    assert!(app.db.set_banned("Cat", true).unwrap().is_some());
+    assert!(get(&ann, "/api/friends")["friends"].as_array().unwrap().is_empty());
+    drop(bobs);
+}

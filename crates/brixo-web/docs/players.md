@@ -90,7 +90,7 @@ on player_joined(p)
     label.name = "Coins Label"
     label.text = "Coins: 0"
     label.x = 0.02
-    label.y = 0.1
+    label.y = 0.2
     label.width = 0.16
     label.height = 0.06
     label.background = true

@@ -104,6 +104,12 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/admin/hide", post(admin_hide))
         .route("/api/admin/reset", post(admin_reset))
         .route("/api/admin/admin-only", post(admin_only))
+        .route("/api/friends", get(friends))
+        .route("/api/friends/add", post(add_friend))
+        .route("/api/friends/accept", post(accept_friend))
+        .route("/api/friends/decline", post(decline_friend))
+        .route("/api/friends/remove", post(remove_friend))
+        .route("/friends", get(|| async { Html(include_str!("web/friends.html")) }))
         .route("/api/toolbox", get(toolbox))
         .route("/api/toolbox/:id", get(toolbox_item))
         .route("/api/toolbox/:id/thumbnail", get(toolbox_thumbnail))
@@ -188,7 +194,10 @@ fn session(headers: &HeaderMap) -> Option<String> {
 
 fn user(app: &App, headers: &HeaderMap) -> Result<User> {
     let token = session(headers).ok_or_else(not_logged_in)?;
-    app.db.session_user(&token).map_err(oops)?.ok_or_else(not_logged_in)
+    let u = app.db.session_user(&token).map_err(oops)?.ok_or_else(not_logged_in)?;
+    // On the website now (friends see them online).
+    let _ = app.db.seen(u.id);
+    Ok(u)
 }
 
 fn with_session(app: &App, token: &str, body: impl IntoResponse) -> Response {
@@ -477,8 +486,18 @@ async fn learn_image(Path(file): Path<String>) -> Response {
     }
 }
 
-async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<User>> {
-    Ok(Json(user(&app, &headers)?))
+#[derive(Serialize)]
+struct Me {
+    #[serde(flatten)]
+    user: User,
+    /// Friend requests waiting for an answer (the Friends tab shows it).
+    friend_requests: usize,
+}
+
+async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<Me>> {
+    let user = user(&app, &headers)?;
+    let friend_requests = app.db.friend_requests_to(user.id).map_err(oops)?.len();
+    Ok(Json(Me { user, friend_requests }))
 }
 
 async fn set_avatar(State(app): State<Arc<App>>, headers: HeaderMap, Json(a): Json<Avatar>) -> Result<StatusCode> {
@@ -574,13 +593,159 @@ struct Profile {
     blurb: String,
     created: i64,
     games: Vec<CatalogEntry>,
+    friend_count: usize,
+    /// Some of their friends, to show on the profile.
+    friends: Vec<crate::db::FriendRow>,
+    /// How the one looking is related to them (None: not logged in, or it's them).
+    relation: Option<crate::db::Relation>,
 }
 
-async fn profile(State(app): State<Arc<App>>, Path(name): Path<String>) -> Result<Json<Profile>> {
+async fn profile(State(app): State<Arc<App>>, headers: HeaderMap, Path(name): Path<String>) -> Result<Json<Profile>> {
     let u = app.db.user_by_name(&name).map_err(oops)?.ok_or_else(|| not_found("player"))?;
     let counts = app.servers.player_counts();
     let games = app.db.games_by(u.id).map_err(oops)?.into_iter().map(|g| entry(g, &counts)).collect();
-    Ok(Json(Profile { username: u.username, avatar: u.avatar, blurb: u.blurb, created: u.created, games }))
+    let friends = app.db.friends(u.id).map_err(oops)?;
+    let relation = match user(&app, &headers) {
+        Ok(me) if me.id != u.id => Some(app.db.relation(me.id, u.id).map_err(oops)?),
+        _ => None,
+    };
+    Ok(Json(Profile {
+        username: u.username,
+        avatar: u.avatar,
+        blurb: u.blurb,
+        created: u.created,
+        games,
+        friend_count: friends.len(),
+        friends: friends.into_iter().take(9).collect(),
+        relation,
+    }))
+}
+
+// --- friends -----------------------------------------------------------------
+
+/// A friend, and what they're up to.
+#[derive(Serialize)]
+struct Friend {
+    username: String,
+    avatar: crate::db::Avatar,
+    /// "playing", "online" (on the website) or "offline".
+    status: &'static str,
+    /// The game they're in, if you can join it.
+    game: Option<FriendGame>,
+    last_seen: i64,
+}
+
+#[derive(Serialize)]
+struct FriendGame {
+    id: i64,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct FriendsPage {
+    friends: Vec<Friend>,
+    /// Asking you.
+    requests: Vec<crate::db::FriendRow>,
+    /// You've asked.
+    sent: Vec<crate::db::FriendRow>,
+}
+
+/// On the website within this long counts as online.
+const ONLINE_SECONDS: i64 = 180;
+
+async fn friends(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<FriendsPage>> {
+    let me = user(&app, &headers)?;
+    let playing = app.servers.who_is_where();
+    let now = crate::db::now();
+    let mut friends: Vec<Friend> = app
+        .db
+        .friends(me.id)
+        .map_err(oops)?
+        .into_iter()
+        .map(|f| {
+            let game_id = playing.get(&f.username.to_lowercase()).copied();
+            // A game you can join: listed, or one for admins when you are one.
+            let game = game_id.and_then(|id| {
+                let listed = app.db.game(id).ok().flatten();
+                match listed {
+                    Some(g) => Some(FriendGame { id, name: g.name }),
+                    None if me.admin => app.db.admin_games(1000).ok()?.into_iter().find(|g| g.id == id).map(|g| FriendGame { id, name: g.name }),
+                    None => None,
+                }
+            });
+            let status = if game_id.is_some() {
+                "playing"
+            } else if now - f.last_seen < ONLINE_SECONDS {
+                "online"
+            } else {
+                "offline"
+            };
+            Friend { username: f.username, avatar: f.avatar, status, game, last_seen: f.last_seen }
+        })
+        .collect();
+    // Playing first, then online, then everyone else (by name within each).
+    let rank = |s: &str| match s {
+        "playing" => 0,
+        "online" => 1,
+        _ => 2,
+    };
+    friends.sort_by_key(|f| rank(f.status));
+    Ok(Json(FriendsPage { friends, requests: app.db.friend_requests_to(me.id).map_err(oops)?, sent: app.db.friend_requests_from(me.id).map_err(oops)? }))
+}
+
+#[derive(Deserialize)]
+struct Who {
+    username: String,
+}
+
+/// The account a friends request is about (not you, not a banned one).
+fn other(app: &App, me: &User, name: &str) -> Result<User> {
+    let u = app.db.user_by_name(name.trim()).map_err(oops)?.filter(|u| !app.db.is_banned(u.id).unwrap_or(true));
+    let u = u.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("nobody on Brixo is called {}", name.trim())))?;
+    if u.id == me.id {
+        return Err(bad("that's you!"));
+    }
+    Ok(u)
+}
+
+async fn add_friend(State(app): State<Arc<App>>, headers: HeaderMap, Json(w): Json<Who>) -> Result<Json<serde_json::Value>> {
+    let me = user(&app, &headers)?;
+    let them = other(&app, &me, &w.username)?;
+    if !app.limits.take(&format!("friend:{}", me.id), limits::FRIEND_ASKS) {
+        return Err(slow_down());
+    }
+    use crate::db::Asked;
+    let (result, message) = match app.db.ask_friend(me.id, them.id).map_err(oops)? {
+        Asked::Sent => ("sent", format!("Friend request sent to {}.", them.username)),
+        Asked::NowFriends => ("friends", format!("You and {} are friends now!", them.username)),
+        Asked::AlreadyFriends => ("friends", format!("You and {} are already friends.", them.username)),
+        Asked::AlreadySent => ("sent", format!("You've already asked {}.", them.username)),
+        Asked::Full => return Err(bad(&format!("one of you has {} friends already, the most there can be", crate::db::MAX_FRIENDS))),
+    };
+    Ok(Json(serde_json::json!({ "result": result, "message": message })))
+}
+
+async fn accept_friend(State(app): State<Arc<App>>, headers: HeaderMap, Json(w): Json<Who>) -> Result<StatusCode> {
+    let me = user(&app, &headers)?;
+    let them = other(&app, &me, &w.username)?;
+    if !app.db.accept_friend(me.id, them.id).map_err(oops)? {
+        return Err(bad(&format!("{} hasn't asked to be friends (or one of you is full)", them.username)));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn decline_friend(State(app): State<Arc<App>>, headers: HeaderMap, Json(w): Json<Who>) -> Result<StatusCode> {
+    let me = user(&app, &headers)?;
+    let them = other(&app, &me, &w.username)?;
+    app.db.drop_request(me.id, them.id).map_err(oops)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_friend(State(app): State<Arc<App>>, headers: HeaderMap, Json(w): Json<Who>) -> Result<StatusCode> {
+    let me = user(&app, &headers)?;
+    let them = other(&app, &me, &w.username)?;
+    app.db.unfriend(me.id, them.id).map_err(oops)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

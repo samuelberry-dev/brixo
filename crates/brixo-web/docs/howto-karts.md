@@ -1,6 +1,6 @@
 **Karts** are little cars players drive: arcade handling, drifting with boosts, jumps off ramps, and bumping into each other. Put a player in one, and their keys drive it. Add **bots** and they race too. The kart racing sample game, **Brickport Speedway**, is built from everything on this page.
 
-![Driving in Brickport Speedway: the kart, the speed dial, the item slot, and the race standings](img/howto-karts.png)
+![Driving in Brickport Speedway: the kart, the speed box, your lap and place, and the race standings](img/howto-karts.png)
 
 ## Driving
 

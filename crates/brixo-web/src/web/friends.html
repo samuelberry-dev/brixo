@@ -1,0 +1,76 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Friends &middot; Brixo</title>
+<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><div id="page"><div id="banner"></div><div id="nav"></div>
+<div id="content"></div>
+<div id="footer"></div></div>
+<script>
+(async () => {
+  const me = await shell("friends");
+  const content = document.getElementById("content");
+  if (!me) {
+    content.innerHTML = `<div class="box"><h2>Friends</h2><div class="inner">
+      <p>Log in (at the top) to see your friends, or <a href="/signup">sign up</a> to make some.</p></div></div>`;
+    return;
+  }
+  let note = "";
+  const say = (text, bad) => { note = text ? `<div class="${bad ? "error" : "notice"}">${esc(text)}</div>` : ""; };
+  const act = async (path, username, done) => {
+    try { await api(path, "POST", { username }); say(done); }
+    catch (err) { say(err.message, true); }
+    draw();
+  };
+  const person = (f, extra) => `<div class="friend">
+      <a href="/users/${encodeURIComponent(f.username)}" class="pic">${avatarSvg(f.avatar, true)}</a>
+      <div class="who"><a href="/users/${encodeURIComponent(f.username)}"><b>${esc(f.username)}</b></a>${extra}</div>
+    </div>`;
+  const status = (f) => f.status === "playing"
+    ? `<div class="status playing">${f.game ? `Playing <a href="/games/${f.game.id}">${esc(f.game.name)}</a>` : "In a game"}</div>
+       ${f.game ? `<button class="btn small green" data-join="${f.game.id}" data-name="${esc(f.game.name)}">Join</button>` : ""}`
+    : f.status === "online" ? `<div class="status online">Online</div>`
+    : `<div class="status">Offline${f.last_seen ? ` &middot; last on ${when(f.last_seen)}` : ""}</div>`;
+
+  const draw = async () => {
+    let d;
+    try { d = await api("/api/friends"); }
+    catch (err) { content.innerHTML = `<div class="box"><h2>Friends</h2><div class="inner"><p class="error">${esc(err.message)}</p></div></div>`; return; }
+    const playing = d.friends.filter((f) => f.status !== "offline").length;
+    content.innerHTML = `${note}<div class="cols"><div class="main">
+      <div class="box"><h2>Your Friends (${d.friends.length})${playing ? ` <span style="font-weight:normal">&middot; ${playing} on now</span>` : ""}</h2><div class="inner">
+        ${d.friends.length ? `<div class="friends">${d.friends.map((f) => person(f, `${status(f)}
+            <a href="#" class="unfriend" data-remove="${esc(f.username)}">Unfriend</a>`)).join("")}</div>`
+          : `<p>No friends yet. Find someone's name on a game page or the leaderboard, visit their profile, and press <b>Add Friend</b>, or type their name on the right.</p>`}
+      </div></div>
+    </div><div class="side" style="width:300px">
+      <div class="box navy"><h2>Add a Friend</h2><div class="inner">
+        <form id="add" class="addfriend"><input name="who" placeholder="Their username" maxlength="20" required><button class="btn small gold" type="submit">Send request</button></form>
+      </div></div>
+      <div class="box"><h2>Friend Requests${d.requests.length ? ` (${d.requests.length})` : ""}</h2><div class="inner">
+        ${d.requests.length ? d.requests.map((f) => person(f, `<div>
+            <button class="btn small green" data-accept="${esc(f.username)}">Accept</button>
+            <button class="btn small gray" data-decline="${esc(f.username)}">Decline</button></div>`)).join("")
+          : `<p class="hint">Nobody's asked yet.</p>`}
+        ${d.sent.length ? `<h3 style="margin-top:10px">Waiting on</h3>${d.sent.map((f) => person(f, `<div class="status">Asked
+            &middot; <a href="#" data-cancel="${esc(f.username)}">take back</a></div>`)).join("")}` : ""}
+      </div></div>
+    </div></div>`;
+    document.getElementById("add").onsubmit = async (e) => {
+      e.preventDefault();
+      const who = e.target.elements.who.value.trim();
+      try { const r = await api("/api/friends/add", "POST", { username: who }); say(r.message); }
+      catch (err) { say(err.message, true); }
+      draw();
+    };
+    content.querySelectorAll("[data-accept]").forEach((b) => b.onclick = () => act("/api/friends/accept", b.dataset.accept, `You and ${b.dataset.accept} are friends now!`));
+    content.querySelectorAll("[data-decline]").forEach((b) => b.onclick = () => act("/api/friends/decline", b.dataset.decline, ""));
+    content.querySelectorAll("[data-cancel]").forEach((a) => a.onclick = (e) => { e.preventDefault(); act("/api/friends/decline", a.dataset.cancel, ""); });
+    content.querySelectorAll("[data-remove]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      if (confirm(`Unfriend ${a.dataset.remove}?`)) act("/api/friends/remove", a.dataset.remove, `You and ${a.dataset.remove} aren't friends any more.`);
+    });
+    content.querySelectorAll("[data-join]").forEach((b) => b.onclick = () => playGame({ id: Number(b.dataset.join), name: b.dataset.name }, b));
+  };
+  await draw();
+  // Keep who's playing up to date while the page is open.
+  setInterval(() => { if (!document.hidden && !document.activeElement.matches("input")) draw(); }, 20000);
+})();
+</script></body></html>

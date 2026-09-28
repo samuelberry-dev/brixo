@@ -8,6 +8,8 @@
 
 ![A game's GUI: a title and timer at the top, a coin counter, a Heal button, and a price tag floating over a shop pedestal](img/gui-example.png)
 
+Brixo draws them all in its own style: anything with a background gets a glossy finish in its `background_color` (lighter on top, with a shine along the edge), buttons light up under the mouse and press in when clicked, Frames get faint studs, and text is bold with a little shadow. Text that's too wide for its box shrinks to fit. You choose the colors; the look comes free.
+
 ## Who sees it
 
 It depends on **where the GUI object is**:

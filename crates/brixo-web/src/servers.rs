@@ -152,6 +152,21 @@ impl Servers {
         self.running.lock().unwrap().iter().map(|(id, r)| (*id, r.handle.player_count())).collect()
     }
 
+    /// Which game everyone playing is in: lowercased name -> game id.
+    pub fn who_is_where(&self) -> HashMap<String, i64> {
+        let running = self.running.lock().unwrap();
+        let mut out = HashMap::new();
+        for (game, r) in running.iter() {
+            if r.handle.player_count() == 0 {
+                continue;
+            }
+            for name in r.handle.player_names() {
+                out.insert(name.to_lowercase(), *game);
+            }
+        }
+        out
+    }
+
     pub fn is_running(&self, game_id: i64) -> bool {
         self.running.lock().unwrap().contains_key(&game_id)
     }

@@ -1,6 +1,6 @@
 Open Brixo Studio. This page shows you around. It takes five minutes, and everything later in the guide assumes you know where these things are.
 
-![Brixo Studio: Play and Publish along the top, the tools under them, the 3D world in the middle, the Explorer on the left, Properties on the right, and Output along the bottom](img/studio-overview.png)
+![Brixo Studio: Play and Publish along the top, the tools under them, the Toolbox and the Explorer on the left, the 3D world in the middle, Properties on the right, and Output along the bottom](img/studio-overview.png)
 
 ## Along the top
 
@@ -71,7 +71,7 @@ The **Toolbox**, on the far left, is full of ready-made things: a kart, doors, j
 
 Everything in it is ordinary parts and scripts, so it's yours to change: open its scripts and edit them, recolour it, resize it. The scripts are short and explained, and they're a good way to learn. Each one works on its own and in any game, and you can put in as many copies as you like.
 
-The Toolbox comes from the Brixo website, so new things turn up without updating Studio. (Offline, it shows the things built into Studio.)
+The Toolbox comes from the Brixo website, so new things turn up without updating Studio. (Offline, it shows the things built into Studio.) More in [The Toolbox](toolbox).
 
 ## The Explorer
 

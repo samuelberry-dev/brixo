@@ -1,6 +1,6 @@
 Coins to collect, a counter on each player's screen, and the leaderboard in the corner.
 
-![Coins spinning over the map, a coin counter on the left, and the leaderboard on the right](img/howto-coins.png)
+![Coins spinning over the map, a coin counter on the left, and the leaderboard at the top right](img/howto-coins.png)
 
 ## 1. The coin counter
 
@@ -14,7 +14,7 @@ on player_joined(p)
     label.name = "Coin Label"
     label.text = "Coins: 0"
     label.x = 0.02
-    label.y = 0.12
+    label.y = 0.2
     label.width = 0.14
     label.height = 0.06
     label.text_size = 24

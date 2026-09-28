@@ -28,7 +28,7 @@ function when(secs) {
 }
 
 const TABS = [["home", "/", "Home"], ["games", "/games", "Games"], ["avatar", "/avatar", "Character"],
-              ["profile", null, "Profile"], ["learn", "/learn", "Learn"], ["download", "/download", "Get Brixo"],
+              ["profile", null, "Profile"], ["friends", "/friends", "Friends"], ["learn", "/learn", "Learn"], ["download", "/download", "Get Brixo"],
               ["admin", "/admin", "Admin"]];
 
 // Draws the banner, tab bar and footer around the page. Returns the
@@ -54,7 +54,8 @@ async function shell(page) {
       if (!me) return "";
       href = `/users/${encodeURIComponent(me.username)}`;
     }
-    if (key === "avatar" && !me) return "";
+    if ((key === "avatar" || key === "friends") && !me) return "";
+    if (key === "friends" && me.friend_requests) label += ` <span class="badge" title="Friend requests">${me.friend_requests}</span>`;
     if (key === "admin" && !(me && me.admin)) return "";
     return `<a class="tab ${page === key ? "on" : ""}" href="${href}">${label}</a>`;
   }).join("");

@@ -55,6 +55,18 @@ impl ServerHandle {
         self.players.load(Ordering::Relaxed)
     }
 
+    /// Who's playing (people, not bots), by name.
+    pub fn player_names(&self) -> Vec<String> {
+        let world = self.world.lock();
+        world
+            .walk()
+            .into_iter()
+            .filter(|id| world.player(*id).is_some())
+            .filter(|id| !matches!(world.get(*id).and_then(|i| i.attributes.get("bot")), Some(brixo_core::Attribute::Bool(true))))
+            .filter_map(|id| world.get(id).map(|i| i.name.clone()))
+            .collect()
+    }
+
     pub fn stop(mut self) {
         self.shutdown();
     }

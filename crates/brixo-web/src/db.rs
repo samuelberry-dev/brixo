@@ -93,6 +93,42 @@ pub struct ToolboxRow {
     pub builtin: bool,
 }
 
+/// Someone on a friends list (or asking to be).
+#[derive(Debug, Clone, Serialize)]
+pub struct FriendRow {
+    pub username: String,
+    pub avatar: Avatar,
+    /// When they were last on the website (Unix seconds; 0 if never seen).
+    pub last_seen: i64,
+}
+
+/// How two accounts are related.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Relation {
+    None,
+    Friends,
+    /// You asked them.
+    Sent,
+    /// They asked you.
+    Received,
+}
+
+/// What asking someone to be friends did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asked {
+    Sent,
+    /// They'd already asked you: now you're friends.
+    NowFriends,
+    AlreadyFriends,
+    AlreadySent,
+    /// You have as many friends as you can.
+    Full,
+}
+
+/// Most friends an account can have.
+pub const MAX_FRIENDS: i64 = 200;
+
 pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -233,6 +269,23 @@ impl Db {
                  created INTEGER NOT NULL
              );",
         )?;
+        // Friends: pairs stored once (lower id first), and requests waiting
+        // for an answer. last_seen says who's on the website right now.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS friends (
+                 a INTEGER NOT NULL REFERENCES users(id),
+                 b INTEGER NOT NULL REFERENCES users(id),
+                 since INTEGER NOT NULL,
+                 PRIMARY KEY (a, b)
+             );
+             CREATE TABLE IF NOT EXISTS friend_requests (
+                 from_id INTEGER NOT NULL REFERENCES users(id),
+                 to_id INTEGER NOT NULL REFERENCES users(id),
+                 created INTEGER NOT NULL,
+                 PRIMARY KEY (from_id, to_id)
+             );",
+        )?;
+        add_column(&conn, "users", "last_seen", "INTEGER NOT NULL DEFAULT 0")?;
         // The toolbox: ready-made things Studio can insert. Built-in ones
         // have a slug (seeded from brixo_samples::toolbox, kept up to date);
         // admins add the rest. Removing one hides it (so a removed built-in
@@ -666,5 +719,122 @@ impl Db {
     /// Takes an item out of the toolbox. False if there's no such item.
     pub fn remove_toolbox(&self, id: i64) -> rusqlite::Result<bool> {
         Ok(self.0.lock().unwrap().execute("UPDATE toolbox SET removed = 1 WHERE id = ?1 AND removed = 0", [id])? > 0)
+    }
+
+    // --- friends -----------------------------------------------------------------
+
+    /// Notes that someone's on the website now (at most once a minute).
+    pub fn seen(&self, user_id: i64) -> rusqlite::Result<()> {
+        let t = now();
+        self.0.lock().unwrap().execute("UPDATE users SET last_seen = ?1 WHERE id = ?2 AND last_seen < ?1 - 60", params![t, user_id])?;
+        Ok(())
+    }
+
+    pub fn relation(&self, me: i64, other: i64) -> rusqlite::Result<Relation> {
+        let conn = self.0.lock().unwrap();
+        let (a, b) = (me.min(other), me.max(other));
+        let friends: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM friends WHERE a = ?1 AND b = ?2)", params![a, b], |r| r.get(0))?;
+        if friends {
+            return Ok(Relation::Friends);
+        }
+        let sent: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM friend_requests WHERE from_id = ?1 AND to_id = ?2)", params![me, other], |r| r.get(0))?;
+        if sent {
+            return Ok(Relation::Sent);
+        }
+        let got: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM friend_requests WHERE from_id = ?1 AND to_id = ?2)", params![other, me], |r| r.get(0))?;
+        Ok(if got { Relation::Received } else { Relation::None })
+    }
+
+    fn friend_count(conn: &Connection, id: i64) -> rusqlite::Result<i64> {
+        conn.query_row("SELECT COUNT(*) FROM friends WHERE a = ?1 OR b = ?1", [id], |r| r.get(0))
+    }
+
+    fn befriend(conn: &Connection, x: i64, y: i64) -> rusqlite::Result<()> {
+        conn.execute("DELETE FROM friend_requests WHERE (from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1)", params![x, y])?;
+        conn.execute("INSERT OR IGNORE INTO friends (a, b, since) VALUES (?1, ?2, ?3)", params![x.min(y), x.max(y), now()])?;
+        Ok(())
+    }
+
+    /// `me` asks `other` to be friends (or accepts, if they'd asked first).
+    pub fn ask_friend(&self, me: i64, other: i64) -> rusqlite::Result<Asked> {
+        let rel = self.relation(me, other)?;
+        let conn = self.0.lock().unwrap();
+        Ok(match rel {
+            Relation::Friends => Asked::AlreadyFriends,
+            Relation::Sent => Asked::AlreadySent,
+            _ if Self::friend_count(&conn, me)? >= MAX_FRIENDS || Self::friend_count(&conn, other)? >= MAX_FRIENDS => Asked::Full,
+            Relation::Received => {
+                Self::befriend(&conn, me, other)?;
+                Asked::NowFriends
+            }
+            Relation::None => {
+                conn.execute("INSERT INTO friend_requests (from_id, to_id, created) VALUES (?1, ?2, ?3)", params![me, other, now()])?;
+                Asked::Sent
+            }
+        })
+    }
+
+    /// `me` says yes to `from`'s request. False if there wasn't one.
+    pub fn accept_friend(&self, me: i64, from: i64) -> rusqlite::Result<bool> {
+        if self.relation(me, from)? != Relation::Received {
+            return Ok(false);
+        }
+        let conn = self.0.lock().unwrap();
+        if Self::friend_count(&conn, me)? >= MAX_FRIENDS || Self::friend_count(&conn, from)? >= MAX_FRIENDS {
+            return Ok(false);
+        }
+        Self::befriend(&conn, me, from)?;
+        Ok(true)
+    }
+
+    /// Drops a request either way (declining theirs, or taking back yours).
+    pub fn drop_request(&self, me: i64, other: i64) -> rusqlite::Result<bool> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM friend_requests WHERE (from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1)", params![me, other])?
+            > 0)
+    }
+
+    pub fn unfriend(&self, me: i64, other: i64) -> rusqlite::Result<bool> {
+        Ok(self.0.lock().unwrap().execute("DELETE FROM friends WHERE a = ?1 AND b = ?2", params![me.min(other), me.max(other)])? > 0)
+    }
+
+    fn people(&self, sql: &str, id: i64) -> rusqlite::Result<Vec<FriendRow>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([id], |r| {
+            let avatar: String = r.get(1)?;
+            Ok(FriendRow { username: r.get(0)?, avatar: serde_json::from_str(&avatar).unwrap_or_default(), last_seen: r.get(2)? })
+        })?;
+        rows.collect()
+    }
+
+    /// Someone's friends (not banned ones), by name.
+    pub fn friends(&self, id: i64) -> rusqlite::Result<Vec<FriendRow>> {
+        self.people(
+            "SELECT u.username, u.avatar, u.last_seen FROM friends f JOIN users u ON u.id = (CASE WHEN f.a = ?1 THEN f.b ELSE f.a END)
+             WHERE (f.a = ?1 OR f.b = ?1) AND u.banned = 0 ORDER BY u.username COLLATE NOCASE",
+            id,
+        )
+    }
+
+    /// Who's asked to be friends with `id`, newest first.
+    pub fn friend_requests_to(&self, id: i64) -> rusqlite::Result<Vec<FriendRow>> {
+        self.people(
+            "SELECT u.username, u.avatar, u.last_seen FROM friend_requests q JOIN users u ON u.id = q.from_id
+             WHERE q.to_id = ?1 AND u.banned = 0 ORDER BY q.created DESC",
+            id,
+        )
+    }
+
+    /// Who `id` has asked, newest first.
+    pub fn friend_requests_from(&self, id: i64) -> rusqlite::Result<Vec<FriendRow>> {
+        self.people(
+            "SELECT u.username, u.avatar, u.last_seen FROM friend_requests q JOIN users u ON u.id = q.to_id
+             WHERE q.from_id = ?1 AND u.banned = 0 ORDER BY q.created DESC",
+            id,
+        )
     }
 }

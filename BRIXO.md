@@ -562,6 +562,23 @@ themselves or the Brixo account. On the server:
 `hide` / `show GAME_ID`, `reset NAME` (prints a reset link; `BRIXO_SITE`
 sets its address, playbrixo.com by default).
 
+**Friends** (website): requests (`friend_requests` table: from, to) and
+friendships (`friends`: pairs stored once, lower id first); asking someone
+who already asked you makes you friends; up to `MAX_FRIENDS` (200); banned
+accounts drop off lists. `users.last_seen` is touched (at most once a
+minute) whenever a logged-in request comes in (`api::user`), and within
+`ONLINE_SECONDS` (3 min) counts as online. Who's in which game comes from
+the running servers (`Servers::who_is_where`, from each server's
+`ServerHandle::player_names`, bots left out), shown only to friends.
+Joining a friend is just Play on their game (one server per game). API:
+`GET /api/friends` (friends with status playing/online/offline and the
+game, playing first; requests; sent), `POST /api/friends/add|accept|
+decline|remove {username}` (add rate-limited, `FRIEND_ASKS`). `/api/me`
+has `friend_requests` (the Friends tab's red badge); `/api/users/:name`
+has `friend_count`, up to 9 `friends` and your `relation` (none, friends,
+sent, received) for the profile's Add Friend button. Page: `/friends`
+(`web/friends.html`, refreshes every 20 s).
+
 **Toolbox** (Studio's, like Roblox Studio's): ready-made things creators
 insert. An item is what Studio's copy makes (`DataModel::to_clipboard`
 text), so inserting is a paste (`insert_from_toolbox` in Studio: pasted
