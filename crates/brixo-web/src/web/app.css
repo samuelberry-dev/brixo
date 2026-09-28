@@ -258,3 +258,11 @@ input.find { width: 100%; font: 12px Verdana, sans-serif; padding: 5px; border: 
 .resetlink input { width: 100%; margin: 6px 0; font: 11px Consolas, monospace; padding: 4px; border: 1px solid #c9b35a; }
 .pwform { margin-top: 8px; }
 .pwform .field input { width: 100%; }
+
+/* The admin page's toolbox. */
+.toolbox-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.toolbox-item { width: 104px; text-align: center; font-size: 11px; border: 1px solid #b9cde3; background: #f4f8fc; padding: 5px; }
+.toolbox-item img, .toolbox-item .noimg { width: 92px; height: 92px; display: block; margin: 0 auto 4px; border: 1px solid #9ab3cd; background: #dde6ee; }
+.toolbox-item .noimg { line-height: 92px; color: #7d8a99; }
+.tbform label { display: block; margin: 6px 0; font-weight: bold; font-size: 12px; }
+.tbform input:not([type=file]), .tbform textarea { display: block; width: 100%; box-sizing: border-box; font: 12px monospace; }

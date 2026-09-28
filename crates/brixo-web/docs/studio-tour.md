@@ -27,6 +27,7 @@ The blue bar under it has the building tools, from left to right:
 | **Add Script** | Adds a Script inside whatever's selected, and opens it. |
 | **Add Folder** | Adds a Folder, for keeping things organized. |
 | **Delete** | Deletes what's selected (so does the Delete key). |
+| **Toolbox** | Shows or hides the [Toolbox](#the-toolbox). |
 
 ## Saving your game
 
@@ -63,6 +64,14 @@ While building, the camera flies freely:
 **Snap** makes moves and turns jump in steps: pick how far next to it (¼ stud to 4 studs, and 5° to 90° for turning). Untick it to move freely.
 
 With several things selected, Properties can **line them up**: pick an axis (X, Y or Z), then line up their low sides, middles or high sides, or **space them evenly** so the gaps between them match.
+
+## The Toolbox
+
+The **Toolbox**, on the far left, is full of ready-made things: a kart, doors, jump pads, checkpoints, teleporters, coins, a spinner, the gear kit and more. **Click one** and it's put in your game in front of the camera, selected, ready to move. Pick a category from the list at the top, or search.
+
+Everything in it is ordinary parts and scripts, so it's yours to change: open its scripts and edit them, recolour it, resize it. The scripts are short and explained, and they're a good way to learn. Each one works on its own and in any game, and you can put in as many copies as you like.
+
+The Toolbox comes from the Brixo website, so new things turn up without updating Studio. (Offline, it shows the things built into Studio.)
 
 ## The Explorer
 

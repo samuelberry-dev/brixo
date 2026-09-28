@@ -104,6 +104,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/admin/hide", post(admin_hide))
         .route("/api/admin/reset", post(admin_reset))
         .route("/api/admin/admin-only", post(admin_only))
+        .route("/api/toolbox", get(toolbox))
+        .route("/api/toolbox/:id", get(toolbox_item))
+        .route("/api/toolbox/:id/thumbnail", get(toolbox_thumbnail))
+        .route("/api/admin/toolbox", post(admin_add_toolbox).layer(DefaultBodyLimit::max(MAX_TOOLBOX_ITEM * 2)))
+        .route("/api/admin/toolbox/remove", post(admin_remove_toolbox))
         .route("/api/reset/check", post(reset_check))
         .route("/api/reset", post(reset_password))
         .route("/api/me/password", put(change_password))
@@ -796,6 +801,123 @@ pub fn seed_samples(app: &App) {
         let _ = app.db.set_admin_only(id, true);
     }
     let _ = app.db.set_blurb(owner.id, "The official Brixo account. We make the sample games.");
+    seed_toolbox(app);
+}
+
+/// Puts Brixo's own toolbox items on the site (and keeps them up to date).
+pub fn seed_toolbox(app: &App) {
+    for item in brixo_samples::toolbox::items() {
+        let _ = app.db.seed_toolbox(item.slug, item.name, item.category, item.description, &item.content, item.thumbnail);
+    }
+}
+
+// --- the toolbox ---------------------------------------------------------------
+
+/// Biggest toolbox item (what it's made of, as copied in Studio).
+pub const MAX_TOOLBOX_ITEM: usize = 8 * 1024 * 1024;
+
+/// Everything in the toolbox, in the order Studio shows it: by category
+/// (Brixo's own order first), then oldest first.
+async fn toolbox(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::db::ToolboxRow>>> {
+    let mut items = app.db.toolbox().map_err(oops)?;
+    let order = |c: &str| brixo_samples::toolbox::CATEGORIES.iter().position(|k| k.eq_ignore_ascii_case(c)).unwrap_or(usize::MAX);
+    items.sort_by_key(|i| (order(&i.category), i.category.to_lowercase()));
+    Ok(Json(items))
+}
+
+#[derive(Serialize)]
+struct ToolboxContent {
+    id: i64,
+    name: String,
+    /// What Studio pastes (DataModel::to_clipboard's text).
+    content: String,
+}
+
+async fn toolbox_item(State(app): State<Arc<App>>, Path(id): Path<i64>) -> Result<Json<ToolboxContent>> {
+    let (name, content) = app.db.toolbox_item(id).map_err(oops)?.ok_or_else(|| not_found("toolbox item"))?;
+    Ok(Json(ToolboxContent { id, name, content }))
+}
+
+async fn toolbox_thumbnail(State(app): State<Arc<App>>, Path(id): Path<i64>) -> Result<Response> {
+    let png = app.db.toolbox_thumbnail(id).map_err(oops)?.ok_or_else(|| not_found("picture"))?;
+    Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=300")], png).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct NewToolboxItem {
+    pub name: String,
+    pub category: String,
+    #[serde(default)]
+    pub description: String,
+    /// Copied in Studio (select it, Ctrl+C) and pasted.
+    pub content: String,
+    /// A PNG, base64 (optional).
+    #[serde(default)]
+    pub thumbnail: Option<String>,
+}
+
+/// Checks a new toolbox item: gives back its picture's bytes, if it has one.
+pub fn check_toolbox_item(item: &NewToolboxItem) -> std::result::Result<Option<Vec<u8>>, String> {
+    let name = item.name.trim();
+    if name.is_empty() || name.chars().count() > 50 {
+        return Err("give it a name (up to 50 letters)".into());
+    }
+    let category = item.category.trim();
+    if category.is_empty() || category.chars().count() > 30 {
+        return Err("give it a category (up to 30 letters)".into());
+    }
+    if item.description.chars().count() > 400 {
+        return Err("keep the description under 400 letters".into());
+    }
+    if item.content.len() > MAX_TOOLBOX_ITEM {
+        return Err("that's too big for the toolbox (8 MB at most)".into());
+    }
+    let mut dm = DataModel::new();
+    let root = dm.root();
+    match dm.paste_clipboard(&item.content, root) {
+        Some(pasted) if !pasted.is_empty() => {}
+        _ => return Err("that isn't something copied in Brixo Studio: select it in Studio, press Ctrl+C, and paste it here".into()),
+    }
+    match &item.thumbnail {
+        None => Ok(None),
+        Some(b64) if b64.trim().is_empty() => Ok(None),
+        Some(b64) => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim().trim_start_matches("data:image/png;base64,"))
+                .map_err(|_| "the picture didn't come through: try again".to_string())?;
+            if !bytes.starts_with(b"\x89PNG") {
+                return Err("the picture has to be a PNG".into());
+            }
+            if bytes.len() > 1024 * 1024 {
+                return Err("keep the picture under 1 MB (a small square, like 160 by 160, is plenty)".into());
+            }
+            Ok(Some(bytes))
+        }
+    }
+}
+
+async fn admin_add_toolbox(State(app): State<Arc<App>>, headers: HeaderMap, Json(item): Json<NewToolboxItem>) -> Result<Json<serde_json::Value>> {
+    admin(&app, &headers)?;
+    let thumb = check_toolbox_item(&item).map_err(|e| bad(&e))?;
+    let id = app
+        .db
+        .add_toolbox(item.name.trim(), item.category.trim(), item.description.trim(), &item.content, thumb.as_deref())
+        .map_err(oops)?;
+    Ok(Json(serde_json::json!({ "id": id })))
+}
+
+#[derive(Deserialize)]
+struct RemoveToolboxItem {
+    id: i64,
+}
+
+async fn admin_remove_toolbox(State(app): State<Arc<App>>, headers: HeaderMap, Json(r): Json<RemoveToolboxItem>) -> Result<StatusCode> {
+    admin(&app, &headers)?;
+    if !app.db.remove_toolbox(r.id).map_err(oops)? {
+        return Err(ApiError(StatusCode::NOT_FOUND, "no such toolbox item".into()));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

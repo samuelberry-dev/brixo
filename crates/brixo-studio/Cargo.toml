@@ -23,6 +23,7 @@ serde_json = "1"
 # Open and Save As boxes (native ones on Windows and Mac).
 rfd = "0.17"
 brixo-samples = { path = "../brixo-samples" }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [build-dependencies]
 winresource = "0.1"

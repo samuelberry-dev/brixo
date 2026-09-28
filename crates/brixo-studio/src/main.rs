@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod editing;
+mod toolbox;
 
 use brixo_core::{Class, Color, DataModel, InstanceId, PartProps, Shape, Vec3 as V};
 use brixo_render::{Camera, SceneRenderer};
@@ -297,6 +298,8 @@ struct Editor {
     /// Saved player data (save/load) while testing: kept from one Play to
     /// the next until Studio closes or another game is opened.
     saves: Arc<brixo_runtime::MemoryStore>,
+    /// The Toolbox panel: ready-made things from the website.
+    toolbox: toolbox::Toolbox,
 }
 
 impl Default for Editor {
@@ -352,6 +355,7 @@ impl Default for Editor {
             mouse_locked: false,
             said: None,
             saves: Arc::new(brixo_runtime::MemoryStore::default()),
+            toolbox: toolbox::Toolbox::default(),
         }
     }
 }
@@ -1849,6 +1853,8 @@ fn build_ui(
                     action = Some(Action::Delete);
                 }
             });
+            ui.separator();
+            ui.toggle_value(&mut editor.toolbox.open, "Toolbox").on_hover_text("Ready-made karts, doors, pads, weapons and more");
         });
     });
 
@@ -1865,6 +1871,26 @@ fn build_ui(
         if editor.tab.is_some_and(|t| !editor.tabs.contains(&t)) {
             editor.tab = None;
         }
+    }
+
+    // The Toolbox, on the far left like Roblox Studio's.
+    if editor.toolbox.open {
+        egui::SidePanel::left("toolbox")
+            .default_width(272.0)
+            .width_range(180.0..=420.0)
+            .frame(box_frame())
+            .show(ctx, |ui| {
+                let mut close = false;
+                theme::title_bar(ui, "Toolbox", |ui| {
+                    if ui.small_button("×").on_hover_text("Close (the Toolbox button brings it back)").clicked() {
+                        close = true;
+                    }
+                });
+                box_body(ui, |ui| editor.toolbox.ui(ui, !playing));
+                if close {
+                    editor.toolbox.open = false;
+                }
+            });
     }
 
     egui::SidePanel::left("explorer")
@@ -1943,6 +1969,13 @@ fn build_ui(
                 None => viewport(ui, model, selection, status, camera, editor, playing),
             }
         });
+
+    // Things picked in the Toolbox (fetched from the website), put in.
+    for (name, content) in editor.toolbox.take_ready() {
+        if !playing {
+            insert_from_toolbox(model, selection, editor, camera, status, &name, &content);
+        }
+    }
 
     // Apply actions after the UI is built, so nothing is borrowed twice.
     match action {
@@ -3466,6 +3499,52 @@ fn shift(model: &mut DataModel, items: &[InstanceId], by: Vec3) {
             p.position = from_glam(to_glam(p.position) + by);
         }
     }
+}
+
+/// Puts a Toolbox item in the game: pasted into the Workspace, then moved
+/// to stand on whatever's in front of the camera (the ground, a part), and
+/// selected. Parts parked far below the world (a kit's hidden templates)
+/// stay where they are.
+fn insert_from_toolbox(model: &mut DataModel, selection: &mut Option<InstanceId>, editor: &mut Editor, camera: &Camera, status: &mut String, name: &str, content: &str) {
+    editor.history.checkpoint(model);
+    let root = model.root();
+    let Some(pasted) = model.paste_clipboard(content, root) else {
+        *status = format!("Couldn't put {name} in the game");
+        return;
+    };
+    let parts: Vec<InstanceId> = pasted
+        .iter()
+        .flat_map(|t| model.parts_under(*t).into_iter().chain(model.part(*t).map(|_| *t)))
+        .filter(|id| model.part(*id).is_some_and(|p| p.position.y > -100.0))
+        .collect();
+    if !parts.is_empty() {
+        let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+        for id in &parts {
+            let p = model.part(*id).unwrap();
+            let (c, h) = (glam::Vec3::new(p.position.x, p.position.y, p.position.z), glam::Vec3::new(p.size.x, p.size.y, p.size.z) / 2.0);
+            lo = lo.min(c - h);
+            hi = hi.max(c + h);
+        }
+        // Where the camera's looking: the first thing it hits, or the
+        // ground, or a spot 20 studs ahead.
+        let (from, dir) = (camera.position, camera.forward());
+        let skip: std::collections::HashSet<InstanceId> = parts.iter().copied().collect();
+        let hit = brixo_client::first_hit_except(model, from, dir, 150.0, &|id| skip.contains(&id));
+        let ground = (dir.y < -0.02).then(|| -from.y / dir.y).filter(|t| *t > 0.0 && *t < 150.0);
+        let spot = match (hit, ground) {
+            (Some(a), Some(b)) => from + dir * a.min(b),
+            (Some(a), None) | (None, Some(a)) => from + dir * a,
+            (None, None) => from + dir * 20.0,
+        };
+        let bottom = if hit.is_none() && ground.is_none() { spot.y.max(0.0) } else { spot.y };
+        let by = glam::Vec3::new(spot.x.round() - (lo.x + hi.x) / 2.0, bottom - lo.y, spot.z.round() - (lo.z + hi.z) / 2.0);
+        for id in &parts {
+            let p = model.part_mut(*id).unwrap();
+            p.position = V::new(p.position.x + by.x, p.position.y + by.y, p.position.z + by.z);
+        }
+    }
+    select(pasted, selection, editor);
+    *status = format!("Put {name} in from the Toolbox");
 }
 
 /// Makes `items` the selection (the first is the main one).

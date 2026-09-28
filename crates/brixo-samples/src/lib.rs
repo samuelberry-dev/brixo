@@ -8,6 +8,7 @@ pub mod gears;
 pub mod lab;
 pub mod speedway;
 pub mod synth;
+pub mod toolbox;
 mod tycoon;
 
 pub use battle::spire_wars;

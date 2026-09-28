@@ -10,6 +10,11 @@
 //!   brixo-web ban NAME / unban NAME ban an account, or lift the ban
 //!   brixo-web hide GAME_ID          take a game down (show GAME_ID: put it back)
 //!   brixo-web reset NAME            a one-time link to choose a new password
+//!   brixo-web toolbox               list the toolbox (Studio's ready-made things)
+//!   brixo-web toolbox-add NAME CATEGORY FILE [--picture PNG] [--description TEXT]
+//!                                   add to it: FILE is what you copied in Studio
+//!                                   (select it, Ctrl+C, paste into a file)
+//!   brixo-web toolbox-remove ID     take something out of the toolbox
 //!
 //! Settings (all optional; the defaults suit your own PC):
 //! - PORT: the website's port (7420).
@@ -101,7 +106,51 @@ fn main() {
             }
             println!("{}", if cmd == "hide" { format!("Game {id} is taken down.") } else { format!("Game {id} is back.") });
         }
-        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite, invites, admin, ban, unban, hide, show or reset")),
+        Some("toolbox") => {
+            let db = brixo_web::db::Db::open(&db_path).unwrap_or_else(|e| fail(e));
+            let items = db.toolbox().unwrap_or_else(|e| fail(e));
+            if items.is_empty() {
+                println!("The toolbox is empty (the website fills in Brixo's own items when it starts).");
+            }
+            for i in items {
+                println!("{:>4}  {:<24} {:<12} {}{}", i.id, i.name, i.category, if i.builtin { "(built in) " } else { "" }, if i.has_thumbnail { "" } else { "(no picture)" });
+            }
+        }
+        Some("toolbox-add") => {
+            let usage = "usage: brixo-web toolbox-add NAME CATEGORY FILE [--picture PNG] [--description TEXT]";
+            let (Some(name), Some(category), Some(file)) = (args.get(1), args.get(2), args.get(3)) else { fail(usage) };
+            let mut picture = None;
+            let mut description = String::new();
+            let mut rest = args[4..].iter();
+            while let Some(flag) = rest.next() {
+                match flag.as_str() {
+                    "--picture" => picture = Some(rest.next().unwrap_or_else(|| fail(usage)).clone()),
+                    "--description" => description = rest.next().unwrap_or_else(|| fail(usage)).clone(),
+                    _ => fail(usage),
+                }
+            }
+            let content = std::fs::read_to_string(file).unwrap_or_else(|e| fail(format!("couldn't read {file}: {e}")));
+            let thumbnail = picture.map(|p| {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.encode(std::fs::read(&p).unwrap_or_else(|e| fail(format!("couldn't read {p}: {e}"))))
+            });
+            let item = api::NewToolboxItem { name: name.clone(), category: category.clone(), description, content, thumbnail };
+            let thumb = api::check_toolbox_item(&item).unwrap_or_else(|e| fail(e));
+            let db = brixo_web::db::Db::open(&db_path).unwrap_or_else(|e| fail(e));
+            let id = db
+                .add_toolbox(item.name.trim(), item.category.trim(), item.description.trim(), &item.content, thumb.as_deref())
+                .unwrap_or_else(|e| fail(e));
+            println!("Added {} to the toolbox (id {id}). Studio shows it next time its Toolbox loads.", item.name.trim());
+        }
+        Some("toolbox-remove") => {
+            let id: i64 = args.get(1).and_then(|n| n.parse().ok()).unwrap_or_else(|| fail("usage: brixo-web toolbox-remove ID (from brixo-web toolbox)"));
+            let db = brixo_web::db::Db::open(&db_path).unwrap_or_else(|e| fail(e));
+            if !db.remove_toolbox(id).unwrap_or_else(|e| fail(e)) {
+                fail(format!("there's nothing in the toolbox with id {id}"));
+            }
+            println!("Took {id} out of the toolbox.");
+        }
+        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite, invites, admin, ban, unban, hide, show, reset, toolbox, toolbox-add or toolbox-remove")),
     }
 }
 

@@ -2,6 +2,7 @@
 <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
 <body><div id="page"><div id="banner"></div><div id="nav"></div>
 <div id="content"></div>
+<div id="toolbox-admin"></div>
 <div id="footer"></div></div>
 <script>
 (async () => {
@@ -98,5 +99,59 @@
     content.querySelectorAll("[data-unban]").forEach((b) => b.onclick = () => act("/api/admin/ban", { username: b.dataset.unban, banned: false }, "unban them"));
   };
   load().catch((err) => { content.innerHTML = `<div class="box"><h2>Admin</h2><div class="inner"><p class="error">${esc(err.message)}</p></div></div>`; });
+  toolboxAdmin();
 })();
+
+// The toolbox: what Studio's Toolbox offers. Brixo's own items come from
+// the code; admins add more here (or with brixo-admin toolbox-add).
+async function toolboxAdmin() {
+  const root = document.getElementById("toolbox-admin");
+  const categories = ["Vehicles", "Building", "Obby", "Gameplay", "Weapons"];
+  const draw = async (note) => {
+    const items = await api("/api/toolbox");
+    root.innerHTML = `<div class="box navy" style="margin-top:12px"><h2>Toolbox <span style="font-weight:normal">what Studio's Toolbox offers</span></h2><div class="inner">
+      <div class="toolbox-grid">${items.map((i) => `<div class="toolbox-item" title="${esc(i.description)}">
+        ${i.has_thumbnail ? `<img src="/api/toolbox/${i.id}/thumbnail" alt="">` : `<div class="noimg">no picture</div>`}
+        <b>${esc(i.name)}</b><div class="hint">${esc(i.category)}${i.builtin ? " &middot; built in" : ""}</div>
+        <a href="#" data-tbremove="${i.id}" data-name="${esc(i.name)}" style="font-size:10px">remove</a>
+      </div>`).join("") || `<p class="hint">The toolbox is empty.</p>`}</div>
+      <h3 style="margin-top:14px">Add to the toolbox</h3>
+      <p class="hint">Build it in Studio, select it, press <b>Ctrl+C</b>, and paste it in the box below. Its scripts should find what they need through <code>self</code>, not <code>find(...)</code>, so it works in any game. A picture is a square PNG (160 by 160 is plenty).</p>
+      <form id="tbform" class="tbform">
+        <label>Name <input name="name" maxlength="50" required></label>
+        <label>Category <input name="category" list="tbcats" maxlength="30" required><datalist id="tbcats">${categories.map((c) => `<option value="${c}">`).join("")}</datalist></label>
+        <label>Description <input name="description" maxlength="400"></label>
+        <label>Picture <input name="picture" type="file" accept="image/png"></label>
+        <label>What it's made of <textarea name="content" rows="4" placeholder="Paste what you copied in Studio here" required></textarea></label>
+        <button class="btn green" type="submit">Add it</button> <span id="tbnote" class="hint">${note ? esc(note) : ""}</span>
+      </form>
+    </div></div>`;
+    root.querySelectorAll("[data-tbremove]").forEach((a) => a.onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm(`Take "${a.dataset.name}" out of the toolbox? Games that already use it keep their copy.`)) return;
+      try { await api("/api/admin/toolbox/remove", "POST", { id: Number(a.dataset.tbremove) }); draw(`Removed ${a.dataset.name}.`); }
+      catch (err) { alert(`Couldn't remove it: ${err.message}`); }
+    });
+    document.getElementById("tbform").onsubmit = async (e) => {
+      e.preventDefault();
+      const el = e.target.elements;
+      const v = (n) => el[n].value;
+      const file = el["picture"].files[0];
+      let thumbnail = null;
+      if (file) {
+        thumbnail = await new Promise((ok, no) => {
+          const r = new FileReader();
+          r.onload = () => ok(String(r.result).split(",")[1]);
+          r.onerror = no;
+          r.readAsDataURL(file);
+        });
+      }
+      try {
+        await api("/api/admin/toolbox", "POST", { name: v("name"), category: v("category"), description: v("description"), content: v("content"), thumbnail });
+        draw(`Added ${v("name")}. Studio shows it next time its Toolbox loads.`);
+      } catch (err) { document.getElementById("tbnote").innerHTML = `<span class="error">${esc(err.message)}</span>`; }
+    };
+  };
+  draw().catch(() => {});
+}
 </script></body></html>

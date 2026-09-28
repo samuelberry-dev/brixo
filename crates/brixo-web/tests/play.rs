@@ -526,3 +526,51 @@ fn the_test_lab_is_for_admins_only() {
     boss.post(&format!("{site}/api/admin/admin-only")).send_json(serde_json::json!({"id": id, "admin_only": true})).unwrap();
     assert_eq!(status(kid.get(&format!("{site}/api/games/{id}")).call()), 404);
 }
+
+#[test]
+fn the_toolbox_lists_serves_and_takes_admins_additions() {
+    let (site, app) = start_site();
+    let agent = browser();
+    // Brixo's own items are there, pictures and all.
+    let items: Vec<serde_json::Value> = agent.get(&format!("{site}/api/toolbox")).call().unwrap().into_json().unwrap();
+    assert!(items.len() >= 12, "{items:?}");
+    assert_eq!(items[0]["category"], "Vehicles", "in category order");
+    let kart = items.iter().find(|i| i["name"] == "Kart").unwrap();
+    assert_eq!(kart["builtin"], true);
+    let id = kart["id"].as_i64().unwrap();
+    let got: serde_json::Value = agent.get(&format!("{site}/api/toolbox/{id}")).call().unwrap().into_json().unwrap();
+    let mut dm = brixo_core::DataModel::new();
+    let root = dm.root();
+    assert!(dm.paste_clipboard(got["content"].as_str().unwrap(), root).is_some_and(|p| p.len() == 1), "pastes into a game");
+    let png = agent.get(&format!("{site}/api/toolbox/{id}/thumbnail")).call().unwrap();
+    assert_eq!(png.header("content-type"), Some("image/png"));
+
+    // Only admins add things.
+    let boss = browser();
+    assert_eq!(status(boss.post(&format!("{site}/api/signup")).send_json(serde_json::json!({ "username": "Boss", "password": "hunter2hunter2" }))), 200);
+    let wall = {
+        let mut w = brixo_core::DataModel::new();
+        let r = w.root();
+        let p = w.create(brixo_core::Class::Part, "Wall", r).unwrap();
+        w.to_clipboard(&[p])
+    };
+    let add = |content: &str| serde_json::json!({ "name": "Brick Wall", "category": "Building", "description": "A wall.", "content": content });
+    assert_eq!(status(boss.post(&format!("{site}/api/admin/toolbox")).send_json(add(&wall))), 403);
+    assert!(app.db.set_admin("Boss", true).unwrap());
+    // Not something copied in Studio: turned away, saying why.
+    match boss.post(&format!("{site}/api/admin/toolbox")).send_json(add("hello")) {
+        Err(ureq::Error::Status(400, r)) => assert!(r.into_string().unwrap().contains("Ctrl+C")),
+        other => panic!("{other:?}"),
+    }
+    let added: serde_json::Value = boss.post(&format!("{site}/api/admin/toolbox")).send_json(add(&wall)).unwrap().into_json().unwrap();
+    let new_id = added["id"].as_i64().unwrap();
+    let items: Vec<serde_json::Value> = agent.get(&format!("{site}/api/toolbox")).call().unwrap().into_json().unwrap();
+    assert!(items.iter().any(|i| i["id"] == new_id && i["builtin"] == false && i["has_thumbnail"] == false));
+
+    // Removing a built-in one keeps it removed, even when the site restarts.
+    assert_eq!(status(boss.post(&format!("{site}/api/admin/toolbox/remove")).send_json(serde_json::json!({ "id": id }))), 204);
+    brixo_web::api::seed_toolbox(&app);
+    let items: Vec<serde_json::Value> = agent.get(&format!("{site}/api/toolbox")).call().unwrap().into_json().unwrap();
+    assert!(!items.iter().any(|i| i["name"] == "Kart"));
+    assert_eq!(status(agent.get(&format!("{site}/api/toolbox/{id}")).call()), 404);
+}

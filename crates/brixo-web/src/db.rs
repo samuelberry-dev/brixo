@@ -81,6 +81,18 @@ pub struct GameRow {
     pub has_thumbnail: bool,
 }
 
+/// A toolbox item, as the Toolbox lists it (without what it's made of).
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolboxRow {
+    pub id: i64,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub has_thumbnail: bool,
+    /// One of Brixo's own (seeded from the code).
+    pub builtin: bool,
+}
+
 pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -219,6 +231,23 @@ impl Db {
                  token TEXT PRIMARY KEY,
                  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
                  created INTEGER NOT NULL
+             );",
+        )?;
+        // The toolbox: ready-made things Studio can insert. Built-in ones
+        // have a slug (seeded from brixo_samples::toolbox, kept up to date);
+        // admins add the rest. Removing one hides it (so a removed built-in
+        // stays removed).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS toolbox (
+                 id INTEGER PRIMARY KEY,
+                 slug TEXT UNIQUE,
+                 name TEXT NOT NULL,
+                 category TEXT NOT NULL,
+                 description TEXT NOT NULL DEFAULT '',
+                 content TEXT NOT NULL,
+                 thumbnail BLOB,
+                 removed INTEGER NOT NULL DEFAULT 0,
+                 created INTEGER NOT NULL DEFAULT 0
              );",
         )?;
         Ok(Db(Mutex::new(conn)))
@@ -581,5 +610,61 @@ impl Db {
     pub fn game_data(&self, id: i64) -> rusqlite::Result<Option<String>> {
         let conn = self.0.lock().unwrap();
         conn.query_row("SELECT data FROM games WHERE id = ?1", [id], |r| r.get(0)).optional()
+    }
+
+    /// Adds or updates a built-in toolbox item (by its slug). One that an
+    /// admin removed stays removed.
+    pub fn seed_toolbox(&self, slug: &str, name: &str, category: &str, description: &str, content: &str, thumbnail: &[u8]) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO toolbox (slug, name, category, description, content, thumbnail, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(slug) DO UPDATE SET name = ?2, category = ?3, description = ?4, content = ?5, thumbnail = ?6",
+            params![slug, name, category, description, content, thumbnail, now()],
+        )?;
+        Ok(())
+    }
+
+    /// Adds an item to the toolbox (an admin's). Gives back its id.
+    pub fn add_toolbox(&self, name: &str, category: &str, description: &str, content: &str, thumbnail: Option<&[u8]>) -> rusqlite::Result<i64> {
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO toolbox (name, category, description, content, thumbnail, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![name, category, description, content, thumbnail, now()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Everything in the toolbox (not removed), newest last.
+    pub fn toolbox(&self) -> rusqlite::Result<Vec<ToolboxRow>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, category, description, thumbnail IS NOT NULL, slug IS NOT NULL FROM toolbox WHERE removed = 0 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ToolboxRow { id: r.get(0)?, name: r.get(1)?, category: r.get(2)?, description: r.get(3)?, has_thumbnail: r.get(4)?, builtin: r.get(5)? })
+        })?;
+        rows.collect()
+    }
+
+    /// An item's name and what it's made of (Studio pastes it).
+    pub fn toolbox_item(&self, id: i64) -> rusqlite::Result<Option<(String, String)>> {
+        self.0
+            .lock()
+            .unwrap()
+            .query_row("SELECT name, content FROM toolbox WHERE id = ?1 AND removed = 0", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+    }
+
+    pub fn toolbox_thumbnail(&self, id: i64) -> rusqlite::Result<Option<Vec<u8>>> {
+        self.0
+            .lock()
+            .unwrap()
+            .query_row("SELECT thumbnail FROM toolbox WHERE id = ?1 AND removed = 0", [id], |r| r.get::<_, Option<Vec<u8>>>(0))
+            .optional()
+            .map(Option::flatten)
+    }
+
+    /// Takes an item out of the toolbox. False if there's no such item.
+    pub fn remove_toolbox(&self, id: i64) -> rusqlite::Result<bool> {
+        Ok(self.0.lock().unwrap().execute("UPDATE toolbox SET removed = 1 WHERE id = ?1 AND removed = 0", [id])? > 0)
     }
 }

@@ -562,6 +562,30 @@ themselves or the Brixo account. On the server:
 `hide` / `show GAME_ID`, `reset NAME` (prints a reset link; `BRIXO_SITE`
 sets its address, playbrixo.com by default).
 
+**Toolbox** (Studio's, like Roblox Studio's): ready-made things creators
+insert. An item is what Studio's copy makes (`DataModel::to_clipboard`
+text), so inserting is a paste (`insert_from_toolbox` in Studio: pasted
+into the Workspace, moved to stand where the camera looks, parts parked
+below y = -100 left alone, e.g. the gear kit's templates). Items live on
+the website (`toolbox` table: name, category, description, content,
+PNG thumbnail; `GET /api/toolbox`, `/api/toolbox/:id`,
+`/api/toolbox/:id/thumbnail`). Only admins add to it: the Admin page's
+Toolbox box (paste what you copied in Studio, optional PNG) or
+`brixo-admin toolbox` / `toolbox-add NAME CATEGORY FILE [--picture PNG]
+[--description TEXT]` / `toolbox-remove ID`; items are checked to paste.
+Removing hides an item (a removed built-in stays removed). Built-in items
+are in `brixo_samples::toolbox` (Kart, Boost Pad, Swinging/Sliding Door,
+Moving Platform, Spinner, Kill Brick, Checkpoint, Jump/Speed Pad,
+Teleporter Pair, Coin, Gear Kit), seeded by slug at startup
+(`seed_toolbox`) and updated with each release; their scripts only use
+`self` (never `find`), so any number of copies work in any game. Their
+pictures (`brixo-samples/assets/toolbox`) are rendered by the engine:
+`cargo run -p brixo-samples --example toolbox_scenes DIR` writes a scene
+and camera per item, then Brixo Player (BRIXO_CAMERA_FILE, BRIXO_CINEMATIC)
+and a square crop. Studio's panel (`brixo-studio/src/toolbox.rs`) loads
+the list and pictures on a thread; offline it shows the built-in items.
+No settings on items: creators edit the scripts.
+
 **Passwords:** no email yet, so resets go through an admin. The Admin
 page's **Reset** (or `brixo-admin reset NAME`) makes a one-time link,
 `/reset#TOKEN`, good for an hour (`RESET_SECONDS`; the `resets` table, one

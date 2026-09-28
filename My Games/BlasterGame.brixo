@@ -1,0 +1,455 @@
+{
+  "instances": [
+    {
+      "id": 0,
+      "class": "Workspace",
+      "name": "Workspace",
+      "parent": null,
+      "children": [
+        1,
+        2,
+        8,
+        9
+      ],
+      "props": "Workspace"
+    },
+    {
+      "id": 1,
+      "class": "Part",
+      "name": "Baseplate",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": -0.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 256.0,
+            "y": 1.0,
+            "z": 256.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 163,
+            "g": 162,
+            "b": 165
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block",
+          "material": "Plastic",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "class": "SpawnLocation",
+      "name": "SpawnLocation",
+      "parent": 0,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 0.0,
+            "y": 0.5,
+            "z": 0.0
+          },
+          "size": {
+            "x": 6.0,
+            "y": 1.0,
+            "z": 6.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 90,
+            "g": 90,
+            "b": 100
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Block",
+          "material": "Plastic",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "class": "Part",
+      "name": "Plasma Ball",
+      "parent": 8,
+      "children": [
+        4
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 1.0,
+            "y": 5.0,
+            "z": -9.0
+          },
+          "size": {
+            "x": 0.8,
+            "y": 0.8,
+            "z": 0.8
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 182,
+            "g": 240,
+            "b": 232
+          },
+          "anchored": true,
+          "can_collide": false,
+          "shape": "Ball",
+          "material": "Neon",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "class": "Script",
+      "name": "Script",
+      "parent": 3,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "-- The template in Storage waits to be copied: don't run there.\nif self.parent.name == \"Storage\" then\n    return\nend\n\ngone = false\nfn pop()\n    if not gone then\n        gone = true\n        destroy(self)\n    end\nend\n\non touched(other)\n    if gone then\n        return\n    end\n    -- Brushing the shooter's own gun on the way out doesn't count.\n    if other.parent != nil and other.parent.class == \"tool\" then\n        return\n    end\n    if other.class == \"player\" then\n        if other.name == self.owner then\n            return\n        end\n        shooter = find(self.owner)\n        if shooter != nil and other.health > 0 and (shooter.team == nil or other.team != shooter.team) then\n            other.health -= 20\n            other.last_hit_by = self.owner\n            play_sound_at(\"hit\", other)\n        end\n    end\n    pop()\nend\n\nwait(3)\npop()   -- gone after 3 seconds if it didn't hit anything",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 5,
+      "class": "Tool",
+      "name": "Blaster",
+      "parent": 8,
+      "children": [
+        6,
+        12,
+        13,
+        11,
+        7
+      ],
+      "props": "Tool"
+    },
+    {
+      "id": 6,
+      "class": "Part",
+      "name": "Handle",
+      "parent": 5,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 5.0,
+            "y": 2.0,
+            "z": -11.0
+          },
+          "size": {
+            "x": 0.5,
+            "y": 1.0,
+            "z": 0.5
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 106,
+            "g": 106,
+            "b": 106
+          },
+          "anchored": true,
+          "can_collide": false,
+          "shape": "Block",
+          "material": "Metal",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "class": "Script",
+      "name": "Script",
+      "parent": 5,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "ready_at = 0\n\non activated(p)\n    if time() < ready_at then\n        return\n    end\n    ready_at = time() + 0.35\n\n    f = p.look\n    from = {x = p.position.x + f.x * 3, y = p.position.y + 1.5, z = p.position.z + f.z * 3}\n    t = p.mouse\n    dx = t.x - from.x\n    dy = t.y - from.y\n    dz = t.z - from.z\n    d = max(sqrt(dx * dx + dy * dy + dz * dz), 0.01)\n\n    ball = clone(find(\"Plasma Ball\"))\n    ball.name = \"Plasma\"\n    ball.owner = p.name            -- so its script knows who fired it\n    ball.position = from\n    ball.floating = true           -- no gravity: flies straight\n    ball.anchored = false\n    ball.velocity = {x = dx / d * 90, y = dy / d * 90, z = dz / d * 90}\n    ball.parent = find(\"Workspace\")\n    play_sound_at(\"twang\", p)\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 8,
+      "class": "Folder",
+      "name": "Storage",
+      "parent": 0,
+      "children": [
+        3,
+        5
+      ],
+      "props": "Folder"
+    },
+    {
+      "id": 9,
+      "class": "Part",
+      "name": "Cylinder",
+      "parent": 0,
+      "children": [
+        10
+      ],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 5.0,
+            "y": 0.125,
+            "z": -18.0
+          },
+          "size": {
+            "x": 2.0,
+            "y": 0.25,
+            "z": 2.0
+          },
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 160,
+            "g": 160,
+            "b": 160
+          },
+          "anchored": true,
+          "can_collide": true,
+          "shape": "Cylinder",
+          "material": "Metal",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    },
+    {
+      "id": 10,
+      "class": "Script",
+      "name": "Script",
+      "parent": 9,
+      "children": [],
+      "props": {
+        "Script": {
+          "source": "on touched(other)\n    if other.class == \"player\" then\n        for t in other.children do\n            if t.name == \"Blaster\" then\n                return      -- they already have one\n            end\n        end\n        copy = clone(find(\"Blaster\"))\n        copy.parent = other\n        play_sound(\"buy\", other)\n    end\nend",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 11,
+      "class": "Part",
+      "name": "forward",
+      "parent": 5,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 5.0,
+            "y": 2.75,
+            "z": -10.4
+          },
+          "size": {
+            "x": 0.5,
+            "y": 1.7,
+            "z": 0.5
+          },
+          "rotation": {
+            "x": 90.0,
+            "y": -0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 106,
+            "g": 106,
+            "b": 106
+          },
+          "anchored": true,
+          "can_collide": false,
+          "shape": "Block",
+          "material": "Metal",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    },
+    {
+      "id": 12,
+      "class": "Part",
+      "name": "point",
+      "parent": 5,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 5.0,
+            "y": 2.75,
+            "z": -9.424999
+          },
+          "size": {
+            "x": 0.25,
+            "y": 0.25,
+            "z": 0.25
+          },
+          "rotation": {
+            "x": 90.0,
+            "y": -0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 60,
+            "g": 60,
+            "b": 60
+          },
+          "anchored": true,
+          "can_collide": false,
+          "shape": "Block",
+          "material": "Metal",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    },
+    {
+      "id": 13,
+      "class": "Part",
+      "name": "trigger",
+      "parent": 5,
+      "children": [],
+      "props": {
+        "Part": {
+          "position": {
+            "x": 5.0,
+            "y": 2.4,
+            "z": -10.625
+          },
+          "size": {
+            "x": 0.25,
+            "y": 0.25,
+            "z": 0.25
+          },
+          "rotation": {
+            "x": 90.0,
+            "y": -0.0,
+            "z": 0.0
+          },
+          "color": {
+            "r": 60,
+            "g": 60,
+            "b": 60
+          },
+          "anchored": true,
+          "can_collide": false,
+          "shape": "Block",
+          "material": "Metal",
+          "transparency": 0.0,
+          "velocity": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "floating": false,
+          "bounce": 0.0,
+          "hinge": "Off",
+          "hinge_at": "Middle",
+          "motor_speed": 0.0
+        }
+      }
+    }
+  ],
+  "next_id": 14,
+  "root": 0
+}
