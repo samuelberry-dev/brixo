@@ -49,8 +49,9 @@ Built-in tracks for `play_music`: `sunny` (bright and bouncy), `rush` (fast, for
 | Right-drag, or ← → | Turn the camera |
 | Page Up / Page Down | Tilt the camera |
 | Scroll, or I / O | Zoom (all the way in for first person) |
-| / or Enter | Chat |
-| Esc | Pause menu: who's playing, Reset character, settings (shift lock, camera speed, volume) and these controls |
+| / or Enter | Chat (or click the chat bar, top left) |
+| Esc | The Game Menu: Reset Character, Settings (shift lock, camera speed, volume), Help (these keys) and Leave Game |
+| F11 | Fullscreen (or the Fullscreen button, top left) |
 | F9 | The game's log (prints and errors) |
 | E Q F R G Z X C V B | Whatever the game's scripts make them do (`on key`) |
 

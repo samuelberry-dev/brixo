@@ -2187,13 +2187,11 @@ fn build_ui(
 /// Play's extras over the 3D view, as in Brixo Player: shift lock's
 /// crosshair and note, the chat box, and a hint when Esc freed the mouse.
 fn play_overlay(ctx: &egui::Context, rect: egui::Rect, editor: &mut Editor) {
-    use brixo_client::theme::site;
     let pill = |ui: &mut egui::Ui, text: &str| {
         egui::Frame::NONE
-            .fill(egui::Color32::from_rgba_unmultiplied(13, 42, 74, 215))
-            .corner_radius(4)
-            .inner_margin(egui::Margin::symmetric(10, 4))
-            .show(ui, |ui| ui.label(egui::RichText::new(text).color(site::GOLD)));
+            .fill(brixo_client::classic::PANEL)
+            .inner_margin(egui::Margin::symmetric(8, 3))
+            .show(ui, |ui| ui.label(egui::RichText::new(text).font(brixo_client::classic::bold(13.0)).color(brixo_client::classic::YELLOW)));
     };
     if editor.shift_lock {
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("shift lock")));
@@ -2210,25 +2208,10 @@ fn play_overlay(ctx: &egui::Context, rect: egui::Rect, editor: &mut Editor) {
             .fixed_pos(rect.center_top() + egui::vec2(-130.0, 10.0))
             .show(ctx, |ui| pill(ui, "Mouse free: click the game to look again"));
     }
-    if editor.chat_open {
-        egui::Area::new(egui::Id::new("chat input"))
-            .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -64.0))
-            .show(ctx, |ui| {
-                let edit = ui.add(
-                    egui::TextEdit::singleline(&mut editor.chat_text)
-                        .desired_width(420.0)
-                        .hint_text("Say something (Enter to send, Esc to cancel)"),
-                );
-                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    let text = std::mem::take(&mut editor.chat_text);
-                    if !text.trim().is_empty() {
-                        editor.said = Some(text);
-                    }
-                    editor.chat_open = false;
-                } else {
-                    edit.request_focus();
-                }
-            });
+    // The chat bar where Brixo Player has it (under its toolbar): click it
+    // or press / to talk.
+    if let Some(text) = brixo_client::classic::chat_bar(ctx, rect.left_top() + egui::vec2(5.0, brixo_client::classic::TOP_BAR), 330.0, &mut editor.chat_open, &mut editor.chat_text) {
+        editor.said = Some(text);
     }
 }
 
@@ -2998,6 +2981,10 @@ fn viewport(
             editor.mouse_freed = false;
         }
         brixo_client::leaderboard::draw(ui.ctx(), rect, model, editor.local_player, &mut editor.board_open);
+        // The classic health bar, like Brixo Player's.
+        if let Some(p) = model.player(me) {
+            brixo_client::classic::health_bar(ui.ctx(), rect, p.health, p.max_health);
+        }
         play_overlay(ui.ctx(), rect, editor);
     }
 

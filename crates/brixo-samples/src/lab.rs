@@ -717,7 +717,7 @@ pub fn test_lab() -> DataModel {
 
     // --- the Lab controls: a toggle button and its panel, in Storage,
     // cloned into each player (scripts come along) ---
-    let toggle = b.button(storage, "Lab Toggle Template", None, (0.01, 0.075), (0.1, 0.045), (13, 105, 172), TOGGLE);
+    let toggle = b.button(storage, "Lab Toggle Template", None, (0.01, 0.215), (0.1, 0.045), (13, 105, 172), TOGGLE);
     {
         let g = b.dm.gui_mut(toggle).unwrap();
         g.text = "Lab controls".into();
@@ -727,15 +727,15 @@ pub fn test_lab() -> DataModel {
     {
         let g = b.dm.gui_mut(panel).unwrap();
         g.x = 0.01;
-        g.y = 0.13;
+        g.y = 0.27;
         g.width = 0.21;
         g.height = 0.52;
         g.background_color = Color::new(13, 42, 74);
         g.visible = false;
     }
     let (c1, c2, w, h) = (0.02, 0.115, 0.09, 0.042);
-    let row = |i: usize| 0.18 + i as f32 * 0.052;
-    b.label(panel, "Lighting", (0.02, 0.135), (0.19, 0.04));
+    let row = |i: usize| 0.32 + i as f32 * 0.052;
+    b.label(panel, "Lighting", (0.02, 0.275), (0.19, 0.04));
     let blue = (13, 105, 172);
     let lighting: [(&str, &str); 11] = [
         ("Sunrise", "w.time_of_day = 6.3"),

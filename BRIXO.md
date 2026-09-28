@@ -364,7 +364,7 @@ wait(0.5)
 - **Test hooks** (inert unless set):
   - `BRIXO_SOUND_LOG`: log sounds with timestamps (first line: `# epoch <unix time>`).
   - `BRIXO_GOTO_FILE`: the player walks toward "x z" in that file.
-  - `BRIXO_ACTION_FILE`: lines another program appends ("equip 6", "use", "jump").
+  - `BRIXO_ACTION_FILE`: lines another program appends ("equip 6", "use", "jump", "say hi", and "menu", "help", "settings" or "leave" to open the Game Menu on that page).
   - `BRIXO_POSITION_FILE`: the player writes "x y z" there every frame.
   - `BRIXO_CAMERA_FILE`: "x y z lx ly lz" places the camera (position, look-at).
   - `BRIXO_STUDIO_CAMERA` (Studio): "x y z lx ly lz" starts the build camera
@@ -471,14 +471,27 @@ started on demand, Studio publishing (log in once, then Publish).
 **Apps:** studio, player (opened by Play: HUD, pause menu, F9 console, chat,
 mouse lock), dedicated LAN server.
 
-**Player menus** (`brixo-player/src/menus.rs`): dressed like the website
-(`theme::apply_site`, white boxes with glossy blue title bars, the stud
-banner on the home screen); the HUD (game name, health bar, shift lock note)
-stays navy so it reads over any world. Esc opens the pause menu, which dims
-the game and has tabs: **Game** (who's playing, Reset character), **Settings**
-(shift lock on Shift, camera speed, music and sound volume) and **Controls**
-(keycaps). Settings live in `~/Brixo/settings.json` (`settings.rs`), saved
-once the menu closes; volumes go to `Speaker::set_levels`.
+**Player menus** (`brixo-player/src/menus.rs`): the home screen and the
+update notice are dressed like the website (`theme::apply_site`). **In a game
+it's all the classic early-2000s look** (`brixo-client/src/classic.rs`,
+Roblox 2006-2010 as the reference): Arial-shaped bold text (Liberation Sans,
+OFL, bundled in `brixo-client/assets/fonts`, loaded by `apply_site` as the
+"classic" font families) with one-pixel black outlines; see-through black
+panels with square corners and hard edges; grey Windows-2000 bevelled
+buttons. Top left: a toolbar (Menu, Help, Fullscreen; F11 too) and under it
+the chat bar ("To chat click here or press "/" key"), with chat lines under
+that (names in the classic eight colours, words in white, no box). The
+**health bar** is the classic one: a slim upright bar at the right edge,
+green over red, draining from the top, "Health" under it in blue
+(`classic::health_bar`, also in Studio's Play). The hotbar is square slots,
+the one in hand framed in white; the leaderboard is outlined text on
+see-through black, yours in yellow. The game's own GUI is drawn square with
+a one-pixel edge, buttons bevelled (pushed in while pressed), and text
+shrinks to fit its box. Esc (or Menu) opens the **Game Menu**: big grey
+buttons, Reset Character and Leave Game each ask "Are you sure?", Settings
+(shift lock on Shift, camera speed, music and sound volume) and Help (the
+keys). Settings live in `~/Brixo/settings.json` (`settings.rs`), saved once
+the menu closes; volumes go to `Speaker::set_levels`.
 
 **Shift lock** (Shift, in Brixo Player): the mouse locks and turns the camera
 (the same lock as first person), the camera sits `SHOULDER_OFFSET` (1.75)

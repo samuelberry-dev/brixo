@@ -19,6 +19,8 @@ const TEMPLATE_DROP: f32 = 500.0;
 const GAME: &str = r#"-- Spire Wars: teams, weapons, knockouts, rounds.
 TEAMS = ["Red", "Blue", "Green", "Yellow"]
 TOOLS = ["Sword", "Rocket Launcher", "Superball", "Slingshot", "Trowel", "Timebomb"]
+-- Everyone's knockouts, on the leaderboard (grouped by team).
+leaderboard("kos")
 round_length = find("Workspace").round_seconds
 if round_length == nil then
     round_length = 240
@@ -168,11 +170,6 @@ every 0.5 seconds
 
     -- Team scores, and everyone's knockouts.
     find("Scores").text = "RED " + scores.Red + "    BLUE " + scores.Blue + "    GREEN " + scores.Green + "    YELLOW " + scores.Yellow
-    board = "KNOCKOUTS"
-    for p in players() do
-        board = board + "\n" + p.name + " (" + p.team + ")   " + p.kos
-    end
-    find("Board").text = board
     if time() - feed_time > 4 then
         find("Feed").visible = false
     end
@@ -489,8 +486,6 @@ pub fn spire_wars() -> DataModel {
     b.dm.gui_mut(title).unwrap().text_color = Color::new(245, 205, 48);
     b.label(Class::TextLabel, "Clock", "4:00", (0.61, 0.012, 0.07, 0.055), 24.0);
     b.label(Class::TextLabel, "Scores", "", (0.25, 0.075, 0.5, 0.045), 18.0);
-    let board = b.label(Class::TextLabel, "Board", "KNOCKOUTS", (0.8, 0.14, 0.19, 0.26), 16.0);
-    let _ = board;
     let feed = b.label(Class::TextLabel, "Feed", "", (0.3, 0.135, 0.4, 0.05), 20.0);
     {
         let g = b.dm.gui_mut(feed).unwrap();

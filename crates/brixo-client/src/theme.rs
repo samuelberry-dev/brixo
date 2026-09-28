@@ -171,6 +171,8 @@ pub mod site {
 /// Styles an app like the website: white boxes with blue edges, dark ink,
 /// small text (Brixo Studio).
 pub fn apply_site(ctx: &egui::Context) {
+    // The in-game HUD's fonts, too.
+    crate::classic::install_fonts(ctx);
     let mut style = (*ctx.style()).clone();
     let v = &mut style.visuals;
     *v = egui::Visuals::light();

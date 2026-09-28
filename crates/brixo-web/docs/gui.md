@@ -134,7 +134,7 @@ on player_joined(p)
 end
 ```
 
-(Brixo Player already shows each player their own health at the bottom left. This is for your own bars: stamina, a boss's health, a capture meter.)
+(Brixo Player already shows each player their own health: the classic upright bar at the right edge of the screen. This is for your own bars: stamina, a boss's health, a capture meter. Keep the top-left corner clear: the toolbar and chat are there.)
 
 ## Hiding and showing
 

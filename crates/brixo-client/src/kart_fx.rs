@@ -5,10 +5,9 @@
 //! sees every kart the same way.
 
 use brixo_core::{is_kart, kart_chassis, Attribute, DataModel, InstanceId};
-use egui::{Color32, FontId};
+use egui::Color32;
 use glam::Vec3;
 
-use crate::theme;
 
 fn num(world: &DataModel, id: InstanceId, key: &str) -> f32 {
     match world.get(id).and_then(|i| i.attributes.get(key)) {
@@ -103,27 +102,28 @@ pub fn engine_pitch(world: &DataModel, me: Option<InstanceId>) -> Option<f32> {
     Some(0.8 + speed / 70.0 * 0.65 + boost)
 }
 
-/// While you drive: a speed dial in the bottom-right corner, with the drift
-/// charge under it.
+/// While you drive: the speed in the bottom-right corner (left of the
+/// health bar), with the drift charge under it, in the classic style.
 pub fn draw_hud(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me: Option<InstanceId>) {
+    use crate::classic;
     let Some(kart) = driving(world, me) else { return };
     let speed = num(world, kart, "speed");
     let drift = num(world, kart, "drift");
     let boosting = flag(world, kart, "boosting");
-    let size = egui::vec2(150.0, 64.0);
-    let rect = egui::Rect::from_min_size(area.right_bottom() - size - egui::vec2(14.0, 14.0), size);
+    let size = egui::vec2(132.0, 58.0);
+    let rect = classic::snap(egui::Rect::from_min_size(area.right_bottom() - size - egui::vec2(48.0, 10.0), size));
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("kart hud")));
-    p.rect_filled(rect, 8.0, Color32::from_rgba_unmultiplied(13, 42, 74, 215));
-    p.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, Color32::from_white_alpha(60)), egui::StrokeKind::Inside);
-    let color = if boosting { theme::site::GOLD } else { Color32::WHITE };
-    theme::paint_label(&p, rect.left_top() + egui::vec2(14.0, 30.0), egui::Align2::LEFT_CENTER, &format!("{}", speed.round() as i32), FontId::proportional(34.0), color);
-    p.text(rect.left_top() + egui::vec2(88.0, 34.0), egui::Align2::LEFT_CENTER, if boosting { "BOOST" } else { "SPEED" }, FontId::proportional(12.0), color);
-    // Drift charge: a bar in the spark colour.
-    let bar = egui::Rect::from_min_size(rect.left_bottom() + egui::vec2(12.0, -14.0), egui::vec2(size.x - 24.0, 6.0));
-    p.rect_filled(bar, 3.0, Color32::from_white_alpha(35));
+    classic::panel(&p, rect);
+    let color = if boosting { Color32::from_rgb(255, 170, 30) } else { Color32::WHITE };
+    classic::text(&p, rect.right_top() + egui::vec2(-58.0, 23.0), egui::Align2::RIGHT_CENTER, &format!("{}", speed.round() as i32), classic::bold(30.0), color);
+    classic::text(&p, rect.right_top() + egui::vec2(-52.0, 27.0), egui::Align2::LEFT_CENTER, if boosting { "BOOST" } else { "SPEED" }, classic::bold(12.0), color);
+    // Drift charge: a sunken bar filling in the spark colour.
+    let bar = egui::Rect::from_min_size(rect.left_bottom() + egui::vec2(9.0, -17.0), egui::vec2(size.x - 18.0, 9.0));
+    classic::bevel(&p, bar, Color32::from_gray(45), true);
     if drift > 0.0 {
         let fill = (drift / 2.0).clamp(0.15, 1.0);
-        p.rect_filled(egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * fill, bar.height())), 3.0, spark_color(drift));
+        let inside = bar.shrink(2.0);
+        p.rect_filled(classic::snap(egui::Rect::from_min_size(inside.min, egui::vec2(inside.width() * fill, inside.height()))), 0.0, spark_color(drift));
     }
 }
 

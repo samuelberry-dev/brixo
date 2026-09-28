@@ -8,9 +8,9 @@
 //! Brixo Player and Studio's Play both draw it from their copy of the world.
 
 use brixo_core::{leaderboard_columns, leaderboard_title, Attribute, DataModel, InstanceId};
-use egui::{Color32, FontId};
+use egui::Color32;
 
-use crate::theme::{self, site, Gloss};
+use crate::theme;
 
 /// One player's line.
 #[derive(Debug, Clone, PartialEq)]
@@ -151,15 +151,18 @@ pub fn team_color(team: &str) -> Color32 {
     NAMED.iter().find(|(n, _)| t.contains(n)).map(|(_, c)| theme::rgb(*c)).unwrap_or(Color32::from_rgb(99, 95, 98))
 }
 
-const ROW_H: f32 = 20.0;
+const ROW_H: f32 = 19.0;
+const HEAD_H: f32 = 22.0;
 const NAME_W: f32 = 132.0;
 const COL_W: f32 = 64.0;
-const ARROW_W: f32 = 24.0;
+const ARROW_W: f32 = 22.0;
 
 /// Draws the board in the top-right corner of `area` (the window, or
-/// Studio's view), if the game has one. `open` is whether it's unfolded;
-/// the arrow on its title bar flips it.
+/// Studio's view), if the game has one: the classic list, bold white names
+/// outlined in black on see-through black, yours in yellow. `open` is
+/// whether it's unfolded; clicking its heading flips it.
 pub fn draw(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me: Option<InstanceId>, open: &mut bool) {
+    use crate::classic;
     if !wanted(world) {
         return;
     }
@@ -167,30 +170,35 @@ pub fn draw(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me: Option
     // Name, the columns, and room for the fold arrow.
     let width = NAME_W + COL_W * b.headings.len() as f32 + ARROW_W;
     egui::Area::new(egui::Id::new("leaderboard"))
-        .fixed_pos(area.right_top() + egui::vec2(-12.0 - width, 10.0))
+        .fixed_pos((area.right_top() + egui::vec2(-8.0 - width, 6.0)).round())
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-            // Title bar: glossy blue, the headings, and the fold arrow.
-            let (bar, response) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+            let lines: usize = if *open { b.groups.iter().map(|g| g.rows.len() + g.team.is_some() as usize).sum() } else { 0 };
+            let body_h = if *open { lines as f32 * ROW_H + 5.0 } else { 0.0 };
+            let (whole, _) = ui.allocate_exact_size(egui::vec2(width, HEAD_H + body_h), egui::Sense::hover());
+            let head = egui::Rect::from_min_size(whole.min, egui::vec2(width, HEAD_H));
+            let response = ui.interact(head, ui.id().with("fold"), egui::Sense::click());
             let p = ui.painter();
-            Gloss::Blue.paint(p, bar, if response.hovered() { 1.0 } else { 0.0 });
-            p.rect_stroke(bar, 3.0, egui::Stroke::new(1.0, site::NAVY), egui::StrokeKind::Inside);
-            let font = FontId::proportional(12.5);
-            theme::paint_label(p, bar.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, "Players", font.clone(), Color32::WHITE);
+            classic::panel(p, whole);
+            // The heading: a little darker, with a line under it.
+            p.rect_filled(head.shrink(1.0), 0.0, egui::Color32::from_black_alpha(if response.hovered() { 40 } else { 70 }));
+            let font = classic::bold(13.0);
+            classic::text(p, head.left_center() + egui::vec2(7.0, 0.0), egui::Align2::LEFT_CENTER, "Players", font.clone(), Color32::WHITE);
             if *open {
                 for (i, h) in b.headings.iter().enumerate() {
-                    let x = bar.left() + NAME_W + COL_W * (i as f32 + 1.0);
-                    theme::paint_label(p, egui::pos2(x, bar.center().y), egui::Align2::RIGHT_CENTER, h, font.clone(), Color32::WHITE);
+                    let x = head.left() + NAME_W + COL_W * (i as f32 + 1.0);
+                    classic::text(p, egui::pos2(x, head.center().y), egui::Align2::RIGHT_CENTER, h, font.clone(), Color32::WHITE);
                 }
+                p.rect_filled(egui::Rect::from_min_size(egui::pos2(head.left() + 1.0, head.bottom() - 1.0), egui::vec2(width - 2.0, 1.0)), 0.0, egui::Color32::from_white_alpha(70));
             }
             // The fold arrow: up when open (fold it up), down when folded.
-            let c = bar.right_center() - egui::vec2(ARROW_W / 2.0, 0.0);
-            let (dx, dy) = (5.0, if *open { -3.0 } else { 3.0 });
+            let c = head.right_center() - egui::vec2(ARROW_W / 2.0, 0.0);
+            let (dx, dy) = (4.5, if *open { -2.5 } else { 2.5 });
             p.add(egui::Shape::convex_polygon(
                 vec![egui::pos2(c.x - dx, c.y - dy), egui::pos2(c.x + dx, c.y - dy), egui::pos2(c.x, c.y + dy)],
                 Color32::WHITE,
-                egui::Stroke::NONE,
+                egui::Stroke::new(1.0, Color32::BLACK),
             ));
             if response.on_hover_text("Tab folds the leaderboard away (and back)").clicked() {
                 *open = !*open;
@@ -198,36 +206,31 @@ pub fn draw(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me: Option
             if !*open {
                 return;
             }
-            // The rows, on see-through navy.
-            let lines: usize = b.groups.iter().map(|g| g.rows.len() + g.team.is_some() as usize).sum();
-            let (body, _) = ui.allocate_exact_size(egui::vec2(width, lines as f32 * ROW_H + 6.0), egui::Sense::hover());
-            let p = ui.painter();
-            p.rect_filled(body, egui::CornerRadius { nw: 0, ne: 0, sw: 3, se: 3 }, Color32::from_rgba_unmultiplied(13, 42, 74, 215));
-            let mut y = body.top() + 3.0;
-            let small = FontId::proportional(12.5);
+            let mut y = head.bottom() + 2.0;
+            let small = classic::bold(13.0);
             for g in &b.groups {
                 if let Some(team) = &g.team {
-                    let r = egui::Rect::from_min_size(egui::pos2(body.left() + 2.0, y + 1.0), egui::vec2(width - 4.0, ROW_H - 2.0));
+                    let r = egui::Rect::from_min_size(egui::pos2(whole.left() + 2.0, y + 1.0), egui::vec2(width - 4.0, ROW_H - 2.0));
                     let c = team_color(team);
-                    p.rect_filled(r, 2.0, c.gamma_multiply(0.85));
-                    let ink = if c.r() as u32 + c.g() as u32 + c.b() as u32 > 540 { site::INK } else { Color32::WHITE };
-                    theme::paint_label(p, egui::pos2(r.left() + 6.0, r.center().y), egui::Align2::LEFT_CENTER, team, small.clone(), ink);
+                    p.rect_filled(classic::snap(r), 0.0, c.gamma_multiply(0.8));
+                    classic::edge(p, r, egui::Color32::from_black_alpha(140));
+                    classic::text(p, egui::pos2(r.left() + 6.0, r.center().y), egui::Align2::LEFT_CENTER, team, small.clone(), Color32::WHITE);
                     if let Some(t) = &g.total {
-                        p.text(egui::pos2(body.left() + NAME_W + COL_W, r.center().y), egui::Align2::RIGHT_CENTER, t, small.clone(), ink);
+                        classic::text(p, egui::pos2(whole.left() + NAME_W + COL_W, r.center().y), egui::Align2::RIGHT_CENTER, t, small.clone(), Color32::WHITE);
                     }
                     y += ROW_H;
                 }
                 for row in &g.rows {
-                    let r = egui::Rect::from_min_size(egui::pos2(body.left(), y), egui::vec2(width, ROW_H));
+                    let r = egui::Rect::from_min_size(egui::pos2(whole.left(), y), egui::vec2(width, ROW_H));
                     if row.me {
-                        p.rect_filled(r.shrink2(egui::vec2(2.0, 1.0)), 2.0, Color32::from_rgba_unmultiplied(77, 143, 214, 110));
+                        p.rect_filled(classic::snap(r.shrink2(egui::vec2(2.0, 0.0))), 0.0, egui::Color32::from_white_alpha(28));
                     }
-                    let color = if row.me { site::GOLD } else { Color32::WHITE };
+                    let color = if row.me { classic::YELLOW } else { Color32::WHITE };
                     let name: String = row.name.chars().take(18).collect();
-                    p.text(egui::pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, name, small.clone(), color);
+                    classic::text(p, egui::pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, &name, small.clone(), color);
                     for (i, v) in row.values.iter().enumerate() {
                         let x = r.left() + NAME_W + COL_W * (i as f32 + 1.0);
-                        p.text(egui::pos2(x, r.center().y), egui::Align2::RIGHT_CENTER, v, small.clone(), color);
+                        classic::text(p, egui::pos2(x, r.center().y), egui::Align2::RIGHT_CENTER, v, small.clone(), color);
                     }
                     y += ROW_H;
                 }

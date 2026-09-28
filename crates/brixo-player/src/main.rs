@@ -147,6 +147,8 @@ enum Screen {
 /// What the UI asked for this frame, applied once it's done.
 enum Action {
     Leave,
+    /// Fullscreen on or off.
+    Fullscreen,
     /// Knock yourself out, to come back at a spawn (when stuck).
     Reset,
 }
@@ -287,8 +289,20 @@ impl Player {
         self.quit = true;
     }
 
+    /// Fullscreen on or off (the toolbar's button, and F11).
+    fn toggle_fullscreen(&mut self) {
+        if let Some(gpu) = &self.gpu {
+            let full = gpu.window.fullscreen().is_some();
+            gpu.window.set_fullscreen(if full { None } else { Some(winit::window::Fullscreen::Borderless(None)) });
+        }
+    }
+
     /// Esc and F9, on the moment they're pressed.
     fn key_pressed(&mut self, code: KeyCode) {
+        if code == KeyCode::F11 {
+            self.toggle_fullscreen();
+            return;
+        }
         if let Screen::Playing(s) = &mut self.screen {
             if self.chat_open {
                 if code == KeyCode::Escape {
@@ -302,7 +316,10 @@ impl Player {
                     self.chat_open = true;
                     self.keys.clear();
                 }
-                KeyCode::Escape => s.paused = !s.paused,
+                KeyCode::Escape => {
+                    s.paused = !s.paused;
+                    self.pause_tab = menus::PauseTab::Game;
+                }
                 // Shift lock, like Roblox: Shift switches it on and off.
                 KeyCode::ShiftLeft | KeyCode::ShiftRight if self.settings.shift_lock && !s.paused && !s.lost => {
                     s.shift_lock = !s.shift_lock;
@@ -384,7 +401,25 @@ impl Player {
             };
             // Test hook for filming: queued actions (see pending_actions).
             let (mut queued_equip, mut queued_use) = (None, false);
+            let mut queued_say = Vec::new();
             for line in pending_actions() {
+                // "say ..." chats; "menu", "help" and "settings" open the menu.
+                if let Some(text) = line.strip_prefix("say ") {
+                    queued_say.push(text.to_string());
+                    continue;
+                }
+                let page = match line.as_str() {
+                    "menu" => Some(menus::PauseTab::Game),
+                    "help" => Some(menus::PauseTab::Controls),
+                    "settings" => Some(menus::PauseTab::Settings),
+                    "leave" => Some(menus::PauseTab::Leave),
+                    _ => None,
+                };
+                if let Some(page) = page {
+                    s.paused = true;
+                    self.pause_tab = page;
+                    continue;
+                }
                 let mut words = line.split_whitespace();
                 match (words.next(), words.next().and_then(|n| n.parse::<usize>().ok())) {
                     // "equip N" is the hotbar key N (1-9).
@@ -432,6 +467,9 @@ impl Player {
                         if queued_use {
                             game.activate(me);
                         }
+                        for text in &queued_say {
+                            game.chat(me, text);
+                        }
                     }
                     game.set_input(input);
                     game.step(dt as f64);
@@ -457,6 +495,9 @@ impl Player {
                     }
                     if queued_use {
                         net.activate();
+                    }
+                    for text in &queued_say {
+                        net.chat(text);
                     }
                     // The server runs the game; we send keys and draw its world.
                     net.send_input(input);
@@ -512,6 +553,7 @@ impl Player {
         let camera = &mut self.camera;
         let (chat, chat_open, chat_text) = (&self.chat, &mut self.chat_open, &mut self.chat_text);
         let mut said: Option<String> = None;
+        let mut opened_chat = false;
         // Clicks on the game's GUI and hotbar, and whether a click swung a
         // tool (and where in the world the mouse pointed).
         let mut gui_input: Option<(GuiEvents, Option<brixo_core::Vec3>)> = None;
@@ -553,34 +595,14 @@ impl Player {
                     events.hotbar = events.hotbar.or_else(|| hotbar_key(ctx));
                 }
                 if !cinematic() {
-                    let players: Vec<String> = s
-                        .view
-                        .walk()
-                        .into_iter()
-                        .filter(|id| s.view.player(*id).is_some())
-                        .filter_map(|id| s.view.get(id).map(|i| i.name.clone()))
-                        .collect();
                     let shift_locked = s.shift_lock;
-                    menus::game_ui(ctx, menus::Hud { session: s, action: &mut action, settings, tab: pause_tab, shift_locked, players });
+                    menus::game_ui(ctx, menus::Hud { session: s, action: &mut action, settings, tab: pause_tab, shift_locked });
                 }
-                if *chat_open {
-                    egui::Area::new(egui::Id::new("chat input"))
-                        .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -34.0])
-                        .show(ctx, |ui| {
-                            let edit = ui.add(
-                                egui::TextEdit::singleline(chat_text)
-                                    .desired_width(420.0)
-                                    .hint_text("Say something (Enter to send, Esc to cancel)"),
-                            );
-                            // Check for Enter *before* keeping the focus:
-                            // losing focus is how a text box reports Enter.
-                            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                said = Some(std::mem::take(chat_text));
-                                *chat_open = false;
-                            } else {
-                                edit.request_focus();
-                            }
-                        });
+                // The chat bar under the toolbar: click it (or press /) to talk.
+                if !cinematic() && !s.lost {
+                    let was_open = *chat_open;
+                    said = brixo_client::classic::chat_bar(ctx, area.left_top() + egui::vec2(5.0, brixo_client::classic::TOP_BAR), 330.0, chat_open, chat_text);
+                    opened_chat = *chat_open && !was_open;
                 }
                 let swing = live
                     && !events.pointer_on_gui
@@ -789,8 +811,13 @@ impl Player {
             gpu.egui_renderer.free_texture(id);
         }
 
+        if opened_chat {
+            // Clicked the chat bar: what's held down stops (you're typing).
+            self.keys.clear();
+        }
         match action {
             Some(Action::Leave) => self.leave(),
+            Some(Action::Fullscreen) => self.toggle_fullscreen(),
             Some(Action::Reset) => {
                 if let Screen::Playing(s) = &mut self.screen {
                     match &mut s.backend {

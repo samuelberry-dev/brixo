@@ -1048,7 +1048,7 @@ fn make_hud(p)
     hud = create("TextLabel", p)
     hud.name = "Race HUD"
     hud.x = 0.01
-    hud.y = 0.12
+    hud.y = 0.22
     hud.width = 0.2
     hud.height = 0.11
     hud.text_size = 18
@@ -2372,7 +2372,7 @@ pub fn brickport_speedway() -> DataModel {
     b.dm.gui_mut(banner).unwrap().visible = false;
     let results = b.label(root, "Results", "", (0.7, 0.33, 0.28, 0.38), 19.0, GOLD, Some(NAVY));
     b.dm.gui_mut(results).unwrap().visible = false;
-    let standings = b.label(root, "Standings", "", (0.01, 0.25, 0.16, 0.3), 15.0, (255, 255, 255), Some((20, 24, 36)));
+    let standings = b.label(root, "Standings", "", (0.01, 0.35, 0.16, 0.3), 15.0, (255, 255, 255), Some((20, 24, 36)));
     b.dm.gui_mut(standings).unwrap().visible = false;
     b.label(root, "Title", "BRICKPORT SPEEDWAY", (0.39, 0.012, 0.22, 0.05), 24.0, GOLD, Some(NAVY));
     b.label(root, "Help", "F get in / out of a kart · W/S drive · A/D steer · hold Space to drift, let go to boost · E item · R back on track · G sit out", (0.14, 0.94, 0.72, 0.04), 14.0, (255, 255, 255), Some((20, 24, 36)));

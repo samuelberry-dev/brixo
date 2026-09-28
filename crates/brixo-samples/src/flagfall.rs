@@ -476,19 +476,6 @@ every 0.1 seconds
             cloth.beacon_text = team + " flag: dropped (" + back_in + ")"
         end
     end
-    board = "CAPTURES / RETURNS / KOs"
-    rows = 1
-    for team in TEAMS do
-        for someone in players() do
-            if someone.team == team then
-                board = board + "\n" + someone.name + " (" + team + ")   " + someone.captures + " / " + someone.returns + " / " + someone.kos
-                rows += 1
-            end
-        end
-    end
-    board_label = find("Board")
-    board_label.text = board
-    board_label.height = 0.02 + 0.026 * rows
     if now - feed_time > 4 then
         find("Feed").visible = false
     end
@@ -1039,8 +1026,9 @@ pub fn flagfall() -> DataModel {
     b.sound(root, "Victory", synth::victory(), 1.0);
     b.sound(root, "Round Horn", synth::horn(), 0.8);
 
-    // The screen: score, clock, flag status, feed, scoreboard.
-    let title = b.label(root, "Title", "FLAGFALL", (0.012, 0.015, 0.11, 0.045), 22.0, (24, 24, 30));
+    // The screen: score, clock, flag status, feed. (The leaderboard is
+    // the built-in one: `leaderboard(...)` in the script.)
+    let title = b.label(root, "Title", "FLAGFALL", (0.012, 0.945, 0.11, 0.045), 22.0, (24, 24, 30));
     b.dm.gui_mut(title).unwrap().text_color = Color::new(255, 214, 90);
     b.label(root, "Red Score", "RED  0", (0.355, 0.012, 0.1, 0.06), 28.0, (196, 40, 28));
     b.label(root, "Clock", "8:00", (0.455, 0.012, 0.09, 0.06), 26.0, (24, 24, 30));
@@ -1049,7 +1037,6 @@ pub fn flagfall() -> DataModel {
     b.label(root, "Blue Flag Status", "Blue flag: home", (0.5, 0.076, 0.215, 0.036), 15.0, (10, 42, 80));
     let feed = b.label(root, "Feed", "", (0.3, 0.125, 0.4, 0.048), 19.0, (60, 60, 66));
     b.dm.gui_mut(feed).unwrap().visible = false;
-    b.label(root, "Board", "", (0.8, 0.13, 0.19, 0.28), 14.0, (24, 24, 30));
     let banner = b.label(root, "Banner", "", (0.25, 0.33, 0.5, 0.11), 42.0, (60, 60, 66));
     b.dm.gui_mut(banner).unwrap().visible = false;
     b.label(root, "Help", "Take their flag to your stand. First to 3 wins.", (0.3, 0.955, 0.4, 0.035), 14.0, (24, 24, 30));

@@ -68,21 +68,36 @@ pub fn draw_gui(
         };
         let is_button = inst.class == Class::TextButton;
         let hovered = interactive && is_button && pointer.is_some_and(|p| rect.contains(p));
+        let pressed = hovered && ctx.input(|i| i.pointer.primary_down());
+        // The classic look: square, with a hard one-pixel edge; buttons
+        // bevelled, and pushed in while pressed.
         if g.background {
-            let mut bg = color(g.background_color);
-            if hovered {
-                bg = bg.gamma_multiply(1.25);
+            let bg = color(g.background_color);
+            if is_button {
+                let face = if hovered && !pressed { bg.gamma_multiply(1.12) } else { bg };
+                crate::classic::bevel(&painter, rect, face, pressed);
+                crate::classic::edge(&painter, rect.expand(1.0), crate::classic::EDGE);
+            } else {
+                painter.rect_filled(crate::classic::snap(rect), 0.0, bg);
+                crate::classic::edge(&painter, rect, crate::classic::EDGE);
             }
-            painter.rect_filled(rect, if is_button { 6.0 } else { 3.0 }, bg);
         }
         if !g.text.is_empty() {
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                &g.text,
-                egui::FontId::proportional(g.text_size),
-                color(g.text_color),
-            );
+            let at = rect.center() + if pressed { egui::vec2(1.0, 1.0) } else { egui::Vec2::ZERO };
+            // Shrunk to fit its box if it's too wide (bold text is wide).
+            let mut size = g.text_size;
+            let wide = painter.layout_no_wrap(g.text.clone(), crate::classic::bold(size), egui::Color32::WHITE).size().x;
+            if wide > rect.width() - 6.0 && rect.width() > 12.0 {
+                size = (size * (rect.width() - 6.0) / wide).max(size * 0.6);
+            }
+            let font = crate::classic::bold(size);
+            let ink = color(g.text_color);
+            if g.background {
+                // On its own background the text needs no outline.
+                painter.text(at, egui::Align2::CENTER_CENTER, &g.text, font, ink);
+            } else {
+                crate::classic::text(&painter, at, egui::Align2::CENTER_CENTER, &g.text, font, ink);
+            }
         }
         if hovered {
             events.pointer_on_gui = true;
@@ -144,7 +159,7 @@ pub fn draw_beacons(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me
         // A diamond, outlined so it reads on any background.
         let r = if on_screen { 9.0 } else { 11.0 };
         let diamond = vec![at + egui::vec2(0.0, -r), at + egui::vec2(r, 0.0), at + egui::vec2(0.0, r), at + egui::vec2(-r, 0.0)];
-        painter.add(egui::Shape::convex_polygon(diamond, col, egui::Stroke::new(2.0, egui::Color32::WHITE)));
+        painter.add(egui::Shape::convex_polygon(diamond, col, egui::Stroke::new(2.0, egui::Color32::BLACK)));
         if !on_screen {
             // An arrow on the outside, pointing the way to turn.
             let out = (at - area.center()).normalized();
@@ -165,14 +180,14 @@ pub fn draw_beacons(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me
             at.x.clamp(area.min.x + 90.0, area.max.x - 90.0),
             if below { at.y + r + 12.0 } else { at.y - r - 12.0 },
         );
-        let font = egui::FontId::proportional(15.0);
-        painter.text(text_at + egui::vec2(1.0, 1.0), egui::Align2::CENTER_CENTER, &text, font.clone(), egui::Color32::from_black_alpha(200));
-        painter.text(text_at, egui::Align2::CENTER_CENTER, &text, font, egui::Color32::WHITE);
+        crate::classic::text(&painter, text_at, egui::Align2::CENTER_CENTER, &text, crate::classic::bold(14.0), egui::Color32::WHITE);
     }
 }
 
-/// Draws `me`'s backpack as numbered slots along the bottom of `area`.
+/// Draws `me`'s backpack as numbered slots along the bottom of `area`:
+/// classic see-through black squares, the tool in hand lit up and framed.
 pub fn draw_hotbar(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me: InstanceId, events: &mut GuiEvents) {
+    use crate::classic;
     let tools = backpack(world, me);
     if tools.is_empty() {
         return;
@@ -180,21 +195,31 @@ pub fn draw_hotbar(ctx: &egui::Context, area: egui::Rect, world: &DataModel, me:
     let equipped = world.player(me).and_then(|p| p.equipped);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("brixo hotbar")));
     let (pointer, clicked) = ctx.input(|i| (i.pointer.hover_pos(), i.pointer.primary_clicked()));
-    let (w, gap) = (72.0, 8.0);
-    let total = tools.len() as f32 * (w + gap) - gap;
-    let mut x = area.center().x - total / 2.0;
+    let (w, gap) = (64.0, 4.0);
+    let shown = tools.len().min(9);
+    let total = shown as f32 * (w + gap) - gap;
+    let mut x = (area.center().x - total / 2.0).round();
     for (slot, tool) in tools.iter().enumerate().take(9) {
-        let rect = egui::Rect::from_min_size(egui::pos2(x, area.max.y - w - 70.0), egui::vec2(w, w));
+        let rect = egui::Rect::from_min_size(egui::pos2(x, (area.max.y - w - 70.0).round()), egui::vec2(w, w));
         let held = equipped == Some(*tool);
         let hovered = pointer.is_some_and(|p| rect.contains(p));
-        let bg = if held { egui::Color32::from_rgb(13, 105, 172) } else { egui::Color32::from_black_alpha(160) };
-        painter.rect_filled(rect, 6.0, if hovered && !held { egui::Color32::from_black_alpha(200) } else { bg });
+        painter.rect_filled(rect, 0.0, if held {
+            egui::Color32::from_rgba_premultiplied(40, 40, 40, 190)
+        } else if hovered {
+            egui::Color32::from_black_alpha(165)
+        } else {
+            classic::PANEL
+        });
         if held {
-            painter.rect_stroke(rect, 6.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+            classic::edge(&painter, rect, egui::Color32::WHITE);
+            classic::edge(&painter, rect.shrink(1.0), egui::Color32::WHITE);
+            classic::edge(&painter, rect.expand(1.0), egui::Color32::BLACK);
+        } else {
+            classic::edge(&painter, rect, egui::Color32::from_gray(if hovered { 200 } else { 120 }));
         }
-        painter.text(rect.left_top() + egui::vec2(6.0, 4.0), egui::Align2::LEFT_TOP, format!("{}", slot + 1), egui::FontId::proportional(13.0), egui::Color32::from_gray(210));
+        classic::text(&painter, rect.left_top() + egui::vec2(5.0, 3.0), egui::Align2::LEFT_TOP, &format!("{}", slot + 1), classic::bold(13.0), egui::Color32::WHITE);
         let name = world.get(*tool).map(|i| i.name.clone()).unwrap_or_default();
-        painter.text(rect.center() + egui::vec2(0.0, 6.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(14.0), egui::Color32::WHITE);
+        classic::text_wrapped(&painter, rect.center() + egui::vec2(0.0, 5.0), &name, classic::bold(12.0), egui::Color32::WHITE, w - 6.0);
         if hovered {
             events.pointer_on_gui = true;
             if clicked {
@@ -271,23 +296,34 @@ impl ChatLog {
         }
     }
 
-    /// Draws the chat box (bottom left, above the health bar) and bubbles.
+    /// Draws the chat (top left, under the toolbar and chat bar, like the
+    /// classic chat: names in colour, words in white, outlined, no box) and
+    /// bubbles over heads.
     pub fn draw(&self, ctx: &egui::Context, area: egui::Rect, world: &DataModel, project: Project) {
+        use crate::classic;
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("brixo chat")));
-        let font = egui::FontId::proportional(16.0);
-        // The box: newest at the bottom, fading out with age.
-        let mut y = area.max.y - 60.0;
-        for (at, _, name, text) in self.lines.iter().rev().take(8) {
+        let font = classic::bold(14.0);
+        // Oldest at the top, newest at the bottom, fading out with age.
+        let recent: Vec<_> = self.lines.iter().rev().take(8).take_while(|l| l.0.elapsed().as_secs_f32() <= CHAT_SHOWN).collect();
+        let mut y = area.min.y + classic::TOP_BAR + classic::CHAT_BAR + 6.0;
+        for (at, _, name, text) in recent.into_iter().rev() {
             let age = at.elapsed().as_secs_f32();
-            if age > CHAT_SHOWN {
-                break;
-            }
             let alpha = (1.0 - (age - CHAT_SHOWN + 3.0).max(0.0) / 3.0).clamp(0.0, 1.0);
-            let galley = painter.layout(format!("{name}: {text}"), font.clone(), egui::Color32::WHITE.gamma_multiply(alpha), 420.0);
-            y -= galley.size().y + 6.0;
-            let rect = egui::Rect::from_min_size(egui::pos2(area.min.x + 12.0, y), galley.size() + egui::vec2(12.0, 4.0));
-            painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha((150.0 * alpha) as u8));
-            painter.galley(rect.min + egui::vec2(6.0, 2.0), galley, egui::Color32::WHITE);
+            let x = area.min.x + 7.0;
+            let label = format!("{name}: ");
+            let name_rect = classic::text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP, &label, font.clone(), classic::name_color(name).gamma_multiply(alpha));
+            let rest = egui::pos2(name_rect.right(), y);
+            // The words, wrapped to the chat's width.
+            let wrap = (area.width() * 0.25).clamp(200.0, 340.0) - (rest.x - x);
+            let layout = |c: egui::Color32| painter.layout(text.clone(), font.clone(), c, wrap.max(80.0));
+            let words = layout(egui::Color32::WHITE.gamma_multiply(alpha));
+            let outline = layout(egui::Color32::from_black_alpha((215.0 * alpha) as u8));
+            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+                painter.galley(rest + egui::vec2(dx, dy), outline.clone(), egui::Color32::BLACK);
+            }
+            let h = words.size().y.max(name_rect.height());
+            painter.galley(rest, words, egui::Color32::WHITE);
+            y += h + 2.0;
         }
         // Bubbles: each player's latest message, over their head.
         let mut latest: Vec<&(std::time::Instant, InstanceId, String, String)> = Vec::new();
@@ -300,16 +336,16 @@ impl ChatLog {
             let Some(p) = world.player(*from) else { continue };
             let head = glam::Vec3::new(p.body.position.x, p.body.position.y + 3.8, p.body.position.z);
             let Some(at) = project(head) else { continue };
-            let galley = painter.layout(text.clone(), egui::FontId::proportional(17.0), egui::Color32::from_rgb(20, 20, 26), 240.0);
+            // A classic bubble: white, black-edged, with a tail.
+            let galley = painter.layout(text.clone(), crate::classic::plain(16.0), egui::Color32::BLACK, 240.0);
             let size = galley.size() + egui::vec2(18.0, 10.0);
-            let rect = egui::Rect::from_center_size(at - egui::vec2(0.0, size.y / 2.0), size);
-            painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(250, 250, 245));
-            painter.add(egui::Shape::convex_polygon(
-                vec![rect.center_bottom() + egui::vec2(-6.0, 0.0), rect.center_bottom() + egui::vec2(6.0, 0.0), rect.center_bottom() + egui::vec2(0.0, 8.0)],
-                egui::Color32::from_rgb(250, 250, 245),
-                egui::Stroke::NONE,
-            ));
-            painter.galley(rect.min + egui::vec2(9.0, 5.0), galley, egui::Color32::from_rgb(20, 20, 26));
+            let rect = crate::classic::snap(egui::Rect::from_center_size(at - egui::vec2(0.0, size.y / 2.0 + 8.0), size));
+            let tail = vec![rect.center_bottom() + egui::vec2(-7.0, -1.0), rect.center_bottom() + egui::vec2(7.0, -1.0), rect.center_bottom() + egui::vec2(0.0, 9.0)];
+            painter.rect(rect, 6.0, egui::Color32::WHITE, egui::Stroke::new(1.0, egui::Color32::BLACK), egui::StrokeKind::Inside);
+            painter.add(egui::Shape::convex_polygon(tail.clone(), egui::Color32::WHITE, egui::Stroke::NONE));
+            painter.line_segment([tail[0] + egui::vec2(0.0, 1.0), tail[2]], egui::Stroke::new(1.0, egui::Color32::BLACK));
+            painter.line_segment([tail[1] + egui::vec2(0.0, 1.0), tail[2]], egui::Stroke::new(1.0, egui::Color32::BLACK));
+            painter.galley(rect.min + egui::vec2(9.0, 5.0), galley, egui::Color32::BLACK);
         }
     }
 }

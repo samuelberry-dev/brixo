@@ -93,7 +93,7 @@ fn play(seconds: f64, seed: u64) -> (usize, f64, f64, f64, String) {
     let caps: f64 = ids.iter().map(|id| num(&w, *id, "captures")).sum();
     let kos: f64 = ids.iter().map(|id| num(&w, *id, "kos")).sum();
     let rets: f64 = ids.iter().map(|id| num(&w, *id, "returns")).sum();
-    let board = w.gui(w.find_first("Board").unwrap()).unwrap().text.clone();
+    let board = summary(&w, &ids);
     (pickups, caps, kos, rets, board)
 }
 
@@ -107,4 +107,12 @@ fn bots_play_real_capture_the_flag() {
     // way: some end with a capture, some with every run stopped short and
     // the flag sent home. Either shows the whole loop working.
     assert!(caps >= 1.0 || rets >= 2.0, "and carry them home, or get them back: {caps} captures, {rets} returns");
+}
+
+/// Who did what, for the log.
+fn summary(w: &brixo_core::DataModel, ids: &[brixo_core::InstanceId]) -> String {
+    ids.iter()
+        .map(|id| format!("{}: {} / {} / {}", w.get(*id).map(|i| i.name.clone()).unwrap_or_default(), num(w, *id, "captures"), num(w, *id, "returns"), num(w, *id, "kos")))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

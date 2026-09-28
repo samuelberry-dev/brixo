@@ -1,6 +1,7 @@
 //! What every Brixo program that plays games shares: the studio's Play
 //! mode and the standalone player both use this, so games feel the same.
 
+pub mod classic;
 pub mod filming;
 pub mod gui;
 pub mod install;

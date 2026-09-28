@@ -63,7 +63,7 @@ on player_joined(p)
     cash.name = "Cash"
     cash.text = "$0"
     cash.x = 0.02
-    cash.y = 0.1
+    cash.y = 0.2
     cash.width = 0.16
     cash.height = 0.08
     cash.text_size = 34

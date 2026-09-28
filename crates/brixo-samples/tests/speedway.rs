@@ -123,8 +123,13 @@ fn a_whole_race_with_bots() {
     assert!(text(&game.world(), me, "item").is_none(), "used up");
     set_item(&mut game, "mine");
     game.key(me, "e");
-    run(&mut game, 0.2);
-    assert_eq!(effects(&game, "Spike Mine"), 1, "a mine");
+    // (Watched for a moment: a kart behind can set it off straight away.)
+    let mut seen = false;
+    for _ in 0..12 {
+        run(&mut game, 1.0 / 30.0);
+        seen |= effects(&game, "Spike Mine") == 1;
+    }
+    assert!(seen, "a mine");
     set_item(&mut game, "rocket");
     game.key(me, "e");
     run(&mut game, 0.2);
