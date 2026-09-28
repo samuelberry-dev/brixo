@@ -123,6 +123,61 @@ pub fn bevel(p: &Painter, r: Rect, face: Color32, sunken: bool) {
     px(p, rr - 2.0, t + 1.0, rr - 1.0, b - 1.0, br2);
 }
 
+/// The website's glossy finish in any colour, for games' own labels and
+/// buttons: a lighter top half, a darker bottom half, a shine along the
+/// top and a darker edge. `hot` (0 to 1) brightens it for a hovered
+/// button; `pressed` turns the shine over, so it looks pushed in.
+pub fn gloss(p: &Painter, r: Rect, c: Color32, hot: f32, pressed: bool) {
+    let r = snap(r);
+    if r.width() < 2.0 || r.height() < 2.0 {
+        return;
+    }
+    let c = if hot > 0.0 { mix(c, 0.14 * hot) } else { c };
+    let (top, mid, below, bottom) = if pressed {
+        (dark(c, 0.72), dark(c, 0.86), c, mix(c, 0.12))
+    } else {
+        (mix(c, 0.5), mix(c, 0.2), dark(c, 0.86), mix(c, 0.06))
+    };
+    let m = r.center().y.round();
+    crate::theme::paint_gradient(p, Rect::from_min_max(r.min, egui::pos2(r.right(), m)), top, mid);
+    crate::theme::paint_gradient(p, Rect::from_min_max(egui::pos2(r.left(), m), r.max), below, bottom);
+    if !pressed {
+        px(p, r.left() + 1.0, r.top() + 1.0, r.right() - 1.0, r.top() + 2.0, Color32::from_white_alpha(120));
+    }
+    edge(p, r, dark(c, 0.42));
+}
+
+/// A game's Frame: a softer gloss (lighter at the top, darker at the
+/// bottom) with the website banner's faint studs.
+pub fn gloss_panel(p: &Painter, r: Rect, c: Color32) {
+    let r = snap(r);
+    if r.width() < 2.0 || r.height() < 2.0 {
+        return;
+    }
+    crate::theme::paint_gradient(p, r, mix(c, 0.16), dark(c, 0.82));
+    let studs = p.with_clip_rect(r.shrink(2.0));
+    let mut y = r.top() + 12.0;
+    while y < r.bottom() {
+        let mut x = r.left() + 12.0;
+        while x < r.right() {
+            studs.circle_filled(egui::pos2(x, y + 0.8), 5.5, Color32::from_black_alpha(35));
+            studs.circle_filled(egui::pos2(x, y), 5.0, Color32::from_white_alpha(16));
+            x += 24.0;
+        }
+        y += 24.0;
+    }
+    px(p, r.left() + 1.0, r.top() + 1.0, r.right() - 1.0, r.top() + 2.0, Color32::from_white_alpha(80));
+    edge(p, r, dark(c, 0.42));
+}
+
+/// Bold text with the website's little drop shadow: a dark one under light
+/// text, a light one under dark text.
+pub fn shadow_text(p: &Painter, pos: Pos2, align: Align2, text: &str, font: FontId, color: Color32) {
+    let shadow = if is_light(color) { Color32::from_black_alpha(130) } else { Color32::from_white_alpha(110) };
+    p.text(pos + egui::vec2(0.0, 1.0), align, text, font.clone(), shadow);
+    p.text(pos, align, text, font, color);
+}
+
 /// Text with a thin outline: black round light text, none round dark text.
 /// Gives back where the text went.
 pub fn text(p: &Painter, pos: Pos2, align: Align2, text: &str, font: FontId, color: Color32) -> Rect {

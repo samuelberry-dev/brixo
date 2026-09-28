@@ -69,17 +69,19 @@ pub fn draw_gui(
         let is_button = inst.class == Class::TextButton;
         let hovered = interactive && is_button && pointer.is_some_and(|p| rect.contains(p));
         let pressed = hovered && ctx.input(|i| i.pointer.primary_down());
-        // The classic look: square, with a hard one-pixel edge; buttons
-        // bevelled, and pushed in while pressed.
+        // The Brixo look, like the website: labels and buttons glossy in
+        // their own colour (buttons brighten under the mouse and push in
+        // when pressed), Frames a softer gloss with faint studs.
         if g.background {
             let bg = color(g.background_color);
-            if is_button {
-                let face = if hovered && !pressed { bg.gamma_multiply(1.12) } else { bg };
-                crate::classic::bevel(&painter, rect, face, pressed);
-                crate::classic::edge(&painter, rect.expand(1.0), crate::classic::EDGE);
+            if inst.class == Class::Frame {
+                crate::classic::gloss_panel(&painter, rect, bg);
             } else {
-                painter.rect_filled(crate::classic::snap(rect), 0.0, bg);
-                crate::classic::edge(&painter, rect, crate::classic::EDGE);
+                let hot = if hovered && !pressed { 1.0 } else { 0.0 };
+                crate::classic::gloss(&painter, rect, bg, hot, pressed);
+                if is_button {
+                    crate::classic::edge(&painter, rect.expand(1.0), egui::Color32::from_black_alpha(110));
+                }
             }
         }
         if !g.text.is_empty() {
@@ -93,8 +95,8 @@ pub fn draw_gui(
             let font = crate::classic::bold(size);
             let ink = color(g.text_color);
             if g.background {
-                // On its own background the text needs no outline.
-                painter.text(at, egui::Align2::CENTER_CENTER, &g.text, font, ink);
+                // On its own background: the website's drop shadow.
+                crate::classic::shadow_text(&painter, at, egui::Align2::CENTER_CENTER, &g.text, font, ink);
             } else {
                 crate::classic::text(&painter, at, egui::Align2::CENTER_CENTER, &g.text, font, ink);
             }
