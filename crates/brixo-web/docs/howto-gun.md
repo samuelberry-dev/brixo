@@ -90,9 +90,9 @@ on activated(p)
     if hit.who != nil then
         hit.who.health -= DAMAGE
         hit.who.last_hit_by = p.name
-        play_sound("hit")
+        play_sound_at("hit", hit.who)
     end
-    play_sound("pop")
+    play_sound_at("pop", p)
     draw_beam(from, dir, hit.length)
 end
 ```
@@ -139,7 +139,7 @@ on touched(other)
         if shooter != nil and other.health > 0 and (shooter.team == nil or other.team != shooter.team) then
             other.health -= 20
             other.last_hit_by = self.owner
-            play_sound("hit")
+            play_sound_at("hit", other)
         end
     end
     pop()
@@ -176,7 +176,7 @@ on activated(p)
     ball.anchored = false
     ball.velocity = {x = dx / d * 90, y = dy / d * 90, z = dz / d * 90}
     ball.parent = find("Workspace")
-    play_sound("twang")
+    play_sound_at("twang", p)
 end
 ```
 

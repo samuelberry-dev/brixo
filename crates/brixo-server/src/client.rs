@@ -94,7 +94,10 @@ impl NetClient {
                 brixo_runtime::kart::pose_all(&mut self.world);
             }
             ToClient::Changes { added, removed, moved } => crate::protocol::apply_changes(&mut self.world, &added, &removed, &moved),
-            ToClient::Sound { name } => self.cues.push(brixo_runtime::Cue::Sound(name)),
+            ToClient::Sound { name, at } => self.cues.push(match at {
+                Some(at) => brixo_runtime::Cue::SoundAt(name, at),
+                None => brixo_runtime::Cue::Sound(name),
+            }),
             ToClient::Music { name } => self.cues.push(brixo_runtime::Cue::Music(name)),
             ToClient::Chat { from, name, text } => self.chat.push((InstanceId::from_raw(from), name, text)),
             ToClient::Asset { id, format, data } => {

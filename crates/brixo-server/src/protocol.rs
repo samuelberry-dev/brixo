@@ -67,8 +67,13 @@ pub enum ToClient {
         /// (id, new parent, new name).
         moved: Vec<(u64, Option<u64>, String)>,
     },
-    /// Play a sound effect.
-    Sound { name: String },
+    /// Play a sound effect: from a place in the world (`at`), or the same
+    /// everywhere. (Older players ignore `at` and hear it everywhere.)
+    Sound {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<brixo_core::SoundAt>,
+    },
     /// Loop this music (None: stop the music).
     Music { name: Option<String> },
     /// A Sound's audio file (sent once per player; World messages leave

@@ -771,9 +771,11 @@ impl Studio {
                 self.editor.chat.push(from, name, text);
             }
             trim_output(&mut self.output);
-            let view = self.smoother.view(&game.world());
+            let mut view = self.smoother.view(&game.world());
+            brixo_client::smooth::hold_tools(&mut view, &game.world());
             self.audio.engine(brixo_client::kart_fx::engine_pitch(&view, game.player_id()));
             first_person_player = self.editor.follow.update(&mut self.camera, &view, game.player_id());
+            self.audio.listen(self.camera.position, self.camera.right(), &view);
             self.play_view = Some(view);
         } else if self.play_view.take().is_some() {
             self.smoother.reset();

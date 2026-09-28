@@ -446,6 +446,76 @@ impl Speaker {
     }
 }
 
+// --- sounds in the world -----------------------------------------------------------
+
+/// Full volume this close to a sound (studs).
+pub const NEAR: f32 = 15.0;
+/// Silent this far away (studs).
+pub const FAR: f32 = 250.0;
+
+/// How loud a sound at `at` is in each ear, for a listener at `ear` whose
+/// right is `right` (a direction of length 1): full volume up close, then
+/// fading with distance (halved at twice `NEAR`) to silence at `FAR`; and
+/// louder in the ear it's nearer.
+pub fn spatial_gains(ear: [f32; 3], right: [f32; 3], at: [f32; 3]) -> [f32; 2] {
+    let d = [at[0] - ear[0], at[1] - ear[1], at[2] - ear[2]];
+    let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if dist >= FAR {
+        return [0.0, 0.0];
+    }
+    let mut loud = if dist <= NEAR { 1.0 } else { NEAR / dist };
+    // Fading out over the last fifth, so it doesn't cut off.
+    let edge = FAR * 0.8;
+    if dist > edge {
+        loud *= 1.0 - (dist - edge) / (FAR - edge);
+    }
+    // Which side: -1 hard left, 1 hard right; less so up close.
+    let side = if dist < 0.5 { 0.0 } else { (d[0] * right[0] + d[1] * right[1] + d[2] * right[2]) / dist };
+    let near_blend = (dist / (NEAR * 0.5)).min(1.0);
+    let pan = side * 0.8 * near_blend;
+    // Equal power across the middle, never louder than full in one ear.
+    let a = (1.0 + pan) * std::f32::consts::FRAC_PI_4;
+    let (l, r) = (a.cos() * std::f32::consts::SQRT_2, a.sin() * std::f32::consts::SQRT_2);
+    [loud * l.min(1.0), loud * r.min(1.0)]
+}
+
+/// Each ear's volume for a sound in the world, shared with the sound as it
+/// plays, so it can follow what made it and turn with the listener.
+pub type Ears = Arc<std::sync::Mutex<[f32; 2]>>;
+
+/// Plays `source` with its left and right volumes from `ears` (checked
+/// every 10 ms), times `volume`.
+fn play_placed<S>(handle: &rodio::OutputStreamHandle, source: S, volume: f32, ears: Ears)
+where
+    S: rodio::Source<Item = f32> + Send + 'static,
+{
+    let start = *ears.lock().unwrap();
+    let placed = rodio::source::ChannelVolume::new(source, vec![start[0] * volume, start[1] * volume]);
+    let placed = rodio::Source::periodic_access(placed, std::time::Duration::from_millis(10), move |s| {
+        let g = *ears.lock().unwrap();
+        s.set_volume(0, g[0] * volume);
+        s.set_volume(1, g[1] * volume);
+    });
+    let _ = handle.play_raw(placed);
+}
+
+impl Speaker {
+    /// Plays a sound effect once, from a place in the world (see `Ears`).
+    pub fn play_at(&mut self, name: &str, ears: Ears) {
+        let Some(s) = self.samples(name, || sound(name)) else { return };
+        let buf = rodio::buffer::SamplesBuffer::new(1, RATE, s.to_vec());
+        play_placed(&self.handle, buf, SOUND_VOLUME * self.sound_level, ears);
+    }
+
+    /// Plays an audio file once, from a place in the world.
+    pub fn play_file_at(&mut self, bytes: Arc<Vec<u8>>, volume: f32, ears: Ears) {
+        if let Ok(source) = rodio::Decoder::new(std::io::Cursor::new(bytes.to_vec())) {
+            let source = rodio::Source::convert_samples::<f32>(source);
+            play_placed(&self.handle, source, volume * SOUND_VOLUME * self.sound_level, ears);
+        }
+    }
+}
+
 /// Whether Brixo can play these bytes (an mp3, wav or ogg file).
 pub fn decodes(bytes: &[u8]) -> bool {
     rodio::Decoder::new(std::io::Cursor::new(bytes.to_vec())).is_ok()
@@ -501,6 +571,23 @@ mod tests {
             assert!(m.iter().all(|x| x.abs() <= 0.81));
         }
         assert!(sound("nope").is_none() && music("nope").is_none());
+    }
+
+    #[test]
+    fn sounds_fade_with_distance_and_come_from_their_side() {
+        let (ear, right) = ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+        let close = spatial_gains(ear, right, [0.0, 0.0, 5.0]);
+        assert!((close[0] - 1.0).abs() < 0.01 && (close[1] - 1.0).abs() < 0.01, "right in front, close: full, both ears: {close:?}");
+        let mid = spatial_gains(ear, right, [0.0, 0.0, 60.0]);
+        assert!(mid[0] < 0.3 && mid[0] > 0.2, "60 studs off: a quarter: {mid:?}");
+        assert_eq!(spatial_gains(ear, right, [0.0, 0.0, 300.0]), [0.0, 0.0], "far across the map: silent");
+        let edge = spatial_gains(ear, right, [0.0, 0.0, 240.0]);
+        assert!(edge[0] < 0.02, "fading out near the edge: {edge:?}");
+        let to_right = spatial_gains(ear, right, [40.0, 0.0, 0.0]);
+        assert!(to_right[1] > to_right[0] * 3.0, "off to the right: louder on the right: {to_right:?}");
+        let to_left = spatial_gains(ear, right, [-40.0, 0.0, 0.0]);
+        assert!(to_left[0] > to_left[1] * 3.0, "and the left: {to_left:?}");
+        assert!(to_right[1] <= 1.0);
     }
 
     #[test]

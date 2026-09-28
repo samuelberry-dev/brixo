@@ -111,7 +111,7 @@ play_sound("kaboom")"#);
     assert_eq!(
         game.take_sounds(),
         [
-            SoundEvent::Play { name: "buy".into(), player: None },
+            SoundEvent::Play { name: "buy".into(), player: None, at: None },
             SoundEvent::Music { name: Some("sunny".into()), player: None },
         ]
     );

@@ -219,7 +219,7 @@ end
 fn hurt(p, other, amount)
     other.health -= amount
     other.last_hit_by = p.name
-    play_sound("hit")
+    play_sound_at("hit", other)
 end
 "#;
 
@@ -250,7 +250,7 @@ const TICKING: &str = r#"-- Blink, beep, boom. (The template in Storage just wai
 if self.parent.name != "Storage" then
     for i in [1, 2, 3, 4, 5, 6] do
         self.color = {r = 255, g = 40, b = 40}
-        play_sound("click")
+        play_sound_at("click", self)
         wait(0.25)
         self.color = {r = 30, g = 30, b = 34}
         wait(0.25)

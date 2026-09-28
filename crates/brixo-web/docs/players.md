@@ -34,7 +34,7 @@ end
 on touched(other)
     if other.class == "player" then
         other.health -= 20
-        play_sound("hit")
+        play_sound_at("hit", other)
     end
 end
 ```

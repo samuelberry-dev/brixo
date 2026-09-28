@@ -429,7 +429,7 @@ impl Server {
         }
         for event in self.game.take_sounds() {
             let (msg, target) = match event {
-                brixo_runtime::SoundEvent::Play { name, player } => (ToClient::Sound { name }, player),
+                brixo_runtime::SoundEvent::Play { name, player, at } => (ToClient::Sound { name, at }, player),
                 brixo_runtime::SoundEvent::Music { name, player } => {
                     if player.is_none() {
                         self.music = name.clone();

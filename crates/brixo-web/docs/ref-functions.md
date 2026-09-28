@@ -32,6 +32,7 @@ See [Karts, racing and bots](howto-karts).
 | `play_sound(name)` | A built-in sound for everyone. Names: [Sounds](ref-names#sounds). |
 | `play_sound(sound)` | A Sound object in your game: `play_sound(find("Horn"))`. |
 | `play_sound(name, player)` | Just for that player. |
+| `play_sound_at(name, where)` | From a place in the world: everyone hears it, quieter the further away they are (full volume within 15 studs, silent past 250), and from the left or right. `where` is a part or player (the sound follows it as it plays), a Model or Tool, or a position: `play_sound_at("hit", other)`, `play_sound_at("boom", self.position)`. Works with Sound objects too. |
 | `play_music(name or sound)` | Starts looping music for everyone, crossfading from what was playing. |
 | `play_music(name or sound, player)` | Just for that player. |
 | `stop_music()`, `stop_music(player)` | Fades the music out. |

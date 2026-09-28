@@ -14,6 +14,11 @@ pub use brixo_audio::decodes;
 
 pub struct Audio {
     speaker: Option<brixo_audio::Speaker>,
+    /// Where the listener is (the camera) and which way is their right.
+    listener: Option<(glam::Vec3, glam::Vec3)>,
+    /// Sounds in the world that are playing: where they come from, and the
+    /// volume in each ear, kept up to date by `listen`.
+    placed: Vec<(brixo_core::SoundAt, glam::Vec3, brixo_audio::Ears)>,
     /// A game song asked for before its audio arrived (online, the "play
     /// this" message can beat the file): started once the file is here.
     pending_music: Option<String>,
@@ -30,7 +35,7 @@ impl Audio {
             let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
             let _ = writeln!(f, "# epoch {epoch:.3}");
         }
-        Audio { speaker: brixo_audio::Speaker::new(), pending_music: None, log, start: Instant::now() }
+        Audio { speaker: brixo_audio::Speaker::new(), listener: None, placed: Vec::new(), pending_music: None, log, start: Instant::now() }
     }
 
     /// The player's volume settings (0 to 1) for sound effects and music.
@@ -40,10 +45,51 @@ impl Audio {
         }
     }
 
+    /// Each frame: the listener is at `ear` (the camera) with `right` to
+    /// their right. Sounds in the world follow what made them (`world`)
+    /// and turn with the listener; finished ones are forgotten.
+    pub fn listen(&mut self, ear: glam::Vec3, right: glam::Vec3, world: &brixo_core::DataModel) {
+        self.listener = Some((ear, right));
+        self.placed.retain(|(_, _, ears)| std::sync::Arc::strong_count(ears) > 1);
+        for (at, last, ears) in &mut self.placed {
+            if let Some(o) = at.object {
+                if let Some(p) = brixo_core::object_position(world, o) {
+                    *last = glam::Vec3::new(p.x, p.y, p.z);
+                }
+            }
+            *ears.lock().unwrap() = gains(Some((ear, right)), *last);
+        }
+    }
+
+    /// How many sounds in the world are playing (for tests).
+    pub fn placed_count(&self) -> usize {
+        self.placed.len()
+    }
+
+    /// Plays a sound (built in, or one of the game's: "#id") from a place.
+    fn play_at(&mut self, name: &str, at: &brixo_core::SoundAt, lookup: SoundLookup) {
+        let from = glam::Vec3::new(at.position.x, at.position.y, at.position.z);
+        let ears: brixo_audio::Ears = std::sync::Arc::new(std::sync::Mutex::new(gains(self.listener, from)));
+        let Some(speaker) = &mut self.speaker else { return };
+        match name.strip_prefix('#').and_then(|id| id.parse::<u64>().ok()) {
+            Some(id) => {
+                if let Some((bytes, volume)) = lookup(id) {
+                    speaker.play_file_at(bytes, volume, ears.clone());
+                }
+            }
+            None => speaker.play_at(name, ears.clone()),
+        }
+        self.placed.push((*at, from, ears));
+    }
+
     /// Plays a cue that may name one of the game's own Sounds ("#id").
     pub fn cue_with(&mut self, cue: &Cue, lookup: SoundLookup) {
         let custom = |name: &str| name.strip_prefix('#').and_then(|id| id.parse::<u64>().ok());
         match cue {
+            Cue::SoundAt(name, at) => {
+                self.play_at(name, at, lookup);
+                self.log_line("sound", name);
+            }
             Cue::Sound(name) if custom(name).is_some() => {
                 if let (Some(s), Some((bytes, volume))) = (&mut self.speaker, lookup(custom(name).unwrap())) {
                     s.play_file(bytes, volume);
@@ -102,6 +148,9 @@ impl Audio {
                     let _ = writeln!(f, "{t:.3} sound {name}");
                 }
             }
+            Cue::SoundAt(name, at) => {
+                self.play_at(name, at, &|_| None);
+            }
             Cue::Music(name) => {
                 if let Some(s) = &mut self.speaker {
                     s.music(name.as_deref());
@@ -139,6 +188,15 @@ impl Audio {
 impl Default for Audio {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Each ear's volume for a sound at `at`, for the listener (full and
+/// centred when there's no listener yet).
+fn gains(listener: Option<(glam::Vec3, glam::Vec3)>, at: glam::Vec3) -> [f32; 2] {
+    match listener {
+        Some((ear, right)) => brixo_audio::spatial_gains(ear.to_array(), right.normalize_or_zero().to_array(), at.to_array()),
+        None => [1.0, 1.0],
     }
 }
 

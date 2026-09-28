@@ -18,7 +18,7 @@ Setting a player's `velocity` **launches** them: up (and down) by its `y`, and s
 on touched(other)
     if other.class == "player" then
         other.velocity = {x = 0, y = 90, z = 0}   -- straight up, very high
-        play_sound("jump")
+        play_sound_at("jump", self)
     end
 end
 ```

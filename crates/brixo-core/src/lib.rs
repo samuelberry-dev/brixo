@@ -380,6 +380,38 @@ pub fn held_arm_angle(swing: f32, up: bool) -> f32 {
     if up { -PI + (FRAC_PI_2 + 0.25) * chop } else { -FRAC_PI_2 - 0.35 * chop }
 }
 
+/// Where a sound plays from (`play_sound_at`): players hear it from there,
+/// quieter the further away they are, and from the left or right. It
+/// follows `object` (a part, a player, or anything with parts in it) while
+/// it plays; `position` is where that was when it started, for when the
+/// object's gone by the time a player hears it (a rocket that blew up).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SoundAt {
+    #[serde(default)]
+    pub object: Option<InstanceId>,
+    pub position: Vec3,
+}
+
+/// Where something is, for sounds that follow it: a part's position, a
+/// player's body, or the first part inside a Model, Tool or Folder.
+pub fn object_position(world: &DataModel, id: InstanceId) -> Option<Vec3> {
+    if let Some(p) = world.player(id) {
+        return Some(p.body.position);
+    }
+    if let Some(p) = world.part(id) {
+        return Some(p.position);
+    }
+    let first = *world.parts_under(id).first()?;
+    world.part(first).map(|p| p.position)
+}
+
+impl SoundAt {
+    /// Where the sound is now: on its object if that's still here.
+    pub fn now(&self, world: &DataModel) -> Vec3 {
+        self.object.and_then(|o| object_position(world, o)).unwrap_or(self.position)
+    }
+}
+
 /// Brixo's built-in sound effects: `play_sound("coin")`.
 pub const SOUNDS: [&str; 16] = [
     "coin", "cash", "buy", "click", "error", "pop", "jump", "hit", "win", "whoosh", "death", "boom", "twang", "bonk",

@@ -52,6 +52,38 @@ fn poses(world: &DataModel) -> HashMap<InstanceId, Pose> {
     out
 }
 
+/// Tools in hand ride with their holders as they're drawn. The game puts
+/// a held tool in its holder's hand; but what's drawn is the holder
+/// smoothed, or (you) predicted ahead of the game, so the tool, drawn where
+/// the game last put it, trails behind. This keeps each held tool's parts
+/// exactly where they sit on their holder in `source` (the game's latest),
+/// moved to where the holder is drawn in `view`.
+pub fn hold_tools(view: &mut DataModel, source: &DataModel) {
+    use glam::{EulerRot, Quat, Vec3 as G};
+    let turn = |r: Vec3| Quat::from_euler(EulerRot::YXZ, r.y.to_radians(), r.x.to_radians(), r.z.to_radians());
+    let holders: Vec<(InstanceId, InstanceId)> =
+        source.walk().into_iter().filter_map(|id| Some((id, source.player(id)?.equipped?))).collect();
+    for (holder, tool) in holders {
+        let (Some(from), Some(to)) = (source.player(holder), view.player(holder)) else { continue };
+        let (fp, tp) = (from.body.position, to.body.position);
+        let (fq, tq) = (Quat::from_rotation_y(from.body.rotation.y.to_radians()), Quat::from_rotation_y(to.body.rotation.y.to_radians()));
+        if fp == tp && fq == tq {
+            continue;
+        }
+        let inv = fq.inverse();
+        for id in source.parts_under(tool) {
+            let Some(q) = source.part(id) else { continue };
+            let local = inv * (G::new(q.position.x, q.position.y, q.position.z) - G::new(fp.x, fp.y, fp.z));
+            let at = G::new(tp.x, tp.y, tp.z) + tq * local;
+            let (y, x, z) = (tq * inv * turn(q.rotation)).to_euler(EulerRot::YXZ);
+            if let Some(v) = view.part_mut(id) {
+                v.position = Vec3::new(at.x, at.y, at.z);
+                v.rotation = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+            }
+        }
+    }
+}
+
 fn lerp(a: Vec3, b: Vec3, t: f32) -> Vec3 {
     Vec3::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
 }
@@ -189,5 +221,34 @@ mod tests {
     fn angles_blend_the_short_way_round() {
         assert!((lerp_degrees(350.0, 10.0, 0.5) - 360.0).abs() < 1e-3);
         assert!((lerp_degrees(10.0, 350.0, 0.5) - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_tool_in_hand_stays_in_hand_when_the_holder_is_drawn_elsewhere() {
+        use brixo_core::Class;
+        let mut dm = DataModel::new();
+        let root = dm.root();
+        let me = dm.create(Class::Player, "Me", root).unwrap();
+        let tool = dm.create(Class::Tool, "Sword", me).unwrap();
+        let blade = dm.create(Class::Part, "Blade", tool).unwrap();
+        dm.player_mut(me).unwrap().equipped = Some(tool);
+        dm.player_mut(me).unwrap().body.position = Vec3::new(0.0, 3.0, 0.0);
+        // In the right hand, a stud ahead.
+        dm.part_mut(blade).unwrap().position = Vec3::new(1.5, 3.0, 1.0);
+        // Drawn (predicted) 10 studs on and turned to face +X.
+        let mut view = dm.clone();
+        view.player_mut(me).unwrap().body.position = Vec3::new(10.0, 3.0, 0.0);
+        view.player_mut(me).unwrap().body.rotation.y = 90.0;
+        hold_tools(&mut view, &dm);
+        let at = view.part(blade).unwrap().position;
+        // Turned 90 degrees: a stud ahead is now +X, the right hand is -Z.
+        assert!((at.x - 11.0).abs() < 1e-3 && (at.y - 3.0).abs() < 1e-3 && (at.z + 1.5).abs() < 1e-3, "{at:?}");
+        assert!((view.part(blade).unwrap().rotation.y - 90.0).abs() < 1e-3);
+        // Not held: left alone.
+        dm.player_mut(me).unwrap().equipped = None;
+        let mut view2 = dm.clone();
+        view2.player_mut(me).unwrap().body.position = Vec3::new(10.0, 3.0, 0.0);
+        hold_tools(&mut view2, &dm);
+        assert_eq!(view2.part(blade).unwrap().position, Vec3::new(1.5, 3.0, 1.0));
     }
 }

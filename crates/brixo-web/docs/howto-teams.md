@@ -19,7 +19,7 @@ on activated(p)
         return
     end
     ready_at = time() + 0.5
-    play_sound("whoosh")
+    play_sound_at("whoosh", p)
     f = p.look
     for other in players() do
         -- An enemy: someone else, still up, on another team.
@@ -32,7 +32,7 @@ on activated(p)
             if d < 7 and ahead > 0.3 and abs(other.position.y - p.position.y) < 4 then
                 other.health -= 25
                 other.last_hit_by = p.name
-                play_sound("hit")
+                play_sound_at("hit", other)
             end
         end
     end

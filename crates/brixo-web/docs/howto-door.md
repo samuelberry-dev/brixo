@@ -17,7 +17,7 @@ on touched(other)
     end
     busy = true
     self.color = {r = 60, g = 200, b = 80}
-    play_sound("click")
+    play_sound_at("click", self)
     -- Slide up, one step at a time.
     for i in 1..20 do
         door.position.y = closed_y + i * 0.4

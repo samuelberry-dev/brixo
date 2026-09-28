@@ -24,6 +24,31 @@ on touched(other)
 end
 ```
 
+## Sounds from a place
+
+`play_sound` is heard the same everywhere: good for a round horn, a "you won", anything every player should hear loud and clear. But a sword swing on the far side of the map shouldn't sound like it's right next to you. **`play_sound_at`** plays a sound **from somewhere in the world**: everyone hears it, but the further away they are the quieter it is (full volume within 15 studs, fading to silence at 250), and it comes from the left or the right.
+
+```rovik run in=part:Bell
+on touched(other)
+    if other.class == "player" then
+        play_sound_at("hit", self)   -- from the bell
+    end
+end
+```
+
+The second value is **where**:
+
+| | |
+|---|---|
+| A part | `play_sound_at("bonk", self)`. The sound **follows the part** while it plays. |
+| A player | `play_sound_at("hit", other)`: from them, following them. In a tool's script, `p` is whoever's holding it: `play_sound_at("whoosh", p)`. |
+| A Model or Tool | From its first part. |
+| A position | `play_sound_at("boom", {x = 0, y = 5, z = 20})` or `play_sound_at("thud", self.position)`. |
+
+Your own Sounds work too: `play_sound_at(find("Engine Roar"), kart)`. Explosions (`explode`) and players falling apart are already heard from where they happen.
+
+**Which one?** Things that *happen somewhere* (hits, swings, doors, pads, pickups others can hear): `play_sound_at`. Announcements and music: `play_sound` and `play_music`. Something only one player should hear: `play_sound(name, player)`.
+
 ## Music
 
 `play_music` starts a track that **loops** until something else plays. Starting a new track crossfades from the old one. Brixo has two built in: `"sunny"` (bright and bouncy) and `"rush"` (fast, for action).

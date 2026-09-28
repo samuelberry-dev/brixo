@@ -483,6 +483,7 @@ impl Player {
                         self.audio.cue_with(&cue, &|id| brixo_client::world_sound(&world, id));
                     }
                     s.view = self.smoother.view(&game.world());
+                    brixo_client::smooth::hold_tools(&mut s.view, &game.world());
                     brixo_runtime::kart::pose_all(&mut s.view);
                     hidden = s.follow.update(&mut self.camera, &s.view, game.player_id());
                     write_position(&s.view, game.player_id());
@@ -525,6 +526,8 @@ impl Player {
                     }
                     s.view = self.smoother.view(&net.world);
                     s.predictor.apply(&mut s.view);
+                    // Your tool in your (predicted) hand.
+                    brixo_client::smooth::hold_tools(&mut s.view, &net.world);
                     brixo_runtime::kart::pose_all(&mut s.view);
                     hidden = s.follow.update(&mut self.camera, &s.view, net.me);
                     write_position(&s.view, net.me);
@@ -538,6 +541,8 @@ impl Player {
                 Backend::Online(net) => net.me,
             };
             self.audio.engine(if s.lost { None } else { brixo_client::kart_fx::engine_pitch(&s.view, me) });
+            // Sounds in the world: heard from the camera.
+            self.audio.listen(self.camera.position, self.camera.right(), &s.view);
             let extra = s.output.len().saturating_sub(CONSOLE_LIMIT);
             s.output.drain(..extra);
         }

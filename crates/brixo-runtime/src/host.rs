@@ -251,8 +251,9 @@ pub struct Blast {
 /// Something for players to hear.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SoundEvent {
-    /// A sound effect, for everyone or just one player.
-    Play { name: String, player: Option<InstanceId> },
+    /// A sound effect, for everyone or just one player; `at` places it in
+    /// the world (None: heard the same everywhere).
+    Play { name: String, player: Option<InstanceId>, at: Option<brixo_core::SoundAt> },
     /// Start a music loop (None stops the music), for everyone or one player.
     Music { name: Option<String>, player: Option<InstanceId> },
 }
@@ -261,6 +262,8 @@ pub enum SoundEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cue {
     Sound(String),
+    /// A sound from a place in the world (see `brixo_core::SoundAt`).
+    SoundAt(String, brixo_core::SoundAt),
     Music(Option<String>),
 }
 
@@ -268,7 +271,10 @@ impl SoundEvent {
     /// This event as `me` hears it (None if it's for someone else).
     pub fn for_player(self, me: Option<InstanceId>) -> Option<Cue> {
         match self {
-            SoundEvent::Play { name, player } if player.is_none() || player == me => Some(Cue::Sound(name)),
+            SoundEvent::Play { name, player, at } if player.is_none() || player == me => Some(match at {
+                Some(at) => Cue::SoundAt(name, at),
+                None => Cue::Sound(name),
+            }),
             SoundEvent::Music { name, player } if player.is_none() || player == me => Some(Cue::Music(name)),
             _ => None,
         }
@@ -410,6 +416,18 @@ fn channel(value: &Value, what: &str) -> Result<u8, String> {
 
 
 impl WorldHost {
+    /// A sound effect to play: one of Brixo's built-in names, or a Sound in
+    /// the game ("#id").
+    fn sound_name(&self, value: &Value, func: &str) -> Result<String, String> {
+        let list = &brixo_core::SOUNDS;
+        match value {
+            Value::Str(n) if list.contains(&n.as_ref()) => Ok(n.to_string()),
+            Value::Str(n) => Err(format!("there's no sound called '{n}'. Try one of: {}, or a Sound in your game: {func}(find(\"My Sound\"), ...)", list.join(", "))),
+            Value::Object(o) if o.facet == FACET_SELF && self.world.lock().sound(InstanceId::from_raw(o.id)).is_some() => Ok(format!("#{}", o.id)),
+            other => Err(format!("{func} needs a sound's name or a Sound, not a {}", other.type_name())),
+        }
+    }
+
     /// Reads a vector from `{x = 1, y = 2}` (missing axes keep `current`)
     /// or from another part's position/size/rotation.
     fn to_vec3(&self, world: &DataModel, value: &Value, current: Vec3) -> Result<Vec3, String> {
@@ -1053,7 +1071,7 @@ impl Host for WorldHost {
     }
 
     fn function_names(&self) -> Vec<&'static str> {
-        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_music", "stop_music", "explode", "save", "load", "leaderboard", "boost", "spin_out", "place_kart", "add_bot"]
+        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_sound_at", "play_music", "stop_music", "explode", "save", "load", "leaderboard", "boost", "spin_out", "place_kart", "add_bot"]
     }
 
     fn call(&self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -1154,8 +1172,33 @@ impl Host for WorldHost {
                 }
                 break_and_collapse(&mut world, center, radius, power);
                 self.blasts.lock().unwrap().push(Blast { center, radius, power });
-                self.sounds.lock().unwrap().push(SoundEvent::Play { name: "boom".into(), player: None });
+                self.sounds.lock().unwrap().push(SoundEvent::Play {
+                    name: "boom".into(),
+                    player: None,
+                    at: Some(brixo_core::SoundAt { object: None, position: center }),
+                });
                 Ok(Value::list(caught))
+            }
+            // play_sound_at("hit", other): heard from there by everyone,
+            // quieter further away. `where` is a part or player (the sound
+            // follows it), anything with parts in it, or a position.
+            "play_sound_at" => {
+                let usage = "play_sound_at needs a sound and where it comes from: play_sound_at(\"hit\", other) or play_sound_at(\"boom\", self.position)";
+                need(2).map_err(|_| usage.to_string())?;
+                let wanted = self.sound_name(&args[0], "play_sound_at")?;
+                let world = self.world.lock();
+                let at = match &args[1] {
+                    Value::Object(o) if o.facet == FACET_SELF => {
+                        let id = InstanceId::from_raw(o.id);
+                        let position = brixo_core::object_position(&world, id)
+                            .ok_or_else(|| format!("play_sound_at: {} isn't anywhere (it has no parts), so the sound can't come from it", world.get(id).map(|i| i.name.clone()).unwrap_or_default()))?;
+                        brixo_core::SoundAt { object: Some(id), position }
+                    }
+                    other => brixo_core::SoundAt { object: None, position: self.to_vec3(&world, other, Vec3::ZERO).map_err(|e| format!("{usage} ({e})"))? },
+                };
+                drop(world);
+                self.sounds.lock().unwrap().push(SoundEvent::Play { name: wanted, player: None, at: Some(at) });
+                Ok(Value::Nil)
             }
             "play_sound" | "play_music" | "stop_music" => {
                 let music = name != "play_sound";
@@ -1182,10 +1225,16 @@ impl Host for WorldHost {
                     Some(v) => Some(instance_arg(v)?),
                     None => None,
                 };
+                // The second value is who hears it: only a player makes sense.
+                if let Some(id) = player {
+                    if self.world.lock().player(id).is_none() {
+                        return Err(format!("{name}(sound, player) plays it for just that player. To play a sound from a part, use play_sound_at(sound, part)"));
+                    }
+                }
                 let event = if music {
                     SoundEvent::Music { name: wanted, player }
                 } else {
-                    SoundEvent::Play { name: wanted.unwrap(), player }
+                    SoundEvent::Play { name: wanted.unwrap(), player, at: None }
                 };
                 self.sounds.lock().unwrap().push(event);
                 Ok(Value::Nil)

@@ -251,7 +251,7 @@ on touched(other)
         busy = true
         wait(0.4)
         self.swing_to = 85
-        play_sound("thud")
+        play_sound_at("thud", self)
         wait(3)
         self.swing_to = 0
         busy = false
@@ -281,7 +281,7 @@ on touched(other)
     end
     busy = true
     self.color = {r = 60, g = 200, b = 80}
-    play_sound("click")
+    play_sound_at("click", self)
     for i in 1..20 do
         door.position.y = closed_y + i * 0.4
         wait(0.03)
@@ -398,7 +398,7 @@ const TARGET: &str = r#"
 on touched(other)
     if other.class != "player" then
         self.color = {r = 255, g = 255, b = 255}
-        play_sound("hit")
+        play_sound_at("hit", self)
         wait(0.2)
         self.color = {r = 196, g = 40, b = 28}
     end
@@ -411,7 +411,7 @@ const JUMP_PAD: &str = r#"
 on touched(other)
     if other.class == "player" then
         other.velocity = {x = 0, y = 80, z = 0}
-        play_sound("jump")
+        play_sound_at("jump", self)
     end
 end
 "#;
@@ -420,7 +420,7 @@ const LAUNCH_PAD: &str = r#"
 on touched(other)
     if other.class == "player" then
         other.velocity = {x = 0, y = 60, z = 70}
-        play_sound("whoosh")
+        play_sound_at("whoosh", self)
     end
 end
 "#;

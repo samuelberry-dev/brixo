@@ -81,7 +81,7 @@ on activated(p)
     if not ready(self, 0.4) then
         return
     end
-    play_sound("whoosh")
+    play_sound_at("whoosh", p)
     f = p.look
     for other in players() do
         dx = other.position.x - p.position.x
@@ -90,7 +90,7 @@ on activated(p)
         ahead = (dx * f.x + dz * f.z) / max(d, 0.01)
         if enemy(p, other) and d < 7 and ahead > 0.3 and abs(other.position.y - p.position.y) < 4 then
             hurt(p, other, 22)
-            play_sound("hit")
+            play_sound_at("hit", other)
         end
     end
 end
@@ -114,7 +114,7 @@ on activated(p)
     b.parent = find("Projectiles")
     -- A little lift, so it arcs onto what you clicked instead of dipping short.
     b.velocity = {x = a.dir.x * 90, y = a.dir.y * 90 + 3, z = a.dir.z * 90}
-    play_sound("twang")
+    play_sound_at("twang", p)
 end
 "#;
 
@@ -146,7 +146,7 @@ on touched(other)
         end
         if enemy(owner, other) then
             hurt(owner, other, self.damage)
-            play_sound("hit")
+            play_sound_at("hit", other)
         end
         expire()
         return
@@ -180,7 +180,7 @@ on activated(p)
     r.anchored = false
     r.parent = find("Projectiles")
     r.velocity = {x = a.dir.x * 60, y = a.dir.y * 60, z = a.dir.z * 60}
-    play_sound("whoosh")
+    play_sound_at("whoosh", p)
 end
 "#;
 
@@ -233,7 +233,7 @@ on activated(p)
     b.anchored = false
     b.parent = find("Projectiles")
     b.velocity = {x = a.dir.x * 70, y = a.dir.y * 70 + 5, z = a.dir.z * 70}
-    play_sound("pop")
+    play_sound_at("pop", p)
 end
 "#;
 
@@ -255,13 +255,13 @@ on touched(other)
         if (last == nil or time() - last > 0.6) and enemy(owner, other) then
             hit_at[other.name] = time()
             hurt(owner, other, self.damage)
-            play_sound("hit")
+            play_sound_at("hit", other)
         end
         return
     end
     -- Bounced off something solid: halve its damage for next time, and bonk.
     self.damage = self.damage / 2
-    play_sound("bonk")
+    play_sound_at("bonk", self)
 end
 wait(6)
 if self.parent.name != "Storage" then
@@ -320,7 +320,7 @@ on activated(p)
             b.breakable = true
         end
     end
-    play_sound("thud")
+    play_sound_at("thud", {x = cx, y = base, z = cz})
     wait(24)
     if self.parent.name != "Storage" then
         destroy(wall)
@@ -346,7 +346,7 @@ on activated(p)
     b.anchored = false
     b.parent = find("Projectiles")
     b.velocity = {x = a.dir.x * 130, y = a.dir.y * 130 + 1, z = a.dir.z * 130}
-    play_sound("click")
+    play_sound_at("click", p)
 end
 "#;
 
@@ -372,7 +372,7 @@ on touched(other)
     splat.color = self.color
     splat.material = "neon"
     splat.can_collide = false
-    play_sound("splat")
+    play_sound_at("splat", splat)
     -- Hide the paintball rather than destroy it yet: destroying an object
     -- stops its script, and this script still has to fade the splat.
     self.transparency = 1

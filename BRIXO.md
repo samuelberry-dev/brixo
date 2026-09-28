@@ -173,7 +173,15 @@ egui / egui-wgpu / egui-winit 0.31, glam 0.33, rapier3d 0.35, rodio 0.19
 - **Animation is derived, not sent.** Physics writes `speed`, `airborne`; tools set
   `swing`; every client computes the same limb pose from those.
 - **Sound:** scripts push `SoundEvent`s; the server routes them per player; apps
-  play them through `brixo_client::Audio`.
+  play them through `brixo_client::Audio`. **Placed sounds** (`play_sound_at`,
+  explosions, deaths) carry a `brixo_core::SoundAt` (the object it follows, and
+  where it was when it started, for when the object's gone by the time a player
+  hears it; `ToClient::Sound.at`, skipped when None, so old players just hear it
+  everywhere). The listener is the camera: `Audio::listen` each frame
+  re-resolves every playing placed sound and sets its per-ear volumes
+  (`brixo_audio::spatial_gains`: full within `NEAR` 15 studs, then `NEAR/d`,
+  fading to silence at `FAR` 250; equal-power pan), which the playing source
+  picks up every 10 ms (`ChannelVolume` + `periodic_access`).
 
 ### Physics tuning (in `brixo-runtime/src/physics.rs`)
 
@@ -575,6 +583,11 @@ smaller drift above `DEAD_ZONE` is eased out at `EASE` via
 `Physics::nudge` (keeps momentum); when both sides stand still it settles
 exactly on the server. Everyone else and every part still come from the
 server. ~1 ms a frame on Flagfall. `BRIXO_NO_PREDICT=1` turns it off.
+Held tools: the server puts a tool in its holder's hand, but the holder is
+drawn smoothed (or, you, predicted ahead), so the tool trailed behind.
+`smooth::hold_tools(view, source)` moves each held tool's parts to where
+its holder is drawn, keeping where they sit on the holder in the game's
+latest state (Player, both backends, and Studio's Play).
 
 **Death:** at 0 health (or falling off the world) the character falls apart
 (head, torso, arms and legs scatter and land, computed from `PlayerProps::dead`

@@ -793,7 +793,10 @@ impl Game {
         }
         for (id, name, fell) in died {
             self.push_log("Brixo", format!("{name} {}", if fell { "fell off the world" } else { "died" }), false);
-            self.sounds.lock().unwrap().push(crate::host::SoundEvent::Play { name: "death".into(), player: None });
+            // Heard from where they fell apart.
+            let position = brixo_core::object_position(&self.world.lock(), id).unwrap_or_default();
+            let at = Some(brixo_core::SoundAt { object: Some(id), position });
+            self.sounds.lock().unwrap().push(crate::host::SoundEvent::Play { name: "death".into(), player: None, at });
             self.fire_everywhere(|s| &s.died_handlers, id);
         }
         for (id, name) in respawned {

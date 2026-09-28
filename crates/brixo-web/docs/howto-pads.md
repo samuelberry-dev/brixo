@@ -9,7 +9,7 @@ self.material = "neon"
 on touched(other)
     if other.class == "player" then
         other.velocity = {x = 0, y = 80, z = 0}
-        play_sound("jump")
+        play_sound_at("jump", self)
     end
 end
 ```
@@ -28,7 +28,7 @@ on touched(other)
         -- Which way the pad faces: its rotation, as a direction.
         a = self.rotation.y / 57.2958
         other.velocity = {x = sin(a) * power, y = 60, z = cos(a) * power}
-        play_sound("whoosh")
+        play_sound_at("whoosh", self)
     end
 end
 ```
