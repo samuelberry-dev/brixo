@@ -90,6 +90,14 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
         .route("/api/avatar", put(set_avatar))
+        .route("/api/catalog", get(catalog))
+        .route("/api/shop/buy", post(buy))
+        .route("/api/outfits", get(outfits))
+        .route("/api/outfits/:slot", put(save_outfit).delete(delete_outfit))
+        .route("/api/games/:id/challenges", get(game_challenges))
+        .route("/api/admin/challenges", get(admin_challenges).post(admin_set_challenge))
+        .route("/api/admin/price", post(admin_price))
+        .route("/api/admin/brix", post(admin_brix))
         .route("/api/me/blurb", put(set_blurb))
         .route("/api/stats", get(stats))
         .route("/api/games", get(games).post(publish).layer(DefaultBodyLimit::max(MAX_UPLOAD)))
@@ -104,6 +112,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/admin/hide", post(admin_hide))
         .route("/api/admin/reset", post(admin_reset))
         .route("/api/admin/admin-only", post(admin_only))
+        .route("/api/admin/feature", post(admin_feature))
+        .route("/api/home", get(home))
         .route("/api/friends", get(friends))
         .route("/api/friends/add", post(add_friend))
         .route("/api/friends/accept", post(accept_friend))
@@ -135,6 +145,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/login", get(|| async { Html(include_str!("web/login.html")) }))
         .route("/signup", get(|| async { Html(include_str!("web/signup.html")) }))
         .route("/avatar", get(|| async { Html(include_str!("web/avatar.html")) }))
+        .route("/catalog", get(|| async { Html(include_str!("web/avatar.html")) }))
         .route("/admin", get(|| async { Html(include_str!("web/admin.html")) }))
         .route("/reset", get(|| async { Html(include_str!("web/reset.html")) }))
         .route("/favicon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("web/favicon.svg")) }))
@@ -145,6 +156,12 @@ pub fn router(app: Arc<App>) -> Router {
             "/avatar-model.json",
             get(|| async {
                 ([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "public, max-age=600")], include_str!("web/avatar-model.json"))
+            }),
+        )
+        .route(
+            "/avatar-atlas.png",
+            get(|| async {
+                ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=600")], include_bytes!("web/avatar-atlas.png").as_slice())
             }),
         )
         .layer(axum::middleware::map_response(safety_headers))
@@ -492,32 +509,172 @@ struct Me {
     user: User,
     /// Friend requests waiting for an answer (the Friends tab shows it).
     friend_requests: usize,
+    /// Brix just given for visiting today (the page says so).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bonus: Option<i64>,
 }
 
 async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<Me>> {
-    let user = user(&app, &headers)?;
+    let mut user = user(&app, &headers)?;
+    let bonus = app.db.daily_bonus(user.id).map_err(oops)?;
+    if let Some(b) = bonus {
+        user.brix += b;
+    }
     let friend_requests = app.db.friend_requests_to(user.id).map_err(oops)?.len();
-    Ok(Json(Me { user, friend_requests }))
+    Ok(Json(Me { user, friend_requests, bonus }))
 }
 
-async fn set_avatar(State(app): State<Arc<App>>, headers: HeaderMap, Json(a): Json<Avatar>) -> Result<StatusCode> {
-    let u = user(&app, &headers)?;
-    if Face::ALL.iter().all(|f| f.name() != a.face) {
+/// Checks a look is made of real things, one accessory per slot.
+fn check_avatar(a: &Avatar) -> Result<()> {
+    if Face::from_name(&a.face).is_none() {
         return Err(bad("that isn't one of the faces"));
     }
-    if a.hats.len() > brixo_core::MAX_HATS {
-        return Err(bad(&format!("you can wear up to {} hats", brixo_core::MAX_HATS)));
+    if brixo_core::Shirt::from_name(&a.shirt_style).is_none() || brixo_core::Pants::from_name(&a.pants_style).is_none() {
+        return Err(bad("that isn't one of the shirts or pants"));
     }
-    for (i, h) in a.hats.iter().enumerate() {
-        if brixo_core::Hat::from_name(h).is_none() {
-            return Err(bad("that isn't one of the hats"));
+    if !a.tshirt.is_empty() && brixo_core::TShirt::from_name(&a.tshirt).is_none() {
+        return Err(bad("that isn't one of the t-shirt pictures"));
+    }
+    if a.hats.len() > brixo_core::MAX_HATS {
+        return Err(bad("that's too many accessories"));
+    }
+    let mut slots = Vec::new();
+    for h in &a.hats {
+        let hat = brixo_core::Hat::from_name(h).ok_or_else(|| bad("that isn't one of the accessories"))?;
+        if slots.contains(&hat.slot()) {
+            return Err(bad(&format!("you can wear one {} accessory at a time", hat.slot().name())));
         }
-        if a.hats[..i].contains(h) {
-            return Err(bad("you're already wearing that hat"));
+        slots.push(hat.slot());
+    }
+    Ok(())
+}
+
+/// The Catalog with today's prices.
+fn items(app: &App) -> Result<Vec<crate::shop::Item>> {
+    let prices = app.db.prices().map_err(oops)?;
+    Ok(crate::shop::catalog(|id| prices.get(id).copied()))
+}
+
+/// Whether someone may wear something: it's free, they bought it, or
+/// they're an admin (who own everything).
+fn may_wear(u: &User, owned: &[String], item: &crate::shop::Item) -> bool {
+    u.admin || item.free() || owned.contains(&item.id)
+}
+
+async fn set_avatar(State(app): State<Arc<App>>, headers: HeaderMap, Json(mut a): Json<Avatar>) -> Result<StatusCode> {
+    let u = user(&app, &headers)?;
+    check_avatar(&a)?;
+    let catalog = items(&app)?;
+    let owned = app.db.owned(u.id).map_err(oops)?;
+    for id in crate::shop::worn(&a) {
+        let Some(item) = catalog.iter().find(|i| i.id == id) else { return Err(bad("that isn't in the Catalog")) };
+        if !may_wear(&u, &owned, item) {
+            return Err(bad(&format!("you don't own the {} yet: get it in the Catalog first", item.title)));
         }
+    }
+    // The skin colour games read is the head's.
+    if let Some(body) = a.body {
+        a.skin = body[0];
     }
     app.db.set_avatar(u.id, &a).map_err(oops)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// One Catalog item, and whether the one looking owns it.
+#[derive(Serialize)]
+struct CatalogItem {
+    #[serde(flatten)]
+    item: crate::shop::Item,
+    owned: bool,
+}
+
+#[derive(Serialize)]
+struct CatalogPage {
+    items: Vec<CatalogItem>,
+    /// Your Brix (None when not logged in).
+    brix: Option<i64>,
+    admin: bool,
+    /// How many Brix a day you can get: visiting, and challenges.
+    daily_bonus: i64,
+    daily_challenge_limit: i64,
+}
+
+async fn catalog(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<CatalogPage>> {
+    let me = user(&app, &headers).ok();
+    let owned = match &me {
+        Some(u) => app.db.owned(u.id).map_err(oops)?,
+        None => Vec::new(),
+    };
+    let items = items(&app)?
+        .into_iter()
+        .map(|item| CatalogItem { owned: me.as_ref().is_some_and(|u| may_wear(u, &owned, &item)), item })
+        .collect();
+    Ok(Json(CatalogPage {
+        items,
+        brix: me.as_ref().map(|u| u.brix),
+        admin: me.as_ref().is_some_and(|u| u.admin),
+        daily_bonus: crate::shop::DAILY_BONUS,
+        daily_challenge_limit: crate::shop::DAILY_CHALLENGE_LIMIT,
+    }))
+}
+
+#[derive(Deserialize)]
+struct Buy {
+    item: String,
+}
+
+async fn buy(State(app): State<Arc<App>>, headers: HeaderMap, Json(b): Json<Buy>) -> Result<Json<serde_json::Value>> {
+    let u = user(&app, &headers)?;
+    if !app.limits.take(&format!("buy:{}", u.id), limits::BUYS) {
+        return Err(slow_down());
+    }
+    let item = items(&app)?.into_iter().find(|i| i.id == b.item).ok_or_else(|| not_found("item"))?;
+    if u.admin || item.free() {
+        return Err(bad("you already have that"));
+    }
+    match app.db.buy(u.id, &item.id, item.price).map_err(oops)? {
+        Ok(brix) => Ok(Json(serde_json::json!({ "brix": brix, "message": format!("You got the {}!", item.title) }))),
+        Err(crate::db::Bought::AlreadyOwned) => Err(bad("you already have that")),
+        Err(crate::db::Bought::TooFewBrix { have }) => {
+            Err(bad(&format!("the {} costs {} Brix and you have {have}: complete challenges in games to earn more", item.title, item.price)))
+        }
+    }
+}
+
+async fn outfits(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<Vec<crate::db::Outfit>>> {
+    let u = user(&app, &headers)?;
+    Ok(Json(app.db.outfits(u.id).map_err(oops)?))
+}
+
+#[derive(Deserialize)]
+struct NewOutfit {
+    name: String,
+    avatar: Avatar,
+}
+
+async fn save_outfit(State(app): State<Arc<App>>, headers: HeaderMap, Path(slot): Path<i64>, Json(o): Json<NewOutfit>) -> Result<StatusCode> {
+    let u = user(&app, &headers)?;
+    if !(0..crate::shop::MAX_OUTFITS).contains(&slot) {
+        return Err(bad(&format!("you can save up to {} outfits", crate::shop::MAX_OUTFITS)));
+    }
+    let name = o.name.trim();
+    if name.is_empty() || name.chars().count() > 20 {
+        return Err(bad("an outfit's name is 1-20 characters"));
+    }
+    check_avatar(&o.avatar)?;
+    app.db.set_outfit(u.id, slot, &brixo_runtime::filter_chat(name), &o.avatar).map_err(oops)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_outfit(State(app): State<Arc<App>>, headers: HeaderMap, Path(slot): Path<i64>) -> Result<StatusCode> {
+    let u = user(&app, &headers)?;
+    app.db.delete_outfit(u.id, slot).map_err(oops)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn game_challenges(State(app): State<Arc<App>>, headers: HeaderMap, Path(id): Path<i64>) -> Result<Json<Vec<crate::db::ChallengeRow>>> {
+    let me = user(&app, &headers).ok().map(|u| u.id);
+    Ok(Json(app.db.game_challenges(id, me).map_err(oops)?))
 }
 
 // --- games ------------------------------------------------------------------
@@ -532,6 +689,7 @@ struct CatalogEntry {
     description: String,
     created: i64,
     has_thumbnail: bool,
+    featured: bool,
 }
 
 fn entry(g: crate::db::GameRow, counts: &std::collections::HashMap<i64, usize>) -> CatalogEntry {
@@ -544,6 +702,7 @@ fn entry(g: crate::db::GameRow, counts: &std::collections::HashMap<i64, usize>) 
         description: g.description,
         created: g.created,
         has_thumbnail: g.has_thumbnail,
+        featured: g.featured,
     }
 }
 
@@ -598,6 +757,11 @@ struct Profile {
     friends: Vec<crate::db::FriendRow>,
     /// How the one looking is related to them (None: not logged in, or it's them).
     relation: Option<crate::db::Relation>,
+    /// "playing", "online" or "offline", for everyone to see.
+    status: &'static str,
+    /// The game they're in: only shown to their friends (and themselves).
+    game: Option<FriendGame>,
+    last_seen: i64,
 }
 
 async fn profile(State(app): State<Arc<App>>, headers: HeaderMap, Path(name): Path<String>) -> Result<Json<Profile>> {
@@ -605,8 +769,15 @@ async fn profile(State(app): State<Arc<App>>, headers: HeaderMap, Path(name): Pa
     let counts = app.servers.player_counts();
     let games = app.db.games_by(u.id).map_err(oops)?.into_iter().map(|g| entry(g, &counts)).collect();
     let friends = app.db.friends(u.id).map_err(oops)?;
-    let relation = match user(&app, &headers) {
-        Ok(me) if me.id != u.id => Some(app.db.relation(me.id, u.id).map_err(oops)?),
+    let viewer = user(&app, &headers).ok();
+    let relation = match &viewer {
+        Some(me) if me.id != u.id => Some(app.db.relation(me.id, u.id).map_err(oops)?),
+        _ => None,
+    };
+    let game_id = app.servers.who_is_where().get(&u.username.to_lowercase()).copied();
+    let close = viewer.as_ref().is_some_and(|me| me.id == u.id) || relation == Some(crate::db::Relation::Friends);
+    let game = match (&viewer, game_id) {
+        (Some(me), Some(id)) if close => joinable(&app, me, id),
         _ => None,
     };
     Ok(Json(Profile {
@@ -618,6 +789,9 @@ async fn profile(State(app): State<Arc<App>>, headers: HeaderMap, Path(name): Pa
         friend_count: friends.len(),
         friends: friends.into_iter().take(9).collect(),
         relation,
+        status: status_of(game_id.is_some(), u.last_seen),
+        game,
+        last_seen: u.last_seen,
     }))
 }
 
@@ -653,10 +827,31 @@ struct FriendsPage {
 /// On the website within this long counts as online.
 const ONLINE_SECONDS: i64 = 180;
 
-async fn friends(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<FriendsPage>> {
-    let me = user(&app, &headers)?;
+/// A game someone's in, if `me` could join it: listed, or one for admins
+/// when `me` is one.
+fn joinable(app: &App, me: &User, game_id: i64) -> Option<FriendGame> {
+    match app.db.game(game_id).ok().flatten() {
+        Some(g) => Some(FriendGame { id: game_id, name: g.name }),
+        None if me.admin => app.db.admin_games(1000).ok()?.into_iter().find(|g| g.id == game_id).map(|g| FriendGame { id: game_id, name: g.name }),
+        None => None,
+    }
+}
+
+/// "playing", "online" or "offline".
+fn status_of(playing: bool, last_seen: i64) -> &'static str {
+    if playing {
+        "playing"
+    } else if crate::db::now() - last_seen < ONLINE_SECONDS {
+        "online"
+    } else {
+        "offline"
+    }
+}
+
+/// `me`'s friends and what they're up to: playing first, then online, then
+/// everyone else (by name within each).
+fn friend_statuses(app: &App, me: &User) -> Result<Vec<Friend>> {
     let playing = app.servers.who_is_where();
-    let now = crate::db::now();
     let mut friends: Vec<Friend> = app
         .db
         .friends(me.id)
@@ -664,23 +859,8 @@ async fn friends(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json
         .into_iter()
         .map(|f| {
             let game_id = playing.get(&f.username.to_lowercase()).copied();
-            // A game you can join: listed, or one for admins when you are one.
-            let game = game_id.and_then(|id| {
-                let listed = app.db.game(id).ok().flatten();
-                match listed {
-                    Some(g) => Some(FriendGame { id, name: g.name }),
-                    None if me.admin => app.db.admin_games(1000).ok()?.into_iter().find(|g| g.id == id).map(|g| FriendGame { id, name: g.name }),
-                    None => None,
-                }
-            });
-            let status = if game_id.is_some() {
-                "playing"
-            } else if now - f.last_seen < ONLINE_SECONDS {
-                "online"
-            } else {
-                "offline"
-            };
-            Friend { username: f.username, avatar: f.avatar, status, game, last_seen: f.last_seen }
+            let game = game_id.and_then(|id| joinable(app, me, id));
+            Friend { username: f.username, avatar: f.avatar, status: status_of(game_id.is_some(), f.last_seen), game, last_seen: f.last_seen }
         })
         .collect();
     // Playing first, then online, then everyone else (by name within each).
@@ -690,7 +870,32 @@ async fn friends(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json
         _ => 2,
     };
     friends.sort_by_key(|f| rank(f.status));
+    Ok(friends)
+}
+
+async fn friends(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<FriendsPage>> {
+    let me = user(&app, &headers)?;
+    let friends = friend_statuses(&app, &me)?;
     Ok(Json(FriendsPage { friends, requests: app.db.friend_requests_to(me.id).map_err(oops)?, sent: app.db.friend_requests_from(me.id).map_err(oops)? }))
+}
+
+/// What My Brixo (Home, logged in) shows beyond the games list.
+#[derive(Serialize)]
+struct HomePage {
+    /// Friends playing or on the website, playing first.
+    friends_online: Vec<Friend>,
+    friend_count: usize,
+    /// The games you played last, newest first.
+    recent: Vec<CatalogEntry>,
+}
+
+async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<HomePage>> {
+    let me = user(&app, &headers)?;
+    let friends = friend_statuses(&app, &me)?;
+    let friend_count = friends.len();
+    let counts = app.servers.player_counts();
+    let recent = app.db.recently_played(me.id, 6).map_err(oops)?.into_iter().map(|g| entry(g, &counts)).collect();
+    Ok(Json(HomePage { friends_online: friends.into_iter().filter(|f| f.status != "offline").take(12).collect(), friend_count, recent }))
 }
 
 #[derive(Deserialize)]
@@ -858,6 +1063,7 @@ async fn play(State(app): State<Arc<App>>, headers: HeaderMap, Path(game_id): Pa
         })?;
     let ticket = app.tickets.issue(u.id, game_id);
     let _ = app.db.add_visit(game_id);
+    let _ = app.db.played(u.id, game_id);
     Ok(Json(PlayPass { server: app.network.address(port), ticket }))
 }
 
@@ -891,6 +1097,11 @@ impl brixo_runtime::SaveStore for SiteSaves {
             let _ = self.app.db.set_player_save(self.game_id, user, data);
         }
     }
+    fn challenge(&self, key: &str, name: &str) -> Option<brixo_runtime::Completed> {
+        let user: i64 = key.parse().ok()?;
+        let (title, brix) = self.app.db.complete_challenge(self.game_id, user, name).ok()??;
+        Some(brixo_runtime::Completed { title, brix })
+    }
 }
 
 pub fn look_of(a: &Avatar) -> brixo_runtime::Look {
@@ -902,6 +1113,21 @@ pub fn look_of(a: &Avatar) -> brixo_runtime::Look {
         shoes: c(a.shoes),
         face: Face::from_name(&a.face).unwrap_or_default(),
         hats: brixo_core::Hat::list(&a.hats),
+        body: a.body.map(|b| b.map(c)),
+        shirt_style: brixo_core::Shirt::from_name(&a.shirt_style).unwrap_or_default(),
+        pants_style: brixo_core::Pants::from_name(&a.pants_style).unwrap_or_default(),
+        tshirt: brixo_core::TShirt::from_name(&a.tshirt),
+    }
+}
+
+/// The challenges Brixo's own games have: (name in the script, title, Brix, daily).
+pub fn sample_challenges(game: &str) -> &'static [(&'static str, &'static str, i64, bool)] {
+    match game {
+        "Brickport Speedway" => &[("finish_race", "Finish a Race", 10, true), ("win_race", "Win a Race", 25, true)],
+        "Flagfall" => &[("capture_flag", "Capture a Flag", 10, true), ("win_match", "Win a Match", 25, true)],
+        "Spire Wars" => &[("win_round", "Win a Round", 20, true), ("five_knockouts", "5 Knockouts in a Round", 30, false)],
+        "Coin Tycoon" => &[("finish_tycoon", "Build the Tower", 50, false)],
+        _ => &[],
     }
 }
 
@@ -952,6 +1178,10 @@ pub fn seed_samples(app: &App) {
         if let Ok(id) = app.db.publish(owner.id, name, &data) {
             let _ = app.db.set_game_info(id, owner.id, description);
             let _ = app.db.set_thumbnail(id, png);
+            // Their challenges, ready to pay (admins can change them).
+            for (challenge, title, brix, daily) in sample_challenges(name) {
+                let _ = app.db.seed_challenge(id, challenge, title, *brix, *daily);
+            }
         }
     }
     // The Test Lab: every feature in one place, for admins only.
@@ -967,6 +1197,27 @@ pub fn seed_samples(app: &App) {
     }
     let _ = app.db.set_blurb(owner.id, "The official Brixo account. We make the sample games.");
     seed_toolbox(app);
+    catalog_upgrade(app);
+}
+
+/// Once, when the Catalog arrives: everyone keeps what they were already
+/// wearing (things that cost Brix now) and gets the welcome Brix.
+pub fn catalog_upgrade(app: &App) {
+    if !app.db.first_time("catalog-v1").unwrap_or(false) {
+        return;
+    }
+    let catalog = crate::shop::catalog(|_| None);
+    for id in app.db.user_ids().unwrap_or_default() {
+        let Ok(Some(u)) = app.db.user(id) else { continue };
+        for item in crate::shop::worn(&u.avatar) {
+            if catalog.iter().any(|i| i.id == item && !i.free()) {
+                let _ = app.db.grant(id, &item);
+            }
+        }
+        if u.brix == 0 {
+            let _ = app.db.add_brix(id, crate::shop::WELCOME_BRIX, "welcome");
+        }
+    }
 }
 
 /// Puts Brixo's own toolbox items on the site (and keeps them up to date).
@@ -1183,6 +1434,92 @@ async fn admin_only(State(app): State<Arc<App>>, headers: HeaderMap, Json(r): Js
     }
     if r.admin_only {
         app.servers.stop(r.id);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn admin_challenges(State(app): State<Arc<App>>, headers: HeaderMap) -> Result<Json<serde_json::Value>> {
+    admin(&app, &headers)?;
+    let prices = app.db.prices().map_err(oops)?;
+    Ok(Json(serde_json::json!({
+        "challenges": app.db.admin_challenges().map_err(oops)?,
+        "items": crate::shop::catalog(|id| prices.get(id).copied()),
+        "changed_prices": prices,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ChallengeSetup {
+    id: i64,
+    title: String,
+    reward: i64,
+    daily: bool,
+    approved: bool,
+}
+
+/// An admin approves a challenge and sets its Brix (or changes them).
+async fn admin_set_challenge(State(app): State<Arc<App>>, headers: HeaderMap, Json(c): Json<ChallengeSetup>) -> Result<StatusCode> {
+    admin(&app, &headers)?;
+    let title = c.title.trim();
+    if title.is_empty() || title.chars().count() > 40 {
+        return Err(bad("a challenge's title is 1-40 characters"));
+    }
+    if !(0..=crate::shop::MAX_REWARD).contains(&c.reward) {
+        return Err(bad(&format!("a challenge pays 0 to {} Brix", crate::shop::MAX_REWARD)));
+    }
+    if !app.db.set_challenge(c.id, title, c.reward, c.daily, c.approved).map_err(oops)? {
+        return Err(not_found("challenge"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct PriceChange {
+    item: String,
+    /// None: back to the usual price.
+    price: Option<i64>,
+}
+
+async fn admin_price(State(app): State<Arc<App>>, headers: HeaderMap, Json(p): Json<PriceChange>) -> Result<StatusCode> {
+    admin(&app, &headers)?;
+    if !crate::shop::exists(&p.item) {
+        return Err(not_found("item"));
+    }
+    if p.price.is_some_and(|x| !(0..=100_000).contains(&x)) {
+        return Err(bad("a price is 0 to 100000 Brix"));
+    }
+    app.db.set_price(&p.item, p.price).map_err(oops)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct BrixGift {
+    username: String,
+    amount: i64,
+}
+
+/// An admin gives someone Brix (or takes some away, with a minus).
+async fn admin_brix(State(app): State<Arc<App>>, headers: HeaderMap, Json(g): Json<BrixGift>) -> Result<Json<serde_json::Value>> {
+    let me = admin(&app, &headers)?;
+    if g.amount == 0 || g.amount.abs() > 100_000 {
+        return Err(bad("give between 1 and 100000 Brix (or take, with a minus)"));
+    }
+    let u = app.db.user_by_name(&g.username).map_err(oops)?.ok_or_else(|| not_found("player"))?;
+    let brix = app.db.add_brix(u.id, g.amount, &format!("from admin {}", me.username)).map_err(oops)?;
+    Ok(Json(serde_json::json!({ "username": u.username, "brix": brix })))
+}
+
+#[derive(Deserialize)]
+struct FeatureRequest {
+    id: i64,
+    featured: bool,
+}
+
+/// Puts a game in the big banner on Home and Games (or takes it out).
+async fn admin_feature(State(app): State<Arc<App>>, headers: HeaderMap, Json(f): Json<FeatureRequest>) -> Result<StatusCode> {
+    admin(&app, &headers)?;
+    if !app.db.set_featured(f.id, f.featured).map_err(oops)? {
+        return Err(not_found("game"));
     }
     Ok(StatusCode::NO_CONTENT)
 }

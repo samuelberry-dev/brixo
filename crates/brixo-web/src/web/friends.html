@@ -19,39 +19,35 @@
     catch (err) { say(err.message, true); }
     draw();
   };
-  const person = (f, extra) => `<div class="friend">
-      <a href="/users/${encodeURIComponent(f.username)}" class="pic">${avatarSvg(f.avatar, true)}</a>
-      <div class="who"><a href="/users/${encodeURIComponent(f.username)}"><b>${esc(f.username)}</b></a>${extra}</div>
-    </div>`;
-  const status = (f) => f.status === "playing"
-    ? `<div class="status playing">${f.game ? `Playing <a href="/games/${f.game.id}">${esc(f.game.name)}</a>` : "In a game"}</div>
-       ${f.game ? `<button class="btn small green" data-join="${f.game.id}" data-name="${esc(f.game.name)}">Join</button>` : ""}`
-    : f.status === "online" ? `<div class="status online">Online</div>`
-    : `<div class="status">Offline${f.last_seen ? ` &middot; last on ${when(f.last_seen)}` : ""}</div>`;
+  const unfriend = (f) => `<a href="#" class="unfriend" data-remove="${esc(f.username)}">Unfriend</a>`;
+  const section = (title, list, cls) => list.length ? `<div class="fsec ${cls}"><h3>${title} <span>(${list.length})</span></h3>
+      <div class="people">${list.map((f) => personCard(f, unfriend(f))).join("")}</div></div>` : "";
 
   const draw = async () => {
     let d;
     try { d = await api("/api/friends"); }
     catch (err) { content.innerHTML = `<div class="box"><h2>Friends</h2><div class="inner"><p class="error">${esc(err.message)}</p></div></div>`; return; }
-    const playing = d.friends.filter((f) => f.status !== "offline").length;
-    content.innerHTML = `${note}<div class="cols"><div class="main">
-      <div class="box"><h2>Your Friends (${d.friends.length})${playing ? ` <span style="font-weight:normal">&middot; ${playing} on now</span>` : ""}</h2><div class="inner">
-        ${d.friends.length ? `<div class="friends">${d.friends.map((f) => person(f, `${status(f)}
-            <a href="#" class="unfriend" data-remove="${esc(f.username)}">Unfriend</a>`)).join("")}</div>`
-          : `<p>No friends yet. Find someone's name on a game page or the leaderboard, visit their profile, and press <b>Add Friend</b>, or type their name on the right.</p>`}
+    const by = (st) => d.friends.filter((f) => f.status === st);
+    const on = d.friends.length - by("offline").length;
+    content.innerHTML = `${note}
+      ${d.requests.length ? `<div class="box gold"><h2>Friend Requests (${d.requests.length})</h2><div class="inner">
+        <div class="people">${d.requests.map((f) => personCard({ ...f, status: "" }, `<div class="yesno">
+            <button class="btn small green" data-accept="${esc(f.username)}">Accept</button>
+            <button class="btn small gray" data-decline="${esc(f.username)}">Decline</button></div>`)).join("")}</div>
+      </div></div>` : ""}
+      <div class="cols"><div class="main">
+      <div class="box"><h2>Your Friends (${d.friends.length})${on ? ` <span style="font-weight:normal;text-transform:none">${on} on now</span>` : ""}</h2><div class="inner">
+        ${d.friends.length ? section("Playing now", by("playing"), "playing") + section("Online", by("online"), "online") + section("Offline", by("offline"), "offline")
+          : `<p style="margin:0">No friends yet. Find someone's name on a game page or in a game, visit their profile, and press <b>Add Friend</b>, or type their name on the right.</p>`}
       </div></div>
-    </div><div class="side" style="width:300px">
+    </div><div class="side" style="width:280px">
       <div class="box navy"><h2>Add a Friend</h2><div class="inner">
         <form id="add" class="addfriend"><input name="who" placeholder="Their username" maxlength="20" required><button class="btn small gold" type="submit">Send request</button></form>
       </div></div>
-      <div class="box"><h2>Friend Requests${d.requests.length ? ` (${d.requests.length})` : ""}</h2><div class="inner">
-        ${d.requests.length ? d.requests.map((f) => person(f, `<div>
-            <button class="btn small green" data-accept="${esc(f.username)}">Accept</button>
-            <button class="btn small gray" data-decline="${esc(f.username)}">Decline</button></div>`)).join("")
-          : `<p class="hint">Nobody's asked yet.</p>`}
-        ${d.sent.length ? `<h3 style="margin-top:10px">Waiting on</h3>${d.sent.map((f) => person(f, `<div class="status">Asked
-            &middot; <a href="#" data-cancel="${esc(f.username)}">take back</a></div>`)).join("")}` : ""}
-      </div></div>
+      ${d.sent.length ? `<div class="box"><h2>Waiting on (${d.sent.length})</h2><div class="inner">
+        <div class="people narrow">${d.sent.map((f) => personCard({ ...f, status: "" }, `<div class="status">Asked
+            &middot; <a href="#" data-cancel="${esc(f.username)}">take back</a></div>`)).join("")}</div>
+      </div></div>` : ""}
     </div></div>`;
     document.getElementById("add").onsubmit = async (e) => {
       e.preventDefault();
@@ -67,7 +63,7 @@
       e.preventDefault();
       if (confirm(`Unfriend ${a.dataset.remove}?`)) act("/api/friends/remove", a.dataset.remove, `You and ${a.dataset.remove} aren't friends any more.`);
     });
-    content.querySelectorAll("[data-join]").forEach((b) => b.onclick = () => playGame({ id: Number(b.dataset.join), name: b.dataset.name }, b));
+    wireJoins(content);
   };
   await draw();
   // Keep who's playing up to date while the page is open.

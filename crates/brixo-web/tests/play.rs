@@ -66,15 +66,22 @@ fn sign_up_customize_press_play_and_join_as_yourself() {
     assert_eq!(status(browser().post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "ann", "password": "whatever"}))), 400, "names are unique, whatever the case");
     assert_eq!(status(browser().post(&format!("{site}/api/signup")).send_json(serde_json::json!({"username": "shithead", "password": "whatever"}))), 400, "no rude names");
 
-    // Customize the avatar.
-    let look = serde_json::json!({"skin": [204,142,105], "shirt": [196,40,28], "pants": [27,42,53], "shoes": [27,27,27], "face": "determined", "hats": ["top_hat", "headphones"]});
+    // Customize the avatar: the starter set is free; headphones cost Brix.
+    let look = serde_json::json!({"skin": [204,142,105], "shirt": [196,40,28], "pants": [27,42,53], "shoes": [27,27,27], "face": "determined",
+        "hats": ["headphones"], "shirt_style": "tee", "pants_style": "jeans", "tshirt": "smiley",
+        "body": [[204,142,105],[196,40,28],[204,142,105],[204,142,105],[13,105,172],[13,105,172]]});
+    assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(look.clone())), 400, "not bought yet");
+    let bought: serde_json::Value = ann.post(&format!("{site}/api/shop/buy")).send_json(serde_json::json!({"item": "hat:headphones"})).unwrap().into_json().unwrap();
+    assert_eq!(bought["brix"], 10, "50 welcome Brix, less 40");
+    assert_eq!(status(ann.post(&format!("{site}/api/shop/buy")).send_json(serde_json::json!({"item": "hat:top_hat"}))), 400, "can't afford it");
+    assert_eq!(status(ann.post(&format!("{site}/api/shop/buy")).send_json(serde_json::json!({"item": "hat:headphones"}))), 400, "already got it");
     ann.put(&format!("{site}/api/avatar")).send_json(look).unwrap();
     let bad_face = serde_json::json!({"skin": [1,1,1], "shirt": [1,1,1], "pants": [1,1,1], "shoes": [1,1,1], "face": "evil"});
     assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(bad_face)), 400);
     let hat = |hats: serde_json::Value| serde_json::json!({"skin": [1,1,1], "shirt": [1,1,1], "pants": [1,1,1], "shoes": [1,1,1], "face": "smile", "hats": hats});
     assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(hat(serde_json::json!(["sombrero"])))), 400, "unknown hat");
     assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(hat(serde_json::json!(["cap", "cap"])))), 400, "same hat twice");
-    assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(hat(serde_json::json!(["cap", "halo", "crown", "beanie"])))), 400, "too many hats");
+    assert_eq!(status(ann.put(&format!("{site}/api/avatar")).send_json(hat(serde_json::json!(["cap", "beanie"])))), 400, "one hat on the head");
 
     // Press Play: a server starts, and we get a ticket into it.
     let pass: serde_json::Value = ann.post(&format!("{site}/api/games/{game_id}/play")).call().unwrap().into_json().unwrap();
@@ -89,7 +96,9 @@ fn sign_up_customize_press_play_and_join_as_yourself() {
     assert_eq!(player.world.get(me).unwrap().name, "Ann");
     let p = player.world.player(me).unwrap();
     assert_eq!(p.face, brixo_core::Face::Determined);
-    assert_eq!(p.hats, [Some(brixo_core::Hat::TopHat), Some(brixo_core::Hat::Headphones), None], "wearing our hats");
+    assert_eq!(p.hats, [Some(brixo_core::Hat::Headphones), None, None, None], "wearing our headphones");
+    assert_eq!((p.shirt, p.pants, p.tshirt), (brixo_core::Shirt::Tee, brixo_core::Pants::Jeans, Some(brixo_core::TShirt::Smiley)));
+    assert_eq!(p.body_colors().map(|c| c.b), [105, 28, 105, 105, 172, 172], "body colours");
     assert_eq!((p.shirt_color.r, p.shirt_color.g, p.shirt_color.b), (196, 40, 28));
     let game_script = player.world.find_first("Game").unwrap();
     assert_eq!(player.world.script(game_script).unwrap().source, "", "scripts stay on the server");
@@ -644,4 +653,43 @@ fn friends_ask_accept_see_whos_playing_and_join_them() {
     assert!(app.db.set_banned("Cat", true).unwrap().is_some());
     assert!(get(&ann, "/api/friends")["friends"].as_array().unwrap().is_empty());
     drop(bobs);
+}
+
+#[test]
+fn challenges_pay_once_approved_and_only_so_much_a_day() {
+    let db = brixo_web::db::Db::open(":memory:").unwrap();
+    let maker = db.create_user("Maker", "x").unwrap();
+    let kid = db.create_user("Kid", "x").unwrap();
+    let game = db.publish(maker.id, "Obby", "{}").unwrap();
+    assert_eq!(kid.brix, brixo_web::shop::WELCOME_BRIX);
+
+    // A new challenge waits for an admin: it doesn't count yet.
+    assert_eq!(db.complete_challenge(game, kid.id, "finish").unwrap(), None);
+    let c = db.admin_challenges().unwrap();
+    assert_eq!((c.len(), c[0].title.as_str(), c[0].approved), (1, "Finish", false));
+    assert!(db.game_challenges(game, Some(kid.id)).unwrap().is_empty(), "not shown until approved");
+
+    // Approved at 30 Brix: paid once.
+    db.set_challenge(c[0].id, "Finish the Obby", 30, false, true).unwrap();
+    assert_eq!(db.complete_challenge(game, kid.id, "finish").unwrap(), Some(("Finish the Obby".to_string(), 30)));
+    assert_eq!(db.complete_challenge(game, kid.id, "finish").unwrap(), None, "only once");
+    assert!(db.game_challenges(game, Some(kid.id)).unwrap()[0].done);
+    assert_eq!(db.user(kid.id).unwrap().unwrap().brix, brixo_web::shop::WELCOME_BRIX + 30);
+
+    // A daily one worth a lot runs into the day's limit.
+    db.complete_challenge(game, kid.id, "big").unwrap();
+    let big = db.admin_challenges().unwrap().into_iter().find(|c| c.name == "big").unwrap();
+    db.set_challenge(big.id, "Big", 500, true, true).unwrap();
+    let paid = db.complete_challenge(game, kid.id, "big").unwrap().unwrap().1;
+    assert_eq!(paid, brixo_web::shop::DAILY_CHALLENGE_LIMIT - 30);
+
+    // Too many challenges in one game: no more are made.
+    for i in 0..100 {
+        db.complete_challenge(game, kid.id, &format!("c{i}")).unwrap();
+    }
+    assert_eq!(db.admin_challenges().unwrap().len() as i64, brixo_web::shop::MAX_CHALLENGES);
+
+    // The daily visit bonus: once a day.
+    assert_eq!(db.daily_bonus(kid.id).unwrap(), Some(brixo_web::shop::DAILY_BONUS));
+    assert_eq!(db.daily_bonus(kid.id).unwrap(), None);
 }

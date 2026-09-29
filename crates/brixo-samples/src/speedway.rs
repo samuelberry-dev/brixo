@@ -1319,7 +1319,10 @@ fn finish(s)
     s.done = true
     s.finish = time() - go_time
     finished_count += 1
+    -- Challenges (Brix on the website): finishing, and winning.
+    complete_challenge(s.p, "finish_race")
     if finished_count == 1 then
+        complete_challenge(s.p, "win_race")
         first_finish = time()
         cheer_until = time() + 5
         say(s.p.name + " wins!")

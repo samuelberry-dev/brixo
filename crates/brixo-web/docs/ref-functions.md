@@ -46,6 +46,14 @@ Kept for each player in each game, between visits. See [Saving player data](howt
 | `save(player, name, value)` | Keeps `value` (a number, text, true/false, or a list or map of them) for this player under `name`. `nil` forgets it. Up to 64 KB per player per game. |
 | `load(player, name)` | What was saved under `name` for this player, or `nil`. |
 
+## Challenges
+
+Players earn Brix for them on the website. See [Challenges and Brix](challenges).
+
+| Function | What it does |
+|---|---|
+| `complete_challenge(player, name)` | The player has done the challenge called `name` (like `"win_round"`). It counts once per player (daily ones, once a day), says so in everyone's chat, and gives back the Brix it paid them (0 if it didn't count, or doesn't pay yet). |
+
 ## Waiting
 
 | Function | What it does |

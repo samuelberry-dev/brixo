@@ -19,8 +19,10 @@ end
 | `max_health` | read/set | 100 to start with. |
 | `walk_speed` | read/set | Studs per second. 16 to start with. |
 | `jump_power` | read/set | How hard they jump. 39 to start with (about 7 studs). |
-| `face` | read/set | `"smile"`, `"happy"`, `"surprised"` or `"determined"`. |
-| `skin_color`, `shirt_color`, `pants_color` | read/set | `{r, g, b}` colors. Players pick their own on the website; games can change them (team shirts). |
+| `face` | read/set | `"smile"`, `"grin"`, `"wink"`... All of them are in [Names](ref-names#faces). |
+| `skin_color`, `shirt_color`, `pants_color` | read/set | `{r, g, b}` colors. Players pick their own on the website; games can change them (team shirts). `skin_color` colors the head, arms and legs; a shirt or pants color on someone wearing none puts a plain one on. |
+| `shirt`, `pants`, `tshirt` | read/set | What they're wearing, by name: `p.shirt = "hoodie"`, `p.tshirt = "star"` (`nil` for no picture). See [Names](ref-names#clothes). |
+| `hats` | read/set | Their accessories: a list like `["crown", "cape"]`, one each for the head, face, neck and back. `[]` takes them all off. |
 | `camera_mode` | read/set | `"default"`, `"first_person"` or `"third_person"`. |
 | `look` | read | Which way they're facing, flat: `{x, y = 0, z}`. |
 | `mouse` | read | The spot in the world they last clicked with a tool. See [Tools](tools). |

@@ -40,6 +40,9 @@ impl Vec3 {
     }
 }
 
+mod cosmetics;
+pub use cosmetics::*;
+
 /// 8-bit RGB colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Color {
@@ -641,130 +644,6 @@ impl GuiProps {
     }
 }
 
-/// The expression drawn on a player's face panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum Face {
-    #[default]
-    Smile,
-    Happy,
-    Surprised,
-    Determined,
-}
-
-impl Face {
-    pub const ALL: [Face; 4] = [Face::Smile, Face::Happy, Face::Surprised, Face::Determined];
-
-    /// The name scripts use: `player.face = "surprised"`.
-    pub fn name(self) -> &'static str {
-        match self {
-            Face::Smile => "smile",
-            Face::Happy => "happy",
-            Face::Surprised => "surprised",
-            Face::Determined => "determined",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<Face> {
-        Face::ALL.into_iter().find(|f| f.name() == name)
-    }
-}
-
-/// A hat a player wears. Players can wear up to MAX_HATS at once; each one
-/// sits on the head in its own spot, and it's fine if two overlap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Hat {
-    Cap,
-    Beanie,
-    TopHat,
-    CowboyHat,
-    Crown,
-    Headphones,
-    PartyHat,
-    ChefHat,
-    VikingHelmet,
-    HardHat,
-    PropellerCap,
-    Halo,
-    TrafficCone,
-}
-
-/// How many hats a player can wear at once.
-pub const MAX_HATS: usize = 3;
-
-impl Hat {
-    pub const ALL: [Hat; 13] = [
-        Hat::Cap,
-        Hat::Beanie,
-        Hat::TopHat,
-        Hat::CowboyHat,
-        Hat::Crown,
-        Hat::Headphones,
-        Hat::PartyHat,
-        Hat::ChefHat,
-        Hat::VikingHelmet,
-        Hat::HardHat,
-        Hat::PropellerCap,
-        Hat::Halo,
-        Hat::TrafficCone,
-    ];
-
-    /// The name the website and saved avatars use.
-    pub fn name(self) -> &'static str {
-        match self {
-            Hat::Cap => "cap",
-            Hat::Beanie => "beanie",
-            Hat::TopHat => "top_hat",
-            Hat::CowboyHat => "cowboy_hat",
-            Hat::Crown => "crown",
-            Hat::Headphones => "headphones",
-            Hat::PartyHat => "party_hat",
-            Hat::ChefHat => "chef_hat",
-            Hat::VikingHelmet => "viking_helmet",
-            Hat::HardHat => "hard_hat",
-            Hat::PropellerCap => "propeller_cap",
-            Hat::Halo => "halo",
-            Hat::TrafficCone => "traffic_cone",
-        }
-    }
-
-    /// What people see: "Top Hat".
-    pub fn title(self) -> &'static str {
-        match self {
-            Hat::Cap => "Baseball Cap",
-            Hat::Beanie => "Beanie",
-            Hat::TopHat => "Top Hat",
-            Hat::CowboyHat => "Cowboy Hat",
-            Hat::Crown => "Crown",
-            Hat::Headphones => "Headphones",
-            Hat::PartyHat => "Party Hat",
-            Hat::ChefHat => "Chef Hat",
-            Hat::VikingHelmet => "Viking Helmet",
-            Hat::HardHat => "Hard Hat",
-            Hat::PropellerCap => "Propeller Cap",
-            Hat::Halo => "Halo",
-            Hat::TrafficCone => "Traffic Cone",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<Hat> {
-        Hat::ALL.into_iter().find(|h| h.name() == name)
-    }
-
-    /// Up to MAX_HATS known hats from a list of names, skipping unknown
-    /// names and repeats.
-    pub fn list(names: &[String]) -> [Option<Hat>; MAX_HATS] {
-        let mut out = [None; MAX_HATS];
-        let mut n = 0;
-        for hat in names.iter().filter_map(|s| Hat::from_name(s)) {
-            if n < MAX_HATS && !out.contains(&Some(hat)) {
-                out[n] = Some(hat);
-                n += 1;
-            }
-        }
-        out
-    }
-}
-
 /// How the camera follows a player. Games choose; `Default` lets the
 /// player scroll between third and first person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -805,13 +684,29 @@ pub struct PlayerProps {
     /// Upward speed when jumping, in studs per second.
     pub jump_power: f32,
     pub face: Face,
+    /// Their skin: the colour scripts read and set as `skin_color`. Setting
+    /// it colours the head, arms and legs (see body_colors).
     pub skin_color: Color,
+    /// The colour their shirt is worn in.
     pub shirt_color: Color,
+    /// The colour their pants are worn in.
     pub pants_color: Color,
     pub shoes_color: Color,
-    /// The hats they're wearing (up to MAX_HATS).
+    /// The accessories they're wearing (one per HatSlot).
     #[serde(default)]
     pub hats: [Option<Hat>; MAX_HATS],
+    /// Each body part's colour, in BodyPart::ALL order. None (players from
+    /// before body colours) means skin everywhere but the torso, which
+    /// takes the shirt colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_colors: Option<BodyColors>,
+    #[serde(default)]
+    pub shirt: Shirt,
+    #[serde(default)]
+    pub pants: Pants,
+    /// The picture on the front of their shirt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tshirt: Option<TShirt>,
     /// Where in the world their mouse pointed the last time they clicked
     /// with a tool (scripts read it as `player.mouse`): what a gear aims at.
     #[serde(default)]
@@ -858,6 +753,10 @@ impl Default for PlayerProps {
             pants_color: Color::new(74, 85, 120),
             shoes_color: Color::new(43, 43, 51),
             hats: [None; MAX_HATS],
+            body_colors: None,
+            shirt: Shirt::Tee,
+            pants: Pants::Plain,
+            tshirt: None,
             mouse: Vec3::new(0.0, 0.0, 0.0),
             camera_mode: CameraMode::Default,
             equipped: None,
@@ -867,6 +766,28 @@ impl Default for PlayerProps {
             dead: 0.0,
             kart: None,
         }
+    }
+}
+
+impl PlayerProps {
+    /// Each body part's colour (filling in for players from before body
+    /// colours: skin, with the torso in the shirt colour).
+    pub fn body_colors(&self) -> BodyColors {
+        self.body_colors.unwrap_or_else(|| {
+            let mut c = body_all(self.skin_color);
+            c[BodyPart::Torso.index()] = self.shirt_color;
+            c
+        })
+    }
+
+    /// Sets the skin colour the way scripts mean it: the head, arms and legs.
+    pub fn set_skin(&mut self, c: Color) {
+        self.skin_color = c;
+        let mut body = self.body_colors();
+        for part in [BodyPart::Head, BodyPart::LeftArm, BodyPart::RightArm, BodyPart::LeftLeg, BodyPart::RightLeg] {
+            body[part.index()] = c;
+        }
+        self.body_colors = Some(body);
     }
 }
 
@@ -1672,13 +1593,9 @@ mod tests {
 
     #[test]
     fn faces_and_camera_modes_have_script_names() {
-        for f in Face::ALL {
-            assert_eq!(Face::from_name(f.name()), Some(f));
-        }
         for m in CameraMode::ALL {
             assert_eq!(CameraMode::from_name(m.name()), Some(m));
         }
-        assert_eq!(Face::from_name("grumpy"), None);
     }
 
     #[test]

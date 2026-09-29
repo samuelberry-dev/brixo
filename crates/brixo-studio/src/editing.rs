@@ -17,14 +17,14 @@ pub const KEYWORDS: &[&str] = &[
 
 /// Functions Brixo gives scripts, on top of Rovik's own built-ins.
 pub const BRIXO_FUNCTIONS: &[&str] =
-    &["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_sound_at", "play_music", "stop_music", "explode", "save", "load", "leaderboard"];
+    &["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_sound_at", "play_music", "stop_music", "explode", "save", "load", "complete_challenge", "leaderboard"];
 
 /// Fields scripts use on objects (after a `.`).
 pub const FIELDS: &[&str] = &[
     "name", "parent", "children", "class", "position", "size", "rotation", "color", "anchored", "can_collide",
     "transparency", "material", "shape", "velocity", "floating", "bounce", "hinge", "hinge_at", "motor_speed", "swing_to", "hinge_angle", "time_of_day", "brightness", "fog_start", "fog_end", "fog_color", "sky_color", "health", "max_health", "walk_speed",
     "jump_power", "face", "look", "swinging", "equipped", "team", "text", "visible", "text_color", "text_size",
-    "background", "background_color", "attached_to", "volume", "shirt_color", "pants_color", "skin_color", "x", "y",
+    "background", "background_color", "attached_to", "volume", "shirt_color", "pants_color", "skin_color", "shirt", "pants", "tshirt", "hats", "x", "y",
     "z", "r", "g", "b",
 ];
 

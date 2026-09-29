@@ -8,23 +8,70 @@
 
 use std::f32::consts::{PI, TAU};
 
-use brixo_core::{Face, Hat};
+use brixo_core::{BodyPart, Face, Hat, Pants, PlayerProps, Shirt, Sleeves, TShirt};
 use glam::{Vec2, Vec3};
 
+pub(crate) mod art;
 mod hats;
 
 use crate::Vertex;
 
-/// Which of the player's colours a mesh is drawn in.
+/// Which colour a mesh is drawn in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Slot {
-    Skin,
+    /// One of the player's six body colours.
+    Body(BodyPart),
+    /// The colour their shirt is worn in.
     Shirt,
+    /// The colour their pants are worn in.
     Pants,
-    /// The face decal: white, textured with the face's picture.
+    /// White, so a full-colour picture shows as it is (the face, a
+    /// t-shirt picture).
     Decal,
-    /// A fixed colour (hats).
+    /// A fixed colour (accessories).
     Paint([u8; 3]),
+}
+
+/// Which picture (atlas cell) a mesh is printed with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Tex {
+    None,
+    Face,
+    ShirtAround,
+    ShirtFront,
+    Pants,
+    TShirt,
+}
+
+/// Which players a mesh is drawn for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Show {
+    Always,
+    /// Wearing this accessory.
+    Hat(Hat),
+    /// Wearing a shirt (any shirt).
+    Shirt,
+    /// Wearing a shirt with sleeves this long.
+    Sleeves(Sleeves),
+    /// Wearing long pants.
+    PantsLong,
+    /// Wearing shorts.
+    PantsShort,
+    /// Wearing a t-shirt picture.
+    TShirt,
+}
+
+/// Whether a mesh shows on this player.
+pub(crate) fn shows(show: Show, p: &PlayerProps) -> bool {
+    match show {
+        Show::Always => true,
+        Show::Hat(h) => p.hats.contains(&Some(h)),
+        Show::Shirt => p.shirt != Shirt::None,
+        Show::Sleeves(s) => p.shirt != Shirt::None && p.shirt.sleeves() == s,
+        Show::PantsLong => p.pants != Pants::None && !p.pants.short(),
+        Show::PantsShort => p.pants.short(),
+        Show::TShirt => p.tshirt.is_some(),
+    }
 }
 
 /// Which body part a mesh belongs to: arms and legs swing about a pivot.
@@ -56,8 +103,8 @@ impl Limb {
 pub(crate) struct AvatarMesh {
     pub slot: Slot,
     pub limb: Limb,
-    /// Only drawn on players wearing this hat.
-    pub hat: Option<Hat>,
+    pub show: Show,
+    pub tex: Tex,
     pub vertices: Vec<Vertex>,
 }
 
@@ -65,27 +112,46 @@ pub(crate) const HEAD_CENTER: Vec3 = Vec3::new(0.0, 1.8, 0.0);
 pub(crate) const HEAD_RADIUS: f32 = 0.86;
 /// How big the face picture is, wrapped onto the front of the head.
 const DECAL_SIZE: f32 = 1.25;
+/// How big the t-shirt picture is on the front of the torso.
+const TSHIRT_SIZE: f32 = 1.24;
 
 pub(crate) fn meshes() -> Vec<AvatarMesh> {
     let mut out = Vec::new();
-    let mut piece = |slot, limb, build: &dyn Fn(&mut Mesh)| {
+    let mut piece = |slot, limb, show, tex, build: &dyn Fn(&mut Mesh)| {
         let mut m = Mesh::default();
         build(&mut m);
-        out.push(AvatarMesh { slot, limb, hat: None, vertices: m.vertices });
+        out.push(AvatarMesh { slot, limb, show, tex, vertices: m.vertices });
     };
-    // The character faces +Z, so its right side is -X.
-    for (side, arm, leg) in [(1.0f32, Limb::ArmLeft, Limb::LegLeft), (-1.0, Limb::ArmRight, Limb::LegRight)] {
-        // No shoes: the pants go all the way to the ground.
-        piece(Slot::Pants, leg, &|m| m.cuboid(Vec3::new(side * 0.49, -1.65, 0.0), Vec3::new(0.88, 1.7, 0.94)));
-        piece(Slot::Shirt, arm, &|m| m.cuboid(Vec3::new(side * 1.43, 0.295, 0.0), Vec3::new(0.8, 1.35, 0.9)));
-        piece(Slot::Skin, arm, &|m| m.cuboid(Vec3::new(side * 1.43, -0.63, 0.0), Vec3::new(0.72, 0.5, 0.82)));
+    let all = |_: Vec3| true;
+    // The character faces +Z, so its right side is -X. Body parts first;
+    // clothes are shells a little bigger than what they cover.
+    for (side, arm, leg, arm_part, leg_part) in [
+        (1.0f32, Limb::ArmLeft, Limb::LegLeft, BodyPart::LeftArm, BodyPart::LeftLeg),
+        (-1.0, Limb::ArmRight, Limb::LegRight, BodyPart::RightArm, BodyPart::RightLeg),
+    ] {
+        piece(Slot::Body(leg_part), leg, Show::Always, Tex::None, &|m| m.cuboid(Vec3::new(side * 0.49, -1.645, 0.0), Vec3::new(0.84, 1.69, 0.9), &all));
+        piece(Slot::Pants, leg, Show::PantsLong, Tex::Pants, &|m| m.cuboid(Vec3::new(side * 0.49, -1.65, 0.0), Vec3::new(0.88, 1.7, 0.94), &all));
+        piece(Slot::Pants, leg, Show::PantsShort, Tex::Pants, &|m| m.cuboid(Vec3::new(side * 0.49, -1.21, 0.0), Vec3::new(0.88, 0.82, 0.94), &all));
+        piece(Slot::Body(arm_part), arm, Show::Always, Tex::None, &|m| m.cuboid(Vec3::new(side * 1.43, 0.04, 0.0), Vec3::new(0.72, 1.84, 0.82), &all));
+        piece(Slot::Shirt, arm, Show::Sleeves(Sleeves::Long), Tex::ShirtAround, &|m| {
+            m.cuboid(Vec3::new(side * 1.43, 0.295, 0.0), Vec3::new(0.8, 1.35, 0.9), &all)
+        });
+        piece(Slot::Shirt, arm, Show::Sleeves(Sleeves::Short), Tex::ShirtAround, &|m| {
+            m.cuboid(Vec3::new(side * 1.43, 0.635, 0.0), Vec3::new(0.8, 0.67, 0.9), &all)
+        });
     }
-    piece(Slot::Shirt, Limb::Body, &|m| m.cuboid(Vec3::new(0.0, 0.125, 0.0), Vec3::new(2.0, 1.85, 1.02)));
-    piece(Slot::Skin, Limb::Head, &|m| m.sphere(HEAD_CENTER, HEAD_RADIUS));
-    piece(Slot::Decal, Limb::Head, &|m| m.face_patch());
-    for hat in Hat::ALL {
+    let torso = Vec3::new(0.0, 0.125, 0.0);
+    piece(Slot::Body(BodyPart::Torso), Limb::Body, Show::Always, Tex::None, &|m| m.cuboid(torso, Vec3::new(2.0, 1.85, 1.02), &all));
+    let shell = Vec3::new(2.04, 1.87, 1.06);
+    piece(Slot::Shirt, Limb::Body, Show::Shirt, Tex::ShirtFront, &|m| m.cuboid(torso, shell, &|n: Vec3| n.z > 0.5));
+    piece(Slot::Shirt, Limb::Body, Show::Shirt, Tex::ShirtAround, &|m| m.cuboid(torso, shell, &|n: Vec3| n.z <= 0.5));
+    piece(Slot::Decal, Limb::Body, Show::TShirt, Tex::TShirt, &|m| m.tshirt_patch(Vec3::new(0.0, 0.2, shell.z / 2.0 + 0.006)));
+    piece(Slot::Body(BodyPart::Head), Limb::Head, Show::Always, Tex::None, &|m| m.sphere(HEAD_CENTER, HEAD_RADIUS));
+    piece(Slot::Decal, Limb::Head, Show::Always, Tex::Face, &|m| m.face_patch());
+    for &hat in Hat::ALL {
+        let limb = if hat.slot().on_head() { Limb::Head } else { Limb::Body };
         for (color, m) in hats::hat_pieces(hat) {
-            out.push(AvatarMesh { slot: Slot::Paint(color), limb: Limb::Head, hat: Some(hat), vertices: m.vertices });
+            out.push(AvatarMesh { slot: Slot::Paint(color), limb, show: Show::Hat(hat), tex: Tex::None, vertices: m.vertices });
         }
     }
     out
@@ -104,7 +170,7 @@ pub(crate) fn shape_meshes() -> Vec<Vec<Vertex>> {
         .map(|shape| {
             let mut m = Mesh::default();
             match shape {
-                brixo_core::Shape::Block => m.cuboid(Vec3::ZERO, Vec3::ONE),
+                brixo_core::Shape::Block => m.cuboid(Vec3::ZERO, Vec3::ONE, &|_| true),
                 brixo_core::Shape::Wedge => m.wedge(),
                 brixo_core::Shape::Cylinder => m.cylinder(),
                 brixo_core::Shape::Ball => m.sphere(Vec3::ZERO, 0.5),
@@ -119,13 +185,31 @@ impl Mesh {
         self.vertices.push(Vertex { position: p.to_array(), normal: n.to_array(), uv: uv.to_array() });
     }
 
-    /// A box with flat faces, counter-clockwise seen from outside.
-    fn cuboid(&mut self, center: Vec3, size: Vec3) {
+    /// A box with flat faces, counter-clockwise seen from outside: the
+    /// sides whose outward normal passes `keep`. Each side shows a whole
+    /// picture, the right way up and round seen from outside.
+    fn cuboid(&mut self, center: Vec3, size: Vec3, keep: &dyn Fn(Vec3) -> bool) {
         let (cube, indices) = crate::cube();
-        for i in indices {
-            let v = cube[i as usize];
-            let p = center + Vec3::from(v.position) * size;
-            self.vertex(p, Vec3::from(v.normal), Vec2::from(v.uv));
+        for tri in indices.chunks(3) {
+            if !keep(Vec3::from(cube[tri[0] as usize].normal)) {
+                continue;
+            }
+            for &i in tri {
+                let v = cube[i as usize];
+                let p = center + Vec3::from(v.position) * size;
+                self.vertex(p, Vec3::from(v.normal), Vec2::from(v.uv));
+            }
+        }
+    }
+
+    /// A flat square picture facing +Z (the front of the torso), centred
+    /// on `center`, reading left to right seen from the front.
+    fn tshirt_patch(&mut self, center: Vec3) {
+        let h = TSHIRT_SIZE / 2.0;
+        let corner = |u: f32, v: f32| (center + Vec3::new((u - 0.5) * 2.0 * h, (0.5 - v) * 2.0 * h, 0.0), Vec2::new(u, v));
+        let (a, b, c, d) = (corner(0.0, 1.0), corner(1.0, 1.0), corner(1.0, 0.0), corner(0.0, 0.0));
+        for (p, uv) in [a, b, c, a, c, d] {
+            self.vertex(p, Vec3::Z, uv);
         }
     }
 
@@ -205,10 +289,10 @@ impl Mesh {
         let r = HEAD_RADIUS * 1.006;
         let point = |i: usize, j: usize| -> Option<(Vec3, Vec3, Vec2)> {
             let uv = Vec2::new(i as f32 / steps as f32, j as f32 / steps as f32);
-            // Seen from the front, +X is on the viewer's right... of the
-            // character, so u runs from +X to -X for the picture to read
-            // the right way round.
-            let x = (0.5 - uv.x) * DECAL_SIZE;
+            // Seen from the front, the character's left (+X) is on the
+            // viewer's right, so u runs from -X to +X for the picture to
+            // read the right way round (as on the torso's front).
+            let x = (uv.x - 0.5) * DECAL_SIZE;
             let y = (0.5 - uv.y) * DECAL_SIZE - 0.05;
             let z2 = r * r - x * x - y * y;
             if z2 < (r * 0.25).powi(2) {
@@ -221,9 +305,9 @@ impl Mesh {
             for j in 0..steps {
                 let quad = [point(i, j), point(i + 1, j), point(i + 1, j + 1), point(i, j + 1)];
                 let [Some(a), Some(b), Some(c), Some(d)] = quad else { continue };
-                // Counter-clockwise seen from the front (+Z). (u runs toward
-                // -X and v runs down, so a -> b -> c already turns that way.)
-                for v in [a, b, c, a, c, d] {
+                // Counter-clockwise seen from the front (+Z): u runs toward
+                // +X and v runs down, so a -> d -> c turns that way.
+                for v in [a, c, b, a, d, c] {
                     self.vertex(v.0, v.1, v.2);
                 }
             }
@@ -231,11 +315,14 @@ impl Mesh {
     }
 }
 
-// --- face pictures ---------------------------------------------------------
+// --- the atlas ---------------------------------------------------------------
 
-/// Each face is a 64x64 pixel-art picture; slot 0 of the atlas is plain
-/// white, for everything that isn't textured.
+/// Every picture lives in one texture, a grid of 64x64 cells: cell 0 is
+/// plain white (for everything without a picture), then the faces, the
+/// material textures, shirts (the back and sides, then the front), pants
+/// and t-shirt pictures.
 pub(crate) const CELL: u32 = 64;
+pub(crate) const COLS: u32 = 16;
 /// Materials with a texture (Plastic and Neon are plain).
 pub(crate) const TEXTURED: [brixo_core::Material; 5] = [
     brixo_core::Material::Wood,
@@ -244,11 +331,91 @@ pub(crate) const TEXTURED: [brixo_core::Material; 5] = [
     brixo_core::Material::Grass,
     brixo_core::Material::Concrete,
 ];
-pub(crate) const ATLAS_SLOTS: u32 = 1 + Face::ALL.len() as u32 + TEXTURED.len() as u32;
+const FACES: u32 = Face::ALL.len() as u32;
+/// Shirts and pants with a picture (all but "none", which is first).
+const SHIRTS: u32 = Shirt::ALL.len() as u32 - 1;
+const PANTS: u32 = Pants::ALL.len() as u32 - 1;
+const TSHIRTS: u32 = TShirt::ALL.len() as u32;
+const FIRST_MATERIAL: u32 = 1 + FACES;
+const FIRST_SHIRT: u32 = FIRST_MATERIAL + TEXTURED.len() as u32;
+const FIRST_SHIRT_FRONT: u32 = FIRST_SHIRT + SHIRTS;
+const FIRST_PANTS: u32 = FIRST_SHIRT_FRONT + SHIRTS;
+const FIRST_TSHIRT: u32 = FIRST_PANTS + PANTS;
+pub(crate) const ATLAS_CELLS: u32 = FIRST_TSHIRT + TSHIRTS;
+pub(crate) const ROWS: u32 = ATLAS_CELLS.div_ceil(COLS);
 
-/// Which atlas slot a material's texture lives in, if it has one.
+fn position<T: PartialEq>(all: &[T], x: &T) -> u32 {
+    all.iter().position(|y| y == x).unwrap() as u32
+}
+
+/// Which atlas cell a material's texture lives in, if it has one.
 pub(crate) fn material_slot(m: brixo_core::Material) -> Option<u32> {
-    TEXTURED.iter().position(|t| *t == m).map(|i| 1 + Face::ALL.len() as u32 + i as u32)
+    TEXTURED.iter().position(|t| *t == m).map(|i| FIRST_MATERIAL + i as u32)
+}
+
+/// Which atlas cell a face lives in.
+pub(crate) fn face_slot(face: Face) -> u32 {
+    1 + position(Face::ALL, &face)
+}
+
+/// Which cell a mesh's picture is in, for this player (None: plain white).
+pub(crate) fn tex_slot(tex: Tex, p: &PlayerProps) -> Option<u32> {
+    match tex {
+        Tex::None => None,
+        Tex::Face => Some(face_slot(p.face)),
+        Tex::ShirtAround | Tex::ShirtFront if p.shirt == Shirt::None => None,
+        Tex::ShirtAround => Some(FIRST_SHIRT + position(Shirt::ALL, &p.shirt) - 1),
+        Tex::ShirtFront => Some(FIRST_SHIRT_FRONT + position(Shirt::ALL, &p.shirt) - 1),
+        Tex::Pants if p.pants == Pants::None => None,
+        Tex::Pants => Some(FIRST_PANTS + position(Pants::ALL, &p.pants) - 1),
+        Tex::TShirt => p.tshirt.map(|t| FIRST_TSHIRT + position(TShirt::ALL, &t)),
+    }
+}
+
+/// One cell's pixels (64x64 RGBA).
+fn cell_pixel(slot: u32, x: u32, y: u32) -> [u8; 4] {
+    // Clothes and t-shirts are drawn at 32x32 and shown in 2x2 blocks.
+    let (hx, hy) = ((x / 2) as i32, (y / 2) as i32);
+    let grey = |v: f32| {
+        let v = (v.clamp(0.0, 1.0) * 255.0) as u8;
+        [v, v, v, 255]
+    };
+    if slot == 0 {
+        [255, 255, 255, 255]
+    } else if slot < FIRST_MATERIAL {
+        match art::face_pixel(Face::ALL[slot as usize - 1], x as f32 + 0.5, y as f32 + 0.5) {
+            Some([r, g, b]) => [r, g, b, 255],
+            None => [0, 0, 0, 0],
+        }
+    } else if slot < FIRST_SHIRT {
+        // Brightness above 1 can't be stored, so textures are kept at 0..1
+        // and the shader scales them back up by 1.25.
+        grey(material_pixel(TEXTURED[(slot - FIRST_MATERIAL) as usize], x, y) / 1.25)
+    } else if slot < FIRST_SHIRT_FRONT {
+        grey(art::shirt_pixel(Shirt::ALL[(slot - FIRST_SHIRT + 1) as usize], art::Side::Around, hx, hy))
+    } else if slot < FIRST_PANTS {
+        grey(art::shirt_pixel(Shirt::ALL[(slot - FIRST_SHIRT_FRONT + 1) as usize], art::Side::Front, hx, hy))
+    } else if slot < FIRST_TSHIRT {
+        grey(art::pants_pixel(Pants::ALL[(slot - FIRST_PANTS + 1) as usize], hx, hy))
+    } else if slot < ATLAS_CELLS {
+        art::tshirt_pixel(TShirt::ALL[(slot - FIRST_TSHIRT) as usize], hx, hy)
+    } else {
+        [0, 0, 0, 0]
+    }
+}
+
+/// The atlas as RGBA8 pixels, COLS cells wide and ROWS cells tall.
+pub(crate) fn face_atlas() -> Vec<u8> {
+    let (width, height) = (CELL * COLS, CELL * ROWS);
+    let mut px = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let slot = (y / CELL) * COLS + x / CELL;
+            let i = ((y * width + x) * 4) as usize;
+            px[i..i + 4].copy_from_slice(&cell_pixel(slot, x % CELL, y % CELL));
+        }
+    }
+    px
 }
 
 /// A small hash for texture noise: the same pixel always gets the same value.
@@ -356,81 +523,6 @@ fn material_pixel(m: brixo_core::Material, x: u32, y: u32) -> f32 {
     }
 }
 
-/// Which atlas slot a face lives in.
-pub(crate) fn face_slot(face: Face) -> u32 {
-    1 + Face::ALL.iter().position(|f| *f == face).unwrap() as u32
-}
-
-/// The atlas as RGBA8 pixels, ATLAS_SLOTS cells wide and one cell tall.
-pub(crate) fn face_atlas() -> Vec<u8> {
-    let width = CELL * ATLAS_SLOTS;
-    let mut px = vec![0u8; (width * CELL * 4) as usize];
-    for y in 0..CELL {
-        for x in 0..width {
-            let i = ((y * width + x) * 4) as usize;
-            let slot = x / CELL;
-            let faces = Face::ALL.len() as u32;
-            let rgba = if slot == 0 {
-                [255, 255, 255, 255]
-            } else if slot <= faces {
-                let ink = face_ink(Face::ALL[slot as usize - 1], (x % CELL) as f32 + 0.5, y as f32 + 0.5);
-                if ink { [20, 20, 20, 255] } else { [0, 0, 0, 0] }
-            } else {
-                // Brightness above 1 can't be stored, so textures are kept
-                // at 0..1 and the shader scales them back up by 1.25.
-                let b = (material_pixel(TEXTURED[(slot - faces - 1) as usize], x % CELL, y) / 1.25).clamp(0.0, 1.0);
-                let v = (b * 255.0) as u8;
-                [v, v, v, 255]
-            };
-            px[i..i + 4].copy_from_slice(&rgba);
-        }
-    }
-    px
-}
-
-/// Is the pixel at (x, y) (0..64, y down) part of this face's drawing?
-fn face_ink(face: Face, x: f32, y: f32) -> bool {
-    let p = Vec2::new(x, y);
-    let ellipse = |cx: f32, cy: f32, rx: f32, ry: f32| ((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2) <= 1.0;
-    let ring = |cx: f32, cy: f32, r: f32, w: f32| (p.distance(Vec2::new(cx, cy)) - r).abs() <= w / 2.0;
-    let line = |a: (f32, f32), b: (f32, f32), w: f32| segment_distance(p, a.into(), b.into()) <= w / 2.0;
-    let curve = |a: (f32, f32), c: (f32, f32), b: (f32, f32), w: f32| {
-        let (a, c, b) = (Vec2::from(a), Vec2::from(c), Vec2::from(b));
-        let at = |t: f32| a * (1.0 - t) * (1.0 - t) + c * 2.0 * t * (1.0 - t) + b * t * t;
-        (0..16).any(|i| segment_distance(p, at(i as f32 / 16.0), at((i + 1) as f32 / 16.0)) <= w / 2.0)
-    };
-    match face {
-        Face::Smile => {
-            ellipse(21.0, 25.0, 4.0, 7.0)
-                || ellipse(43.0, 25.0, 4.0, 7.0)
-                || curve((18.0, 41.0), (32.0, 52.0), (46.0, 41.0), 3.2)
-        }
-        Face::Happy => {
-            line((15.0, 28.0), (21.0, 21.0), 3.2)
-                || line((21.0, 21.0), (27.0, 28.0), 3.2)
-                || line((37.0, 28.0), (43.0, 21.0), 3.2)
-                || line((43.0, 21.0), (49.0, 28.0), 3.2)
-                || (ellipse(32.0, 40.0, 11.0, 9.0) && y >= 40.0)
-        }
-        Face::Surprised => {
-            ring(21.0, 25.0, 5.0, 2.6) || ring(43.0, 25.0, 5.0, 2.6) || ellipse(32.0, 45.0, 3.5, 5.0)
-        }
-        Face::Determined => {
-            ellipse(21.0, 27.0, 3.5, 5.0)
-                || ellipse(43.0, 27.0, 3.5, 5.0)
-                || line((14.0, 16.0), (27.0, 20.0), 3.2)
-                || line((50.0, 16.0), (37.0, 20.0), 3.2)
-                || line((24.0, 43.0), (40.0, 43.0), 3.2)
-        }
-    }
-}
-
-fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
-    let ab = b - a;
-    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
-    p.distance(a + ab * t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,7 +530,7 @@ mod tests {
     #[test]
     fn the_avatar_is_about_five_studs_tall() {
         let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-        for m in meshes().into_iter().filter(|m| m.hat.is_none()) {
+        for m in meshes().into_iter().filter(|m| !matches!(m.show, Show::Hat(_))) {
             for v in &m.vertices {
                 lo = lo.min(v.position[1]);
                 hi = hi.max(v.position[1]);
@@ -452,7 +544,7 @@ mod tests {
     #[test]
     fn the_head_is_smooth_and_the_decal_sits_just_outside_it() {
         let ms = meshes();
-        let decal = ms.iter().find(|m| m.slot == Slot::Decal).unwrap();
+        let decal = ms.iter().find(|m| m.tex == Tex::Face).unwrap();
         assert!(!decal.vertices.is_empty());
         for v in &decal.vertices {
             let d = Vec3::from(v.position).distance(HEAD_CENTER);
@@ -465,7 +557,7 @@ mod tests {
     #[test]
     fn decal_triangles_face_outward_so_they_are_not_culled() {
         let ms = meshes();
-        let decal = ms.iter().find(|m| m.slot == Slot::Decal).unwrap();
+        let decal = ms.iter().find(|m| m.tex == Tex::Face).unwrap();
         for tri in decal.vertices.chunks(3) {
             let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
             let facing = (b - a).cross(c - a).dot((a + b + c) / 3.0 - HEAD_CENTER);
@@ -476,7 +568,7 @@ mod tests {
     #[test]
     fn head_triangles_face_outward() {
         let ms = meshes();
-        let skin = ms.iter().find(|m| m.slot == Slot::Skin).unwrap();
+        let skin = ms.iter().find(|m| m.slot == Slot::Body(BodyPart::Head)).unwrap();
         for tri in skin.vertices.chunks(3) {
             let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
             let mid = (a + b + c) / 3.0;
@@ -508,29 +600,79 @@ mod tests {
     }
 
     #[test]
-    fn every_face_draws_something_and_the_white_slot_is_solid() {
+    fn the_atlas_has_a_white_cell_solid_materials_and_every_picture() {
         let px = face_atlas();
-        let width = CELL * ATLAS_SLOTS;
-        for slot in 0..ATLAS_SLOTS {
-            let inked = (0..CELL * CELL)
+        let width = CELL * COLS;
+        let count = |slot: u32| {
+            (0..CELL * CELL)
                 .filter(|k| {
-                    let (x, y) = (slot * CELL + k % CELL, k / CELL);
+                    let (x, y) = ((slot % COLS) * CELL + k % CELL, (slot / COLS) * CELL + k / CELL);
                     px[((y * width + x) * 4 + 3) as usize] == 255
                 })
-                .count();
-            if slot == 0 || slot > Face::ALL.len() as u32 {
-                assert_eq!(inked, (CELL * CELL) as usize, "white and material cells are solid");
-            } else {
-                assert!(inked > 60 && inked < 800, "slot {slot} has {inked} ink pixels");
-            }
+                .count()
+        };
+        let solid = (CELL * CELL) as usize;
+        assert_eq!(count(0), solid);
+        for m in TEXTURED {
+            assert_eq!(count(material_slot(m).unwrap()), solid);
+        }
+        let mut p = PlayerProps::default();
+        for &f in Face::ALL {
+            p.face = f;
+            let n = count(tex_slot(Tex::Face, &p).unwrap());
+            assert!(n > 60 && n < 900, "{f:?} has {n} pixels");
+        }
+        for &s in &Shirt::ALL[1..] {
+            p.shirt = s;
+            assert_eq!(count(tex_slot(Tex::ShirtAround, &p).unwrap()), solid, "{s:?}");
+            assert_eq!(count(tex_slot(Tex::ShirtFront, &p).unwrap()), solid, "{s:?}");
+        }
+        for &t in TShirt::ALL {
+            p.tshirt = Some(t);
+            let n = count(tex_slot(Tex::TShirt, &p).unwrap());
+            assert!(n > 300 && n < solid, "{t:?} has {n} pixels");
+        }
+        p.shirt = Shirt::None;
+        assert_eq!(tex_slot(Tex::ShirtFront, &p), None);
+        assert!(ATLAS_CELLS <= COLS * ROWS);
+    }
+
+    #[test]
+    fn clothes_show_by_what_is_worn() {
+        let ms = meshes();
+        let mut p = PlayerProps::default();
+        let showing = |p: &PlayerProps, slot: Slot| ms.iter().filter(|m| m.slot == slot && shows(m.show, p)).count();
+        p.shirt = Shirt::Tank;
+        assert_eq!(showing(&p, Slot::Shirt), 2, "a tank top is just the torso (front and around)");
+        p.shirt = Shirt::Hoodie;
+        assert_eq!(showing(&p, Slot::Shirt), 4, "and long sleeves");
+        p.shirt = Shirt::None;
+        assert_eq!(showing(&p, Slot::Shirt), 0);
+        p.pants = Pants::Shorts;
+        assert_eq!(showing(&p, Slot::Pants), 2);
+        p.pants = Pants::None;
+        assert_eq!(showing(&p, Slot::Pants), 0);
+        assert_eq!(showing(&p, Slot::Decal), 1, "just the face");
+        p.tshirt = Some(TShirt::Star);
+        assert_eq!(showing(&p, Slot::Decal), 2);
+    }
+
+    #[test]
+    fn the_tshirt_picture_faces_front_and_is_not_culled() {
+        let ms = meshes();
+        let t = ms.iter().find(|m| m.tex == Tex::TShirt).unwrap();
+        for tri in t.vertices.chunks(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
+            assert!((b - a).cross(c - a).z > 0.0);
         }
     }
 }
 
-/// The avatar and hat meshes plus the face pictures, for the website's 3D
-/// preview (crates/brixo-web/src/web/avatar-model.json), so the site draws
-/// exactly what the game draws. Positions are stored as whole thousandths of
-/// a stud (i16), normals as i8 (x127), UVs as u16 (x65535), all base64.
+/// The avatar and accessory meshes, for the website's 3D preview
+/// (crates/brixo-web/src/web/avatar-model.json; its pictures are
+/// avatar-atlas.png next to it), so the site draws exactly what the game
+/// draws. Positions are stored as whole thousandths of a stud (i16),
+/// normals as i8 (x127), UVs as u16 (x65535), all base64.
 #[cfg(test)]
 pub(crate) fn web_model_json() -> String {
     fn b64(bytes: &[u8]) -> String {
@@ -573,52 +715,91 @@ pub(crate) fn web_model_json() -> String {
     let mut body = Vec::new();
     let mut hats: Vec<(Hat, Vec<String>)> = Hat::ALL.iter().map(|h| (*h, Vec::new())).collect();
     for m in meshes() {
-        match (m.slot, m.hat) {
-            (Slot::Paint([r, g, b]), Some(hat)) => {
+        match (m.slot, m.show) {
+            (Slot::Paint([r, g, b]), Show::Hat(hat)) => {
                 let entry = hats.iter_mut().find(|(h, _)| *h == hat).unwrap();
                 entry.1.push(format!("{{\"color\":[{r},{g},{b}],{}}}", mesh(&m.vertices, false)));
             }
-            (slot, _) => {
+            (slot, show) => {
                 let slot = match slot {
-                    Slot::Skin => "skin",
-                    Slot::Shirt => "shirt",
-                    Slot::Pants => "pants",
-                    Slot::Decal => "decal",
-                    Slot::Paint(_) => unreachable!("only hats are painted"),
+                    Slot::Body(part) => part.name().to_string(),
+                    Slot::Shirt => "shirt".into(),
+                    Slot::Pants => "pants".into(),
+                    Slot::Decal => "decal".into(),
+                    Slot::Paint(_) => unreachable!("only accessories are painted"),
+                };
+                let show = match show {
+                    Show::Always => "always",
+                    Show::Shirt => "shirt",
+                    Show::Sleeves(Sleeves::Long) => "long_sleeves",
+                    Show::Sleeves(Sleeves::Short) => "short_sleeves",
+                    Show::Sleeves(Sleeves::None) => "no_sleeves",
+                    Show::PantsLong => "pants_long",
+                    Show::PantsShort => "pants_short",
+                    Show::TShirt => "tshirt",
+                    Show::Hat(_) => unreachable!(),
+                };
+                let tex = match m.tex {
+                    Tex::None => "none",
+                    Tex::Face => "face",
+                    Tex::ShirtAround => "shirt_around",
+                    Tex::ShirtFront => "shirt_front",
+                    Tex::Pants => "pants",
+                    Tex::TShirt => "tshirt",
                 };
                 body.push(format!(
-                    "{{\"slot\":\"{slot}\",\"limb\":\"{}\",{}}}",
+                    "{{\"slot\":\"{slot}\",\"limb\":\"{}\",\"show\":\"{show}\",\"tex\":\"{tex}\",{}}}",
                     limb(m.limb),
-                    mesh(&m.vertices, slot == "decal")
+                    mesh(&m.vertices, m.tex != Tex::None)
                 ));
             }
         }
     }
     let hats: Vec<String> = hats
         .iter()
-        .map(|(h, pieces)| format!("{{\"name\":\"{}\",\"title\":\"{}\",\"pieces\":[{}]}}", h.name(), h.title(), pieces.join(",")))
-        .collect();
-    let faces: Vec<String> = Face::ALL
-        .iter()
-        .map(|f| {
-            let mut bits = vec![0u8; (CELL * CELL / 8) as usize];
-            for y in 0..CELL {
-                for x in 0..CELL {
-                    if face_ink(*f, x as f32 + 0.5, y as f32 + 0.5) {
-                        let i = (y * CELL + x) as usize;
-                        bits[i / 8] |= 1 << (i % 8);
-                    }
-                }
-            }
-            format!("\"{}\":\"{}\"", f.name(), b64(&bits))
+        .map(|(h, pieces)| {
+            let on = if h.slot().on_head() { "head" } else { "body" };
+            format!("{{\"name\":\"{}\",\"title\":\"{}\",\"slot\":\"{}\",\"limb\":\"{on}\",\"pieces\":[{}]}}", h.name(), h.title(), h.slot().name(), pieces.join(","))
         })
         .collect();
+    // Where each picture is in the atlas.
+    let names = |list: Vec<(&str, u32)>| list.iter().map(|(n, i)| format!("\"{n}\":{i}")).collect::<Vec<_>>().join(",");
+    let mut p = PlayerProps::default();
+    let faces = names(Face::ALL.iter().map(|f| (f.name(), face_slot(*f))).collect());
+    let mut around = Vec::new();
+    let mut front = Vec::new();
+    for &s in &Shirt::ALL[1..] {
+        p.shirt = s;
+        around.push((s.name(), tex_slot(Tex::ShirtAround, &p).unwrap()));
+        front.push((s.name(), tex_slot(Tex::ShirtFront, &p).unwrap()));
+    }
+    let mut pants = Vec::new();
+    for &x in &Pants::ALL[1..] {
+        p.pants = x;
+        pants.push((x.name(), tex_slot(Tex::Pants, &p).unwrap()));
+    }
+    let mut tshirts = Vec::new();
+    for &t in TShirt::ALL {
+        p.tshirt = Some(t);
+        tshirts.push((t.name(), tex_slot(Tex::TShirt, &p).unwrap()));
+    }
+    let short: Vec<String> = Shirt::ALL.iter().map(|s| format!("\"{}\":\"{}\"", s.name(), match s.sleeves() {
+        Sleeves::None => "no_sleeves",
+        Sleeves::Short => "short_sleeves",
+        Sleeves::Long => "long_sleeves",
+    })).collect();
+    let shorts: Vec<String> = Pants::ALL.iter().filter(|p| p.short()).map(|p| format!("\"{}\"", p.name())).collect();
     format!(
-        "{{\"cell\":{CELL},\"max_hats\":{},\"body\":[\n{}\n],\"hats\":[\n{}\n],\"faces\":{{{}}}}}\n",
+        "{{\"cell\":{CELL},\"cols\":{COLS},\"rows\":{ROWS},\"max_hats\":{},\n\"atlas\":{{\"face\":{{{faces}}},\"shirt_around\":{{{}}},\"shirt_front\":{{{}}},\"pants\":{{{}}},\"tshirt\":{{{}}}}},\n\"sleeves\":{{{}}},\"shorts\":[{}],\n\"body\":[\n{}\n],\"hats\":[\n{}\n]}}\n",
         brixo_core::MAX_HATS,
+        names(around),
+        names(front),
+        names(pants),
+        names(tshirts),
+        short.join(","),
+        shorts.join(","),
         body.join(",\n"),
         hats.join(",\n"),
-        faces.join(",")
     )
 }
 
@@ -627,11 +808,22 @@ mod web_model {
     #[test]
     fn the_websites_copy_of_the_avatar_model_is_up_to_date() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../brixo-web/src/web/avatar-model.json");
+        let atlas_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../brixo-web/src/web/avatar-atlas.png");
         let fresh = super::web_model_json();
+        let (w, h) = (super::CELL * super::COLS, super::CELL * super::ROWS);
+        let pixels = super::face_atlas();
         if std::env::var_os("BRIXO_WRITE_MODEL").is_some() {
             std::fs::write(path, &fresh).unwrap();
+            image::RgbaImage::from_raw(w, h, pixels).unwrap().save(atlas_path).unwrap();
             return;
         }
+        let saved_atlas = image::open(atlas_path).map(|i| i.to_rgba8().into_raw()).unwrap_or_default();
+        assert!(
+            saved_atlas == pixels,
+            "the avatar's pictures changed: run `BRIXO_WRITE_MODEL=1 cargo test -p brixo-render web_model` \
+             (PowerShell: $env:BRIXO_WRITE_MODEL=1; cargo test -p brixo-render web_model; Remove-Item Env:BRIXO_WRITE_MODEL) \
+             to update crates/brixo-web/src/web/avatar-atlas.png"
+        );
         let saved = std::fs::read_to_string(path).unwrap_or_default().replace("\r\n", "\n");
         assert!(
             same_model(&saved, &fresh),

@@ -26,6 +26,7 @@
       <div class="box"><h2>Description ${mine ? `<a href="#" id="edit">Edit</a>` : ""}</h2><div class="inner">
         <div id="desc"></div>
       </div></div>
+      <div id="challenges"></div>
     </div><div class="side">
       <div class="box gold"><h2>Play</h2><div class="inner" style="text-align:center">
         <button class="btn green big" id="play" style="width:100%">&#9654; PLAY</button>
@@ -52,6 +53,18 @@
       : `<p class="hint">${mine ? "No description yet. Press Edit to tell players what your game is about." : "No description yet."}</p>`;
   };
   show();
+
+  // Challenges: what they pay, and which you've done.
+  api(`/api/games/${g.id}/challenges`).then((list) => {
+    if (!list.length) return;
+    document.getElementById("challenges").innerHTML = `<div class="box gold"><h2>Challenges <span style="font-weight:normal;text-transform:none">complete them in the game to earn Brix</span></h2><div class="inner">
+      <table class="challenges">${list.map((c) => `<tr class="${c.done ? "done" : ""}">
+        <td class="check">${c.done ? "&#10003;" : ""}</td>
+        <td><b>${esc(c.title)}</b>${c.daily ? ` <span class="tag gold">daily</span>` : ""}</td>
+        <td class="pay">${brixIcon}${num(c.reward)}</td></tr>`).join("")}</table>
+      ${me ? "" : `<p class="hint" style="margin:6px 0 0">Log in to earn Brix.</p>`}
+    </div></div>`;
+  }).catch(() => {});
 
   const play = document.getElementById("play");
   play.onclick = () => me ? playGame(g, play) : (location.href = "/login");

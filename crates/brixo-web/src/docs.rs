@@ -76,6 +76,7 @@ pages! {
         ("howto-pads", "Jump pads and speed pads"),
         ("howto-shop", "A shop"),
         ("howto-saving", "Saving player data"),
+        ("challenges", "Challenges and Brix"),
         ("howto-rounds", "Timed rounds"),
         ("howto-teams", "A team game"),
         ("howto-gun", "Make your own gun"),

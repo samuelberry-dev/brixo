@@ -447,22 +447,49 @@ box); the Player keeps the dark `theme::apply` for menus over the game.
 
 **Avatar:** blocky body, round head, no shoes (the pants reach the ground; the
 `shoes_color` value still exists for scripts and the network, it just isn't
-drawn), 4 pixel-art face decals, random curated
-palettes, limb animations (walk, jump, hold, swing), first/third person, camera
-collision.
+drawn), limb animations (walk, jump, hold, swing), first/third person, camera
+collision. Everything worn is in `brixo-core/src/cosmetics.rs`:
+- **Body colours:** six parts (head, torso, arms, legs), each its own colour
+  from the 32 classic brick colours (`BODY_PALETTE`), like old Roblox's Body
+  Colors. `PlayerProps.body_colors` (None for old avatars: skin, torso in the
+  shirt colour). Scripts' `skin_color` sets head, arms and legs.
+- **Clothes:** a `Shirt` style (sleeves none/short/long) worn in `shirt_color`,
+  `Pants` (long or shorts) in `pants_color`, and a `TShirt` picture on the
+  chest. Clothes are shells a little bigger than the body parts; their prints
+  are grey shading multiplied by the colour (chunky 32x32 pixel art in
+  `brixo-render/src/avatar/art.rs`), so any colour works. A script setting
+  `shirt_color` on someone shirtless puts a tee on (team colours always show).
+- **Faces:** 14 pixel-art faces, in colour (tongues, heart eyes).
+- **Accessories** (`Hat`, still "hats" in code and scripts): 29, one per slot
+  (`HatSlot`: head, face, neck, back; `MAX_HATS` = 4). Head and face ones are
+  part of the head; neck and back ones part of the body.
+- Everything the avatar prints lives in one atlas (`avatar::face_atlas`, a
+  16-wide grid of 64px cells: white, faces, materials, shirts around/front,
+  pants, t-shirts). Meshes say which colour (`Slot`), which picture (`Tex`)
+  and who they show on (`Show`).
+- Scripts: `player.shirt`, `pants`, `tshirt` (names), `hats` (a list).
 
-**Hats:** 13 built-in hats (`brixo_core::Hat`: cap, beanie, top hat, cowboy hat,
-crown, headphones, party hat, chef hat, viking helmet, hard hat, propeller cap,
-halo, traffic cone). Click to wear, click again to take off, up to 3 at once
-(`MAX_HATS`); overlapping is fine. Each hat is a few simple shapes in fixed
-colours (`brixo-render/src/avatar/hats.rs`), part of the head, so it turns and
-falls apart with it. Saved on the account (`hats` in the avatar JSON, checked by
-`PUT /api/avatar`), carried in `Look` and `PlayerProps.hats` to every player.
-Scripts can't change hats yet.
+**Brix, the Catalog and challenges** (`brixo-web/src/shop.rs`, `db.rs`):
+Brix are earned, never bought: 50 to start, 10 for the first visit each day
+(`/api/me` gives it), and challenges. A game calls
+`complete_challenge(player, "name")`; the runtime asks its `SaveStore`
+(the website's `SiteSaves`), which adds unknown names as *waiting* (pay 0,
+silent) until an admin approves them with a title, Brix (0-500) and daily or
+once (admin page, "Challenges & Brix"). Paid challenges say so in everyone's
+chat (a nameless gold line: `Game::take_chat` merges `WorldHost::notices`).
+200 Brix a day from challenges at most; 40 challenges per game at most.
+The Catalog (`/catalog`, and the Character page) lists every face, shirt,
+pants, t-shirt and accessory with a price; a starter set is free, admins own
+everything, prices can be changed on the admin page (`prices` table
+overrides `shop::default_price`). `PUT /api/avatar` refuses things you don't
+own. Up to 5 saved outfits. `brix_log` records every Brix given or spent.
+The first start after the Catalog arrived (`meta` "catalog-v1") let everyone
+keep what they wore and gave them the welcome Brix. The sample games'
+challenges are seeded approved (`api::sample_challenges`).
 
 **Website avatars are 3D:** the site draws characters with a small WebGL
-renderer in `app.js` from `web/avatar-model.json`, which is the game's own
-avatar, hat and face meshes. That file is generated: after changing the avatar
+renderer in `app.js` from `web/avatar-model.json` and `web/avatar-atlas.png`,
+which are the game's own meshes and pictures. Both are generated: after changing the avatar
 or a hat, run `BRIXO_WRITE_MODEL=1 cargo test -p brixo-render web_model`
 (PowerShell: `$env:BRIXO_WRITE_MODEL=1; cargo test -p brixo-render web_model;
 Remove-Item Env:BRIXO_WRITE_MODEL`). A test fails if it's out of date. The
@@ -561,6 +588,17 @@ themselves or the Brixo account. On the server:
 `brixo-admin admin NAME` / `unadmin`, `ban` / `unban NAME`,
 `hide` / `show GAME_ID`, `reset NAME` (prints a reset link; `BRIXO_SITE`
 sets its address, playbrixo.com by default).
+
+**Website layout** (old Roblox's flow): Home logged in is "My Brixo" (you and
+your Brix on the left; Friends Online with Join, Continue Playing from the
+`plays` table, Popular, Your Games in the middle; `GET /api/home`). Home
+logged out and Games open with a big **featured game** banner (an admin
+features one with "feature" on the admin page, else the most popular with a
+picture). Profiles have a header card (avatar, online/playing status: the
+game and Join only for friends, About Me, stats) over games and friends. The
+Friends page splits Playing now / Online / Offline, with requests on top.
+Shared helpers in `app.js`: `featureBanner`, `personCard`, `avatarHead`,
+`wireJoins`.
 
 **Friends** (website): requests (`friend_requests` table: from, to) and
 friendships (`friends`: pairs stored once, lower id first); asking someone

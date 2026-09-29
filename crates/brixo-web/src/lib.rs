@@ -7,3 +7,4 @@ pub mod db;
 pub mod docs;
 pub mod limits;
 pub mod servers;
+pub mod shop;

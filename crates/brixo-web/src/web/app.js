@@ -1,13 +1,6 @@
 // Shared by every page: talking to the API, the banner, tab bar and footer,
 // game cards, and drawing avatars.
 
-const PALETTES = {
-  skin:  [[227,185,138],[160,99,62],[242,211,176],[204,142,105],[124,78,50],[234,196,160]],
-  shirt: [[196,40,28],[13,105,172],[75,151,75],[218,133,65],[107,50,124],[245,205,48],[27,42,53],[0,143,156]],
-  pants: [[27,42,53],[39,70,45],[99,95,98],[105,64,40],[52,43,117],[13,105,172]],
-  shoes: [[27,42,53],[27,27,27],[99,95,98],[105,64,40]],
-};
-const FACES = ["smile", "happy", "surprised", "determined"];
 const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = (n) => Number(n || 0).toLocaleString("en-US");
@@ -27,7 +20,7 @@ function when(secs) {
   return new Date(secs * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-const TABS = [["home", "/", "Home"], ["games", "/games", "Games"], ["avatar", "/avatar", "Character"],
+const TABS = [["home", "/", "Home"], ["games", "/games", "Games"], ["avatar", "/avatar", "Character"], ["catalog", "/catalog", "Catalog"],
               ["profile", null, "Profile"], ["friends", "/friends", "Friends"], ["learn", "/learn", "Learn"], ["download", "/download", "Get Brixo"],
               ["admin", "/admin", "Admin"]];
 
@@ -39,7 +32,8 @@ async function shell(page) {
   const logo = `<a class="logo" href="/" aria-label="Brixo home">${"BRIXO".split("").map((c, i) => `<span class="b${i + 1}">${c}</span>`).join("")}</a>`;
   const user = me
     ? `<div>Hi, <a href="/users/${encodeURIComponent(me.username)}">${esc(me.username)}</a>!<br>
-         <a href="#" id="logout" style="color:#cfe3f7;font-weight:normal">Log out</a></div>
+         <a class="brix" href="/avatar#catalog" title="Brix: earn them in games, spend them in the Catalog">${brixIcon}${num(me.brix)}</a>
+         &middot; <a href="#" id="logout" style="color:#cfe3f7;font-weight:normal">Log out</a></div>
        <a class="mini" href="/avatar" title="Change your character">${avatarSvg(me.avatar, true)}</a>`
     : `<form id="quicklogin" autocomplete="on">
          <input name="username" placeholder="Username" autocomplete="username" aria-label="Username">
@@ -63,6 +57,14 @@ async function shell(page) {
   document.getElementById("footer").innerHTML =
     `<div><a href="/">Home</a>|<a href="/games">Games</a>|<a href="/learn">Learn</a>|<a href="/download">Get Brixo</a>${me ? "" : `|<a href="/signup">Sign up</a>`}</div>
      <div style="margin-top:4px">Brixo &copy; ${new Date().getFullYear()}. Every game here was built with Brixo Studio.</div>`;
+  // The day's visit bonus.
+  if (me && me.bonus) {
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = `${brixIcon}<b>+${me.bonus} Brix</b> for visiting today! Spend them in the <a href="/avatar#catalog">Catalog</a>.`;
+    document.getElementById("nav").after(t);
+    setTimeout(() => t.classList.add("gone"), 6000);
+  }
   const out = document.getElementById("logout");
   if (out) out.onclick = async (e) => { e.preventDefault(); await api("/api/logout", "POST"); location.href = "/"; };
   const ql = document.getElementById("quicklogin");
@@ -105,7 +107,7 @@ function thumb(g) {
 function gameCard(g) {
   const url = `/games/${g.id}`;
   return `<div class="card">
-    <a class="thumb" href="${url}">${thumb(g)}</a>
+    <a class="thumb" href="${url}">${thumb(g)}${g.playing ? `<span class="live"><span class="dot"></span>${num(g.playing)}</span>` : ""}</a>
     <a class="name" href="${url}" title="${esc(g.name)}">${esc(g.name)}</a>
     <div class="by">by <a href="/users/${encodeURIComponent(g.owner)}">${esc(g.owner)}</a></div>
     <div class="meta">${g.playing ? `<b>${num(g.playing)} playing</b> &middot; ` : ""}${num(g.visits)} visits</div>
@@ -114,6 +116,35 @@ function gameCard(g) {
 
 // Most played first: people playing now, then all-time visits.
 const popular = (games) => [...games].sort((a, b) => b.playing - a.playing || b.visits - a.visits || a.id - b.id);
+
+// The game in the big banner: the one an admin featured, or else the most
+// popular one with a picture.
+const featuredGame = (games) => games.find((g) => g.featured) || popular(games).find((g) => g.has_thumbnail) || popular(games)[0];
+
+// The big banner: picture on the left, name, maker, blurb and a big Play.
+function featureBanner(g) {
+  if (!g) return "";
+  const url = `/games/${g.id}`;
+  const blurb = g.description ? esc(g.description.length > 180 ? g.description.slice(0, 177) + "..." : g.description) : "";
+  return `<div class="feature-banner">
+    <a class="pic" href="${url}">${thumb(g)}</a>
+    <div class="about">
+      <div class="kicker">&#9733; Featured Game</div>
+      <a class="title" href="${url}">${esc(g.name)}</a>
+      <div class="by">by <a href="/users/${encodeURIComponent(g.owner)}">${esc(g.owner)}</a></div>
+      ${blurb ? `<p>${blurb}</p>` : ""}
+      <div class="go">
+        <button class="btn green" data-join="${g.id}" data-name="${esc(g.name)}">&#9654; Play</button>
+        <span class="hint">${g.playing ? `<b class="playing">${num(g.playing)} playing now</b> &middot; ` : ""}${num(g.visits)} visits</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Every [data-join] button inside `root` presses Play on its game.
+function wireJoins(root) {
+  root.querySelectorAll("[data-join]").forEach((b) => b.onclick = () => playGame({ id: Number(b.dataset.join), name: b.dataset.name }, b));
+}
 
 // Pressing Play: get a ticket, open Brixo Player through its link, and
 // show "Starting Brixo Player..." with a download button, like Roblox. The
@@ -155,59 +186,96 @@ function startingBox(g) {
 const size = (bytes) => bytes ? `${(bytes / 1048576).toFixed(1)} MB` : "";
 
 // --- avatars -------------------------------------------------------------------
+// Drawn with WebGL from /avatar-model.json and /avatar-atlas.png, which the
+// game's renderer writes (brixo-render's web_model test), so the site shows
+// exactly what you look like in a game: the same body, clothes, faces and
+// accessories.
 
-const FACE_SVG = {
-  smile: `<ellipse cx="-9" cy="-4" rx="3.5" ry="6" fill="#232832"/><ellipse cx="9" cy="-4" rx="3.5" ry="6" fill="#232832"/>
-          <path d="M -9 8 Q 0 15 9 8" stroke="#232832" stroke-width="3" fill="none" stroke-linecap="round"/>`,
-  happy: `<path d="M -14 -2 L -9 -8 L -4 -2 M 4 -2 L 9 -8 L 14 -2" stroke="#232832" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <path d="M -10 6 Q 0 17 10 6 Z" fill="#232832"/>`,
-  surprised: `<circle cx="-9" cy="-4" r="5" fill="none" stroke="#232832" stroke-width="2.6"/>
-              <circle cx="9" cy="-4" r="5" fill="none" stroke="#232832" stroke-width="2.6"/><ellipse cx="0" cy="10" rx="3.5" ry="5" fill="#232832"/>`,
-  determined: `<ellipse cx="-9" cy="-2" rx="3.5" ry="5" fill="#232832"/><ellipse cx="9" cy="-2" rx="3.5" ry="5" fill="#232832"/>
-               <path d="M -15 -12 L -4 -8 M 15 -12 L 4 -8 M -8 11 L 8 11" stroke="#232832" stroke-width="3" fill="none" stroke-linecap="round"/>`,
-};
+// The classic brick colours (brixo_core::BODY_PALETTE), for body colours and
+// what shirts and pants are worn in.
+const BRICK_COLORS = [
+  [245,205,164],[234,196,160],[227,185,138],[204,142,105],[175,116,75],[160,99,62],[124,78,50],[86,58,36],
+  [196,40,28],[218,133,65],[245,205,48],[164,189,71],[75,151,75],[0,143,156],[13,105,172],[110,153,202],
+  [123,46,47],[160,95,53],[226,155,64],[39,70,45],[40,127,71],[33,84,185],[52,43,117],[107,50,124],
+  [255,201,201],[232,186,200],[180,210,228],[204,255,204],[248,241,132],[242,243,243],[163,162,165],[27,42,53],
+];
+const BODY_PARTS = ["head", "torso", "left_arm", "right_arm", "left_leg", "right_leg"];
+// Kept for the game-card placeholders.
+const PALETTES = { shirt: [[196,40,28],[13,105,172],[75,151,75],[218,133,65],[107,50,124],[245,205,48],[27,42,53],[0,143,156]] };
 
-// --- 3D avatars ----------------------------------------------------------------
-// Drawn with WebGL from /avatar-model.json, which the game's renderer writes
-// (brixo-render's web_model test), so the site shows exactly what you look
-// like in a game: same body, same faces, same hats.
+// A saved avatar, filled in: body colours for old ones, clothes' names.
+function fullLook(a) {
+  a = a || {};
+  const skin = a.skin || [227, 185, 138], shirt = a.shirt || [13, 105, 172];
+  return {
+    skin, shirt, pants: a.pants || [27, 42, 53], shoes: a.shoes || [27, 27, 27],
+    face: a.face || "smile", hats: [...(a.hats || [])],
+    body: a.body ? a.body.map((c) => [...c]) : [skin, shirt, skin, skin, skin, skin],
+    shirt_style: a.shirt_style || "tee", pants_style: a.pants_style || "plain", tshirt: a.tshirt || "",
+  };
+}
 
-let MODEL = null;
-const modelReady = fetch("/avatar-model.json").then((r) => r.json()).then((m) => {
+let MODEL = null, ATLAS = null;
+const modelReady = Promise.all([
+  fetch("/avatar-model.json").then((r) => r.json()),
+  new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = "/avatar-atlas.png"; }),
+]).then(([m, img]) => {
   const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
   const mesh = (m) => ({
     p: Float32Array.from(new Int16Array(bytes(m.p)), (v) => v / 1000),
     n: Float32Array.from(new Int8Array(bytes(m.n)), (v) => v / 127),
     uv: m.uv ? Float32Array.from(new Uint16Array(bytes(m.uv)), (v) => v / 65535) : null,
   });
+  ATLAS = img;
   MODEL = {
-    cell: m.cell,
-    maxHats: m.max_hats,
-    body: m.body.map((b) => ({ slot: b.slot, limb: b.limb, ...mesh(b) })),
-    hats: m.hats.map((h) => ({ name: h.name, title: h.title, pieces: h.pieces.map((p) => ({ color: p.color, ...mesh(p) })) })),
-    faces: Object.fromEntries(Object.entries(m.faces).map(([k, v]) => [k, new Uint8Array(bytes(v))])),
+    cols: m.cols, rows: m.rows, maxHats: m.max_hats, atlas: m.atlas, sleeves: m.sleeves, shorts: m.shorts,
+    body: m.body.map((b) => ({ slot: b.slot, limb: b.limb, show: b.show, tex: b.tex, ...mesh(b) })),
+    hats: m.hats.map((h) => ({ name: h.name, title: h.title, slot: h.slot, limb: h.limb, pieces: h.pieces.map((p) => ({ color: p.color, ...mesh(p) })) })),
   };
   return MODEL;
 });
+
+// Whether a mesh shows on someone dressed like `look`.
+function meshShows(show, look) {
+  const shirt = look.shirt_style, pants = look.pants_style;
+  switch (show) {
+    case "always": return true;
+    case "shirt": return shirt !== "none";
+    case "long_sleeves": case "short_sleeves": return shirt !== "none" && MODEL.sleeves[shirt] === show;
+    case "pants_long": return pants !== "none" && !MODEL.shorts.includes(pants);
+    case "pants_short": return MODEL.shorts.includes(pants);
+    case "tshirt": return !!look.tshirt;
+  }
+  return false;
+}
+
+// Which atlas cell a mesh's picture is in (0: plain white).
+function meshCell(tex, look) {
+  const a = MODEL.atlas;
+  switch (tex) {
+    case "face": return a.face[look.face] ?? a.face.smile;
+    case "shirt_around": return a.shirt_around[look.shirt_style] ?? 0;
+    case "shirt_front": return a.shirt_front[look.shirt_style] ?? 0;
+    case "pants": return a.pants[look.pants_style] ?? 0;
+    case "tshirt": return a.tshirt[look.tshirt] ?? 0;
+  }
+  return 0;
+}
 
 const AV_VS = `attribute vec3 p; attribute vec3 n; attribute vec2 uv;
 uniform mat4 mvp; uniform mat4 turn; varying vec3 vn; varying vec2 vuv;
 void main() { gl_Position = mvp * vec4(p, 1.0); vn = (turn * vec4(n, 0.0)).xyz; vuv = uv; }`;
 const AV_FS = `precision mediump float;
-uniform vec3 color; uniform sampler2D face; uniform float textured; varying vec3 vn; varying vec2 vuv;
+uniform vec3 color; uniform sampler2D atlas; uniform vec4 rect; varying vec3 vn; varying vec2 vuv;
 void main() {
   vec3 nn = normalize(vn);
   float light = 0.52 + 0.5 * max(dot(nn, normalize(vec3(0.45, 0.8, 0.6))), 0.0) + 0.1 * nn.y;
-  if (textured > 0.5) {
-    vec4 t = texture2D(face, vuv);
-    if (t.a < 0.5) discard;
-    gl_FragColor = vec4(t.rgb * light, 1.0);
-  } else {
-    gl_FragColor = vec4(color * light, 1.0);
-  }
+  vec4 t = texture2D(atlas, rect.xy + vuv * rect.zw);
+  if (t.a < 0.5) discard;
+  gl_FragColor = vec4(t.rgb * color * light, 1.0);
 }`;
 
-// One WebGL drawing surface: a canvas, its buffers and face textures.
+// One WebGL drawing surface: a canvas, its buffers and the atlas.
 class AvatarGL {
   constructor(canvas) {
     this.canvas = canvas;
@@ -219,9 +287,8 @@ class AvatarGL {
     gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, AV_FS));
     gl.linkProgram(prog);
     this.loc = Object.fromEntries(["p", "n", "uv"].map((k) => [k, gl.getAttribLocation(prog, k)]));
-    this.u = Object.fromEntries(["mvp", "turn", "color", "face", "textured"].map((k) => [k, gl.getUniformLocation(prog, k)]));
+    this.u = Object.fromEntries(["mvp", "turn", "color", "atlas", "rect"].map((k) => [k, gl.getUniformLocation(prog, k)]));
     this.buffers = new Map();
-    this.textures = {};
   }
   buffer(mesh) {
     const gl = this.gl;
@@ -233,29 +300,24 @@ class AvatarGL {
     }
     return b;
   }
-  faceTexture(name) {
+  atlasTexture() {
     const gl = this.gl;
-    if (!this.textures[name]) {
-      const cell = MODEL.cell, bits = MODEL.faces[name] || MODEL.faces.smile;
-      const px = new Uint8Array(cell * cell * 4);
-      for (let i = 0; i < cell * cell; i++) {
-        if (bits[i >> 3] & (1 << (i & 7))) px.set([20, 20, 20, 255], i * 4);
-      }
-      const t = gl.createTexture();
+    if (!this.atlas) {
+      const t = this.atlas = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cell, cell, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, ATLAS);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      this.textures[name] = t;
     }
-    return this.textures[name];
+    return this.atlas;
   }
-  // look: {skin, shirt, pants, face, hats}; view: {yaw, headOnly, onlyHat}
+  // look: a saved avatar; view: {yaw, headOnly, zoom: [centre y, height shown]}
   draw(look, view = {}) {
     const gl = this.gl;
     if (!gl || !MODEL) return;
+    look = fullLook(look);
     const w = this.canvas.width, h = this.canvas.height;
     gl.viewport(0, 0, w, h);
     gl.clearColor(0, 0, 0, 0);
@@ -264,11 +326,11 @@ class AvatarGL {
     gl.enable(gl.CULL_FACE);
     gl.useProgram(this.prog);
     // Camera: framed on the whole character, or just the head.
-    const [cy, span] = view.headOnly ? [2.45, 3.0] : [0.55, 6.9];
+    const [cy, span] = view.zoom || (view.headOnly ? [2.0, 2.6] : [0.55, 6.9]);
     const fov = 0.5, dist = span / 2 / Math.tan(fov / 2);
     const f = 1 / Math.tan(fov / 2), aspect = w / h, near = 0.5, far = 60;
     const proj = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
-    const yaw = view.yaw ?? 0.35, pitch = view.headOnly ? 0.2 : 0.1;
+    const yaw = view.yaw ?? 0.35, pitch = view.pitch ?? (view.headOnly ? 0.15 : 0.1);
     const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
     // turn = pitch * yaw (rotation only, column-major)
     const turn = [cyw, sp * syw, -cp * syw, 0, 0, cp, sp, 0, syw, -sp * cyw, cp * cyw, 0, 0, 0, 0, 1];
@@ -278,31 +340,32 @@ class AvatarGL {
     const full = mul(proj, mul([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -dist, 1], mul(turn, center)));
     gl.uniformMatrix4fv(this.u.mvp, false, new Float32Array(full));
     gl.uniformMatrix4fv(this.u.turn, false, new Float32Array(turn));
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture());
+    gl.uniform1i(this.u.atlas, 0);
     const color = (c) => gl.uniform3f(this.u.color, c[0] / 255, c[1] / 255, c[2] / 255);
+    const cell = (i) => {
+      const cw = 1 / MODEL.cols, ch = 1 / MODEL.rows, x = (i % MODEL.cols) * cw, y = Math.floor(i / MODEL.cols) * ch;
+      // Plain white: one point in the middle of the white cell.
+      if (i === 0) gl.uniform4f(this.u.rect, cw / 2, ch / 2, 0, 0); else gl.uniform4f(this.u.rect, x, y, cw, ch);
+    };
     const bind = (loc, buf, size) => {
       if (loc < 0) return;
       if (!buf) { gl.disableVertexAttribArray(loc); gl.vertexAttrib2f(loc, 0, 0); return; }
       gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
     };
     const drawMesh = (mesh) => { const b = this.buffer(mesh); bind(this.loc.p, b.p, 3); bind(this.loc.n, b.n, 3); bind(this.loc.uv, b.uv, 2); gl.drawArrays(gl.TRIANGLES, 0, b.count); };
-    const colors = { skin: look.skin, shirt: look.shirt, pants: look.pants };
     for (const part of MODEL.body) {
       if (view.headOnly && part.limb !== "head") continue;
-      if (part.slot === "decal") continue;
-      gl.uniform1f(this.u.textured, 0);
-      color(colors[part.slot] || [200, 200, 200]);
+      if (!meshShows(part.show, look)) continue;
+      const i = BODY_PARTS.indexOf(part.slot);
+      color(i >= 0 ? look.body[i] : part.slot === "shirt" ? look.shirt : part.slot === "pants" ? look.pants : [255, 255, 255]);
+      cell(meshCell(part.tex, look));
       drawMesh(part);
     }
-    // The face last, printed on the head.
-    gl.uniform1f(this.u.textured, 1);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.faceTexture(look.face));
-    gl.uniform1i(this.u.face, 0);
-    for (const part of MODEL.body) if (part.slot === "decal") drawMesh(part);
-    gl.uniform1f(this.u.textured, 0);
-    const worn = view.onlyHat ? [view.onlyHat] : (look.hats || []);
+    cell(0);
     for (const hat of MODEL.hats) {
-      if (!worn.includes(hat.name)) continue;
+      if (!look.hats.includes(hat.name) || (view.headOnly && hat.limb !== "head")) continue;
       for (const piece of hat.pieces) { color(piece.color); drawMesh(piece); }
     }
   }
@@ -325,18 +388,50 @@ function paintAvatars() {
     for (const img of document.querySelectorAll("img[data-look]")) {
       const look = JSON.parse(img.dataset.look);
       delete img.dataset.look;
-      img.src = avatarPicture(look, {}, img.width || 180, img.height || 260);
+      const head = img.dataset.head;
+      delete img.dataset.head;
+      img.src = avatarPicture(look, head ? { headOnly: true, yaw: 0.3 } : {}, img.width || 180, img.height || 260);
     }
   });
+}
+const lookAttr = (a) => JSON.stringify(fullLook(a)).replace(/'/g, "&#39;");
+// Just the head (for friend lists): a square picture.
+function avatarHead(a, px = 48) {
+  setTimeout(paintAvatars);
+  return `<img class="avatar-head" width="${px}" height="${px}" alt="" data-head="1" data-look='${lookAttr(a)}'>`;
 }
 // Kept under its old name: every page asks for avatarSvg(look).
 function avatarSvg(a, small) {
   setTimeout(paintAvatars);
   const [w, h] = small ? [44, 54] : [180, 260];
-  const look = JSON.stringify({ skin: a.skin, shirt: a.shirt, pants: a.pants, face: a.face, hats: a.hats || [] });
-  return `<img class="avatar-pic" width="${w}" height="${h}" alt="" data-look='${look.replace(/'/g, "&#39;")}'>`;
+  return `<img class="avatar-pic" width="${w}" height="${h}" alt="" data-look='${lookAttr(a)}'>`;
 }
 
+// One person: head, name, and (for friends) what they're up to, with Join
+// when they're in a game you can join. `extra` goes under it.
+function personCard(f, extra = "") {
+  const url = `/users/${encodeURIComponent(f.username)}`;
+  const st = f.status === "playing"
+    ? `<div class="status playing">${f.game ? `In <a href="/games/${f.game.id}">${esc(f.game.name)}</a>` : "In a game"}</div>`
+    : f.status === "online" ? `<div class="status online">Online</div>`
+    : f.status === "offline" ? `<div class="status">Offline${f.last_seen ? ` &middot; ${ago(f.last_seen)}` : ""}</div>` : "";
+  return `<div class="person ${f.status || ""}">
+    <a class="head" href="${url}">${avatarHead(f.avatar)}${f.status && f.status !== "offline" ? `<span class="pip"></span>` : ""}</a>
+    <div class="who"><a class="nm" href="${url}">${esc(f.username)}</a>${st}
+      ${f.game ? `<button class="btn small green" data-join="${f.game.id}" data-name="${esc(f.game.name)}">Join</button>` : ""}${extra}</div>
+  </div>`;
+}
+
+// "5 min ago", "3 hours ago", "Sep 4, 2026"
+function ago(secs) {
+  const d = Date.now() / 1000 - secs;
+  if (d < 3600) return `${Math.max(1, Math.round(d / 60))} min ago`;
+  if (d < 86400) return `${Math.round(d / 3600)} hour${Math.round(d / 3600) === 1 ? "" : "s"} ago`;
+  if (d < 7 * 86400) return `${Math.round(d / 86400)} day${Math.round(d / 86400) === 1 ? "" : "s"} ago`;
+  return when(secs);
+}
+
+const brixIcon = `<span class="brix-icon"></span>`;
 
 // --- Learn pages ---------------------------------------------------------------
 // Colours Rovik code the way the Studio script editor does, adds a Copy
@@ -344,7 +439,7 @@ function avatarSvg(a, small) {
 
 const ROVIK_KEYWORDS = new Set("fn end if then elseif else while do for in return break continue and or not true false nil on every seconds".split(" "));
 const ROVIK_BUILTINS = new Set(("print len str num type push pop insert remove keys wait floor round abs min max sqrt sin cos asin acos atan2 random " +
-  "find destroy clone time players create play_sound play_music stop_music explode").split(" "));
+  "find destroy clone time players create play_sound play_sound_at play_music stop_music explode save load complete_challenge leaderboard").split(" "));
 
 function highlightRovik(src) {
   const out = [];

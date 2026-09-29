@@ -2,6 +2,7 @@
 <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
 <body><div id="page"><div id="banner"></div><div id="nav"></div>
 <div id="content"></div>
+<div id="shop-admin" style="padding:0 10px"></div>
 <div id="toolbox-admin"></div>
 <div id="footer"></div></div>
 <script>
@@ -29,10 +30,11 @@
         <table class="admin"><tr><th>Game</th><th>By</th><th>Visits</th><th>Published</th><th></th></tr>
         ${games.map((g) => `<tr class="${g.hidden || g.owner_banned ? "off" : ""}">
           <td>${g.hidden || g.owner_banned || g.admin_only ? esc(g.name) : `<a href="/games/${g.id}">${esc(g.name)}</a>`}
-              ${g.hidden ? `<span class="tag">taken down</span>` : ""}${g.owner_banned ? `<span class="tag">maker banned</span>` : ""}${g.admin_only ? `<span class="tag gold">admins only</span>` : ""}
+              ${g.hidden ? `<span class="tag">taken down</span>` : ""}${g.owner_banned ? `<span class="tag">maker banned</span>` : ""}${g.admin_only ? `<span class="tag gold">admins only</span>` : ""}${g.featured ? `<span class="tag gold">&#9733; featured</span>` : ""}
               ${g.admin_only && !g.hidden ? `<div><button class="btn small green" data-play="${g.id}" data-name="${esc(g.name)}">Play</button>
                 <a href="#" data-public="${g.id}" style="font-size:10px">make public</a></div>`
-                : g.hidden ? "" : `<div><a href="#" data-private="${g.id}" style="font-size:10px">admins only</a></div>`}</td>
+                : g.hidden ? "" : `<div><a href="#" data-private="${g.id}" style="font-size:10px">admins only</a>
+                &middot; <a href="#" data-feature="${g.id}" data-on="${g.featured ? 0 : 1}" style="font-size:10px">${g.featured ? "unfeature" : "feature"}</a></div>`}</td>
           <td>${esc(g.owner)}</td><td>${num(g.visits)}</td><td>${when(g.created)}</td>
           <td>${g.hidden
             ? `<button class="btn small gray" data-show="${g.id}">Put back</button>`
@@ -80,6 +82,10 @@
       e.preventDefault();
       if (confirm("Make this game admins only? It disappears from Games, and anyone playing it is sent home.")) act("/api/admin/admin-only", { id: Number(a.dataset.private), admin_only: true }, "make it admins only");
     });
+    content.querySelectorAll("[data-feature]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      act("/api/admin/feature", { id: Number(a.dataset.feature), featured: a.dataset.on === "1" }, a.dataset.on === "1" ? "feature it" : "unfeature it");
+    });
     content.querySelectorAll("[data-reset]").forEach((b) => b.onclick = async () => {
       if (!confirm(`Make a password reset link for ${b.dataset.reset}?`)) return;
       const box = document.getElementById("resetlink");
@@ -100,7 +106,74 @@
   };
   load().catch((err) => { content.innerHTML = `<div class="box"><h2>Admin</h2><div class="inner"><p class="error">${esc(err.message)}</p></div></div>`; });
   toolboxAdmin();
+  shopAdmin();
 })();
+
+// Brix: games' challenges (new ones wait here to be approved and given
+// Brix), the Catalog's prices, and giving someone Brix.
+async function shopAdmin() {
+  const root = document.getElementById("shop-admin");
+  let note = "";
+  const draw = async () => {
+    const d = await api("/api/admin/challenges");
+    const waiting = d.challenges.filter((c) => !c.approved).length;
+    const row = (c) => `<tr class="${c.approved ? "" : "waiting"}" data-ch="${c.id}">
+      <td><a href="/games/${c.game_id}">${esc(c.game)}</a><div class="hint"><code>${esc(c.name)}</code> &middot; done ${num(c.completed)}&times;</div></td>
+      <td><input name="title" value="${esc(c.title)}" maxlength="40"></td>
+      <td><input name="reward" type="number" min="0" max="500" value="${c.reward}" style="width:64px"></td>
+      <td style="text-align:center"><input name="daily" type="checkbox" ${c.daily ? "checked" : ""}></td>
+      <td>${c.approved ? `<button class="btn small" data-save>Save</button> <a href="#" data-unapprove style="font-size:10px">stop paying</a>`
+                       : `<button class="btn small green" data-approve>Approve</button>`}</td></tr>`;
+    const priced = d.items.filter((i) => i.price > 0 || d.changed_prices[i.id] !== undefined);
+    root.innerHTML = `<div class="box gold"><h2>Challenges &amp; Brix ${waiting ? `<span class="badge">${waiting} waiting</span>` : ""}</h2><div class="inner">
+      ${note ? `<div class="notice">${esc(note)}</div>` : ""}
+      <p class="hint">A game's script calls <code>complete_challenge(player, "name")</code>. A name a game hasn't used before shows up here, paying nothing until you approve it. Each challenge pays once per player (daily ones, once a day), and challenges pay each player at most ${num(200)} Brix a day.</p>
+      <table class="admin"><tr><th>Game</th><th>Title players see</th><th>Brix</th><th>Daily</th><th></th></tr>
+        ${d.challenges.map(row).join("") || `<tr><td colspan="5" class="hint">No challenges yet.</td></tr>`}</table>
+      <div class="cols" style="margin-top:12px">
+        <div class="main"><details><summary><b>Catalog prices</b> <span class="hint">(${priced.length} things for sale; change a price and press Enter)</span></summary>
+          <table class="admin"><tr><th>Item</th><th>Brix</th><th></th></tr>
+          ${d.items.filter((i) => i.price > 0 || d.changed_prices[i.id] !== undefined).map((i) => `<tr><td>${esc(i.title)} <span class="hint">${esc(i.kind)}</span></td>
+            <td><input type="number" min="0" data-price="${i.id}" value="${i.price}" style="width:70px"></td>
+            <td>${d.changed_prices[i.id] !== undefined ? `<a href="#" data-reset-price="${i.id}" style="font-size:10px">usual price</a>` : ""}</td></tr>`).join("")}</table>
+        </details></div>
+        <div class="side" style="width:260px"><b>Give Brix</b>
+          <form id="gift" class="addfriend" style="margin-top:4px"><input name="who" placeholder="Username" required style="width:110px">
+          <input name="amount" type="number" placeholder="Brix" required style="width:70px"><button class="btn small gold">Give</button></form>
+          <p class="hint">A minus takes Brix away.</p></div>
+      </div>
+    </div></div>`;
+    const save = async (tr, approved) => {
+      const f = (n) => tr.querySelector(`[name=${n}]`);
+      try {
+        await api("/api/admin/challenges", "POST", { id: Number(tr.dataset.ch), title: f("title").value, reward: Number(f("reward").value), daily: f("daily").checked, approved });
+        note = approved ? `"${f("title").value}" pays ${f("reward").value} Brix.` : `"${f("title").value}" doesn't pay any more.`;
+        draw();
+      } catch (err) { alert(err.message); }
+    };
+    root.querySelectorAll("[data-approve], [data-save]").forEach((b) => b.onclick = () => save(b.closest("tr"), true));
+    root.querySelectorAll("[data-unapprove]").forEach((a) => a.onclick = (e) => { e.preventDefault(); save(a.closest("tr"), false); });
+    root.querySelectorAll("[data-price]").forEach((inp) => inp.onchange = async () => {
+      try { await api("/api/admin/price", "POST", { item: inp.dataset.price, price: Number(inp.value) }); note = "Price changed."; draw(); }
+      catch (err) { alert(err.message); }
+    });
+    root.querySelectorAll("[data-reset-price]").forEach((a) => a.onclick = async (e) => {
+      e.preventDefault();
+      await api("/api/admin/price", "POST", { item: a.dataset.resetPrice, price: null }).catch((err) => alert(err.message));
+      draw();
+    });
+    document.getElementById("gift").onsubmit = async (e) => {
+      e.preventDefault();
+      const el = e.target.elements;
+      try {
+        const r = await api("/api/admin/brix", "POST", { username: el.who.value.trim(), amount: Number(el.amount.value) });
+        note = `${r.username} has ${num(r.brix)} Brix now.`;
+        draw();
+      } catch (err) { alert(err.message); }
+    };
+  };
+  draw().catch((err) => { root.innerHTML = `<p class="error">${esc(err.message)}</p>`; });
+}
 
 // The toolbox: what Studio's Toolbox offers. Brixo's own items come from
 // the code; admins add more here (or with brixo-admin toolbox-add).

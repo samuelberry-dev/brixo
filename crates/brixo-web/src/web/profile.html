@@ -22,31 +22,40 @@
   document.title = `${p.username} · Brixo`;
   const mine = me && me.username === p.username;
   const visits = p.games.reduce((n, g) => n + g.visits, 0);
-  content.innerHTML = `<div class="cols"><div class="side" style="width:260px">
-      <div class="box"><h2>${esc(p.username)}'s Profile</h2><div class="inner">
-        <div class="avatar-frame">${avatarSvg(p.avatar)}</div>
+  const statusLine = p.status === "playing"
+    ? `<span class="status playing">${p.game ? `Playing <a href="/games/${p.game.id}">${esc(p.game.name)}</a>
+         <button class="btn small green" data-join="${p.game.id}" data-name="${esc(p.game.name)}">Join</button>` : "In a game"}</span>`
+    : p.status === "online" ? `<span class="status online">Online</span>`
+    : p.last_seen ? `<span class="status">Last online ${ago(p.last_seen)}</span>` : "";
+  content.innerHTML = `<div class="box profile-head"><h2>${esc(p.username)}'s Profile</h2><div class="inner">
+      <div class="avatar-frame">${avatarSvg(p.avatar)}</div>
+      <div class="info">
+        <div class="pname">${esc(p.username)} ${statusLine}</div>
         <div id="blurb"></div>
-        <table class="stats">
-          <tr><td>Joined</td><td>${when(p.created) || "the early days"}</td></tr>
-          <tr><td>Games made</td><td>${num(p.games.length)}</td></tr>
-          <tr><td>Game visits</td><td>${num(visits)}</td></tr>
-          <tr><td>Friends</td><td>${num(p.friend_count)}</td></tr>
-        </table>
+        <div class="statrow">
+          <div><b>${when(p.created) || "Early days"}</b><span>Joined</span></div>
+          <div><b>${num(p.games.length)}</b><span>Games made</span></div>
+          <div><b>${num(visits)}</b><span>Game visits</span></div>
+          <div><b>${num(p.friend_count)}</b><span>Friends</span></div>
+        </div>
         <div id="friendbtn"></div>
-        ${mine ? `<p style="margin-top:8px"><a href="/avatar">&raquo; Change your character</a><br><a href="#" id="pw">&raquo; Change your password</a></p><div id="pwbox"></div>` : ""}
-      </div></div>
-      ${p.friend_count ? `<div class="box"><h2>Friends (${num(p.friend_count)})</h2><div class="inner">
-        <div class="profile-friends">${p.friends.map((f) => `<a href="/users/${encodeURIComponent(f.username)}">${avatarSvg(f.avatar, true)}${esc(f.username)}</a>`).join("")}</div>
-        ${mine ? `<p style="margin:8px 0 0"><a href="/friends">&raquo; All your friends</a></p>` : ""}
-      </div></div>` : ""}
-    </div><div class="main">
+        ${mine ? `<p class="links"><a class="btn small gold" href="/avatar">Change your character</a> <a class="btn small gray" href="#" id="pw">Change your password</a></p><div id="pwbox"></div>` : ""}
+      </div>
+    </div></div>
+    <div class="cols"><div class="main">
       <div class="box"><h2>${esc(p.username)}'s Games</h2><div class="inner">
         ${p.games.length ? `<div class="grid">${popular(p.games).map(gameCard).join("")}</div>`
           : mine ? `<p>You haven't published a game yet. Build one in <b>Brixo Studio</b> and press <b>Publish</b>.</p>
                     <a class="btn" href="/download">Get Brixo Studio</a>`
-                 : `<p>${esc(p.username)} hasn't published any games yet.</p>`}
+                 : `<p style="margin:0">${esc(p.username)} hasn't published any games yet.</p>`}
+      </div></div>
+    </div><div class="side" style="width:260px">
+      <div class="box"><h2>Friends (${num(p.friend_count)})${mine && p.friend_count ? ` <a href="/friends">See all &raquo;</a>` : ""}</h2><div class="inner">
+        ${p.friend_count ? `<div class="profile-friends">${p.friends.map((f) => `<a href="/users/${encodeURIComponent(f.username)}">${avatarHead(f.avatar, 64)}<span>${esc(f.username)}</span></a>`).join("")}</div>`
+          : `<p class="hint" style="margin:0">${mine ? "No friends yet." : `${esc(p.username)} hasn't added any friends yet.`}</p>`}
       </div></div>
     </div></div>`;
+  wireJoins(content);
 
   // Add Friend (and friends, asked, or answering theirs).
   const fb = document.getElementById("friendbtn");
@@ -71,8 +80,8 @@
   const box = document.getElementById("blurb");
   const show = () => {
     box.innerHTML = (p.blurb ? `<div class="blurb">${esc(p.blurb)}</div>`
-                             : mine ? `<p class="hint" style="margin:8px 0">Say something about yourself.</p>` : "")
-      + (mine ? `<a href="#" id="edit" style="font-size:11px">Edit blurb</a>` : "");
+                             : mine ? `<p class="hint" style="margin:8px 0 4px">Say something about yourself.</p>` : "")
+      + (mine ? `<a href="#" id="edit" style="font-size:11px">${p.blurb ? "Edit" : "Write"} your About Me</a>` : "");
     const edit = document.getElementById("edit");
     if (edit) edit.onclick = (e) => {
       e.preventDefault();

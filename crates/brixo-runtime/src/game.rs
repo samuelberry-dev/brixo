@@ -32,7 +32,8 @@ const TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
 /// The error a paused wait() gets when the game stops. Never shown.
 const STOPPED: &str = "the game was stopped";
 
-/// A player's saved look: their account's colours and face.
+/// A player's saved look: their account's body colours, clothes, face and
+/// accessories.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Look {
     pub skin: brixo_core::Color,
@@ -41,6 +42,11 @@ pub struct Look {
     pub shoes: brixo_core::Color,
     pub face: brixo_core::Face,
     pub hats: [Option<brixo_core::Hat>; brixo_core::MAX_HATS],
+    /// Each body part's colour (None: skin, with the torso the shirt colour).
+    pub body: Option<brixo_core::BodyColors>,
+    pub shirt_style: brixo_core::Shirt,
+    pub pants_style: brixo_core::Pants,
+    pub tshirt: Option<brixo_core::TShirt>,
 }
 
 impl Look {
@@ -51,6 +57,10 @@ impl Look {
         p.shoes_color = self.shoes;
         p.face = self.face;
         p.hats = self.hats;
+        p.body_colors = self.body;
+        p.shirt = self.shirt_style;
+        p.pants = self.pants_style;
+        p.tshirt = self.tshirt;
         p.body.color = self.shirt;
     }
 }
@@ -100,6 +110,10 @@ pub(crate) fn random_colors(p: &mut brixo_core::PlayerProps, rng: &mut Rng) {
     p.pants_color = c(rng.pick(&PANTS_COLORS));
     p.shoes_color = c(rng.pick(&SHOES_COLORS));
     p.body.color = p.shirt_color;
+    use brixo_core::{Pants, Shirt};
+    p.shirt = rng.pick(&[Shirt::Tee, Shirt::Tee, Shirt::Striped, Shirt::Hoodie, Shirt::Polo, Shirt::LongSleeve, Shirt::Jersey]);
+    p.pants = rng.pick(&[Pants::Plain, Pants::Jeans, Pants::Jeans, Pants::Shorts, Pants::Cargo]);
+    p.body_colors = None;
 }
 
 /// The Tools directly inside a player, in order.
@@ -213,6 +227,7 @@ pub struct Game {
     clock: Arc<Mutex<f64>>,
     log: Arc<Mutex<Vec<LogLine>>>,
     sounds: Arc<Mutex<Vec<crate::host::SoundEvent>>>,
+    notices: Arc<Mutex<Vec<String>>>,
     blasts: Arc<Mutex<Vec<crate::host::Blast>>>,
     /// Saved player data (see saves.rs), and when it was last written out.
     saves: Arc<Mutex<crate::saves::Saves>>,
@@ -293,6 +308,7 @@ impl Game {
             world: Arc::new(WorldMutex::new(model)),
             clock: Arc::new(Mutex::new(0.0)),
             sounds: Arc::new(Mutex::new(Vec::new())),
+            notices: Arc::new(Mutex::new(Vec::new())),
             blasts: Arc::new(Mutex::new(Vec::new())),
             saves: Arc::new(Mutex::new(crate::saves::Saves::new(Arc::new(crate::saves::MemoryStore::default())))),
             last_save: 0.0,
@@ -454,8 +470,14 @@ impl Game {
     }
 
     /// Chat messages since the last call: (player, name, text).
+    /// Lines from the game itself (challenges completed) come with no
+    /// player and no name.
     pub fn take_chat(&mut self) -> Vec<(InstanceId, String, String)> {
-        std::mem::take(&mut self.chat)
+        let mut lines = std::mem::take(&mut self.chat);
+        for text in std::mem::take(&mut *self.notices.lock().unwrap()) {
+            lines.push((InstanceId::from_raw(0), String::new(), text));
+        }
+        lines
     }
 
     // --- GUI and tools ---
@@ -1056,6 +1078,7 @@ impl Game {
             world: self.world.clone(),
             clock: self.clock.clone(),
             sounds: self.sounds.clone(),
+            notices: self.notices.clone(),
             blasts: self.blasts.clone(),
             saves: self.saves.clone(),
             hinge_angles: self.hinge_angles.clone(),

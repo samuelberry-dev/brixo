@@ -14,6 +14,7 @@ pub const BAD_RESETS: (usize, Duration) = (10, Duration::from_secs(15 * 60));
 pub const PLAYS: (usize, Duration) = (30, Duration::from_secs(60));
 pub const FRIEND_ASKS: (usize, Duration) = (40, Duration::from_secs(60 * 60));
 pub const PUBLISHES: (usize, Duration) = (30, Duration::from_secs(60 * 60));
+pub const BUYS: (usize, Duration) = (30, Duration::from_secs(60));
 
 #[derive(Default)]
 pub struct Limiter(Mutex<HashMap<String, VecDeque<Instant>>>);

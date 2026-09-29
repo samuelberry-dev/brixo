@@ -312,25 +312,33 @@ impl ChatLog {
             let age = at.elapsed().as_secs_f32();
             let alpha = (1.0 - (age - CHAT_SHOWN + 3.0).max(0.0) / 3.0).clamp(0.0, 1.0);
             let x = area.min.x + 7.0;
-            let label = format!("{name}: ");
-            let name_rect = classic::text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP, &label, font.clone(), classic::name_color(name).gamma_multiply(alpha));
+            // Lines from the game itself (a challenge completed) have no
+            // name, and are in gold.
+            let system = name.is_empty();
+            let name_rect = if system {
+                egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(0.0, 0.0))
+            } else {
+                let label = format!("{name}: ");
+                classic::text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP, &label, font.clone(), classic::name_color(name).gamma_multiply(alpha))
+            };
             let rest = egui::pos2(name_rect.right(), y);
             // The words, wrapped to the chat's width.
             let wrap = (area.width() * 0.25).clamp(200.0, 340.0) - (rest.x - x);
             let layout = |c: egui::Color32| painter.layout(text.clone(), font.clone(), c, wrap.max(80.0));
-            let words = layout(egui::Color32::WHITE.gamma_multiply(alpha));
+            let ink = if system { egui::Color32::from_rgb(255, 214, 64) } else { egui::Color32::WHITE };
+            let words = layout(ink.gamma_multiply(alpha));
             let outline = layout(egui::Color32::from_black_alpha((215.0 * alpha) as u8));
             for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
                 painter.galley(rest + egui::vec2(dx, dy), outline.clone(), egui::Color32::BLACK);
             }
             let h = words.size().y.max(name_rect.height());
-            painter.galley(rest, words, egui::Color32::WHITE);
+            painter.galley(rest, words, ink);
             y += h + 2.0;
         }
         // Bubbles: each player's latest message, over their head.
         let mut latest: Vec<&(std::time::Instant, InstanceId, String, String)> = Vec::new();
         for line in self.lines.iter().rev() {
-            if line.0.elapsed().as_secs_f32() < BUBBLE_SHOWN && !latest.iter().any(|l| l.1 == line.1) {
+            if !line.2.is_empty() && line.0.elapsed().as_secs_f32() < BUBBLE_SHOWN && !latest.iter().any(|l| l.1 == line.1) {
                 latest.push(line);
             }
         }

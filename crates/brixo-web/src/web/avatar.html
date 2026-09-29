@@ -2,30 +2,39 @@
 <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
 <body><div id="page"><div id="banner"></div><div id="nav"></div>
 <div id="content">
-<div class="cols"><div class="side" style="width:260px">
-  <div class="box"><h2>Your Character</h2><div class="inner">
-    <div class="avatar-frame" id="preview"><canvas id="view" width="360" height="520"></canvas></div>
-    <p class="hint" style="margin-top:6px">This is how you look in every Brixo game. Drag to turn around.</p>
+<div class="cols"><div class="side" style="width:250px">
+  <div class="box"><h2 id="me-title">My Character</h2><div class="inner">
+    <div class="avatar-frame"><canvas id="view" width="360" height="520"></canvas></div>
+    <p class="hint" style="margin:5px 0 6px;text-align:center">Drag to turn around.</p>
+    <div class="wallet" id="wallet"></div>
+    <div id="trying"></div>
+    <button class="btn green big" id="save" style="margin-top:8px">Save</button>
+    <div id="status" class="hint" style="text-align:center;min-height:16px;margin-top:4px"></div>
   </div></div>
+  <div class="box" id="outfit-box"><h2>Outfits</h2><div class="inner" id="outfits"></div></div>
 </div><div class="main">
-  <div class="box gold"><h2>Character Customizer</h2><div class="inner">
-    <div class="label">Hats <span class="hint" id="hat-count"></span></div><div class="row" id="hats"></div>
-    <div class="label">Face</div><div class="row" id="face"></div>
-    <div class="label">Shirt</div><div class="row" id="shirt"></div>
-    <div class="label">Pants</div><div class="row" id="pants"></div>
-    <div class="label">Skin</div><div class="row" id="skin"></div>
-    <div style="margin-top:12px"><button class="btn green big" id="save">Save</button> <span id="status"></span></div>
-  </div></div>
+  <div class="box gold customizer"><h2><span>Character Customizer</span>
+    <span class="modes"><a href="#wardrobe" data-mode="wardrobe">My Wardrobe</a><a href="#catalog" data-mode="catalog">Catalog</a></span></h2>
+    <div class="cat-tabs" id="tabs"></div>
+    <div class="inner" id="panel"></div>
+  </div>
+  <div class="box navy" id="earn"><h2>Getting Brix</h2><div class="inner soft" id="earn-text"></div></div>
 </div></div>
 </div>
 <div id="footer"></div></div>
 <script>
 (async () => {
-  const me = await shell("avatar");
-  if (!me) { location.href = "/login"; return; }
-  const look = { ...me.avatar, hats: [...(me.avatar.hats || [])] };
+  const me = await shell(location.pathname === "/catalog" ? "catalog" : "avatar");
+  if (!me && location.pathname !== "/catalog") { location.href = "/login"; return; }
+  let shop = await api("/api/catalog");
   await modelReady;
-  // The big preview: drag to turn it around.
+  const saved = fullLook(me ? me.avatar : null);
+  let look = fullLook(saved);
+  const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+  const item = (id) => shop.items.find((i) => i.id === id);
+  const mine = (i) => i && (i.owned || (!me && i.price === 0));
+
+  // --- the big preview -----------------------------------------------------
   const canvas = document.getElementById("view");
   const view = new AvatarGL(canvas);
   let yaw = 0.35, dragging = null;
@@ -34,60 +43,227 @@
   canvas.onpointerdown = (e) => { dragging = e.clientX; canvas.setPointerCapture(e.pointerId); canvas.style.cursor = "grabbing"; };
   canvas.onpointermove = (e) => { if (dragging !== null) { yaw += (e.clientX - dragging) * 0.012; dragging = e.clientX; redraw(); } };
   canvas.onpointerup = () => { dragging = null; canvas.style.cursor = "grab"; };
-  // Hat pictures, drawn once.
-  const hatPics = Object.fromEntries(MODEL.hats.map((h) => [h.name, avatarPicture({ skin: [200, 200, 205], face: "smile" }, { headOnly: true, onlyHat: h.name, yaw: 0.45 }, 64, 64)]));
-  const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-  function draw() {
-    redraw();
-    // Hats: click one to put it on, click again to take it off.
-    const hats = document.getElementById("hats");
-    hats.innerHTML = "";
-    for (const h of MODEL.hats) {
-      const b = document.createElement("div");
-      const on = look.hats.includes(h.name);
-      b.className = "hat" + (on ? " on" : "");
-      b.title = h.title;
-      b.innerHTML = `<img src="${hatPics[h.name]}" alt=""><span>${esc(h.title)}</span>`;
-      b.onclick = () => {
-        if (on) look.hats = look.hats.filter((x) => x !== h.name);
-        else if (look.hats.length < MODEL.maxHats) look.hats.push(h.name);
-        else { document.getElementById("hat-count").textContent = `(up to ${MODEL.maxHats}: take one off first)`; return; }
-        draw();
-      };
-      hats.appendChild(b);
-    }
-    document.getElementById("hat-count").textContent = `(${look.hats.length} of ${MODEL.maxHats})`;
-    for (const key of ["shirt", "pants", "skin"]) {
-      const row = document.getElementById(key);
-      row.innerHTML = "";
-      for (const c of PALETTES[key]) {
-        const s = document.createElement("div");
-        s.className = "swatch" + (same(c, look[key]) ? " on" : "");
-        s.style.background = rgb(c);
-        s.onclick = () => { look[key] = c; draw(); };
-        row.appendChild(s);
-      }
-    }
-    const faces = document.getElementById("face");
-    faces.innerHTML = "";
-    for (const f of FACES) {
-      const b = document.createElement("div");
-      b.className = "face" + (f === look.face ? " on" : "");
-      b.innerHTML = `<svg viewBox="-20 -20 40 40">${FACE_SVG[f]}</svg>`;
-      b.onclick = () => { look.face = f; draw(); };
-      faces.appendChild(b);
-    }
-    document.getElementById("status").textContent = "";
+
+  // --- what's worn --------------------------------------------------------
+  const wornIds = (l) => {
+    const ids = [`face:${l.face}`, `shirt:${l.shirt_style}`, `pants:${l.pants_style}`, ...l.hats.map((h) => `hat:${h}`)];
+    if (l.tshirt) ids.push(`tshirt:${l.tshirt}`);
+    return ids;
+  };
+  const trying = () => wornIds(look).map(item).filter((i) => i && !mine(i));
+  const changed = () => JSON.stringify(look) !== JSON.stringify(saved);
+  const wearing = (i) => {
+    if (i.kind === "hat") return look.hats.includes(i.name);
+    if (i.kind === "tshirt") return look.tshirt === i.name;
+    if (i.kind === "face") return look.face === i.name;
+    return (i.kind === "shirt" ? look.shirt_style : look.pants_style) === i.name;
+  };
+  // Put something on (or, for an accessory or t-shirt already on, take it off).
+  const wear = (i) => {
+    if (i.kind === "hat") {
+      if (look.hats.includes(i.name)) look.hats = look.hats.filter((h) => h !== i.name);
+      else look.hats = [...look.hats.filter((h) => item(`hat:${h}`)?.slot !== i.slot), i.name];
+    } else if (i.kind === "tshirt") look.tshirt = look.tshirt === i.name ? "" : i.name;
+    else if (i.kind === "face") look.face = i.name;
+    else if (i.kind === "shirt") look.shirt_style = i.name;
+    else look.pants_style = i.name;
+    update();
+  };
+
+  // --- the side: Brix, trying on, saving ---------------------------------
+  const status = document.getElementById("status");
+  const saveBtn = document.getElementById("save");
+  function sidebar() {
+    document.getElementById("wallet").innerHTML = me
+      ? `${brixIcon}<b>${num(shop.brix)}</b> Brix${shop.admin ? ` <span class="tag gold">admin: all yours</span>` : ""}`
+      : `${brixIcon}<a href="/signup">Sign up</a> and start with 50 Brix`;
+    const t = trying();
+    document.getElementById("trying").innerHTML = t.length ? `<div class="trying"><b>Trying on:</b>
+        ${t.map((i) => `<div class="try-row"><span>${esc(i.title)}</span><span class="price">${brixIcon}${num(i.price)}</span>
+          ${me ? `<button class="btn small gold" data-buy="${i.id}">Buy</button>` : ""}<a href="#" data-off="${i.id}" title="Take it off">&times;</a></div>`).join("")}</div>` : "";
+    saveBtn.style.display = me ? "" : "none";
+    saveBtn.disabled = !changed() || t.length > 0;
+    saveBtn.textContent = changed() ? "Save" : "Saved";
+    document.querySelectorAll("#trying [data-buy]").forEach((b) => b.onclick = () => buy(item(b.dataset.buy)));
+    document.querySelectorAll("#trying [data-off]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      const i = item(a.dataset.off);
+      if (i.kind === "hat" || i.kind === "tshirt") wear(i);
+      else { const s = fullLook(saved); look[i.kind === "face" ? "face" : `${i.kind}_style`] = s[i.kind === "face" ? "face" : `${i.kind}_style`]; update(); }
+    });
+    if (t.length && me) status.innerHTML = "Buy what you're trying on (or take it off) to save.";
+    else if (status.dataset.sticky !== "1") status.textContent = changed() ? "You have changes to save." : "";
   }
-  draw();
-  document.getElementById("save").onclick = async () => {
-    const st = document.getElementById("status");
+  saveBtn.onclick = async () => {
+    status.dataset.sticky = "1";
     try {
       await api("/api/avatar", "PUT", look);
-      st.className = "ok"; st.textContent = "Saved!";
+      Object.assign(saved, fullLook(look));
+      status.className = "ok"; status.textContent = "Saved! This is how you look in every game.";
       const mini = document.querySelector("#banner .mini");
       if (mini) mini.innerHTML = avatarSvg(look, true);
-    } catch (e) { st.className = "error"; st.textContent = e.message; }
+    } catch (e) { status.className = "error"; status.textContent = e.message; }
+    setTimeout(() => { status.dataset.sticky = ""; status.className = "hint"; }, 3500);
+    sidebar();
   };
+
+  async function buy(i) {
+    const bg = document.createElement("div");
+    bg.className = "modal-bg";
+    const short = shop.brix < i.price;
+    bg.innerHTML = `<div class="modal"><h2>${short ? "Not enough Brix" : "Buy it?"}</h2><div class="inner">
+      <img src="${itemPicture(i, 120, 120)}" width="120" height="120" alt="" style="display:block;margin:0 auto 8px;background:#e9f2fb;border:1px solid #9ab3cd">
+      <p><b>${esc(i.title)}</b> for ${brixIcon}<b>${num(i.price)}</b> Brix.<br>
+      ${short ? `You have ${num(shop.brix)}. Complete challenges in games to earn more.` : `You'll have ${num(shop.brix - i.price)} left.`}</p>
+      <div class="error" id="buy-err"></div>
+      ${short ? "" : `<button class="btn green" id="buy-yes">Buy Now</button> `}<button class="btn gray" id="buy-no">${short ? "OK" : "Cancel"}</button>
+    </div></div>`;
+    document.body.appendChild(bg);
+    bg.querySelector("#buy-no").onclick = () => bg.remove();
+    const yes = bg.querySelector("#buy-yes");
+    if (yes) yes.onclick = async () => {
+      yes.disabled = true;
+      try {
+        const r = await api("/api/shop/buy", "POST", { item: i.id });
+        shop = await api("/api/catalog");
+        bg.remove();
+        if (!wearing(i)) wear(i); else update();
+        status.dataset.sticky = "1"; status.className = "ok"; status.textContent = `${r.message} Press Save to keep wearing it.`;
+        setTimeout(() => { status.dataset.sticky = ""; status.className = "hint"; sidebar(); }, 4000);
+        const s = document.querySelector("#banner .brix");
+        if (s) s.innerHTML = `${brixIcon}${num(shop.brix)}`;
+      } catch (e) { bg.querySelector("#buy-err").textContent = e.message; yes.disabled = false; }
+    };
+  }
+
+  // --- the customizer --------------------------------------------------------
+  const TABS = [["body", "Body Colors"], ["shirt", "Shirts"], ["pants", "Pants"], ["tshirt", "T-Shirts"], ["face", "Faces"], ["hat", "Accessories"]];
+  let mode = location.hash === "#catalog" || location.pathname === "/catalog" ? "catalog" : "wardrobe";
+  if (!me) mode = "catalog";
+  let tab = mode === "catalog" ? "hat" : "body", part = 0, hatSlot = "all";
+  const tabsEl = document.getElementById("tabs"), panel = document.getElementById("panel");
+
+  // A picture of something, worn by you (in your colours), framed on it.
+  function itemPicture(i, w = 84, h = 84) {
+    const l = fullLook(look);
+    let v = { yaw: 0.3 };
+    if (i.kind === "face") { l.face = i.name; l.hats = []; v = { headOnly: true, yaw: 0.12, zoom: [1.9, 2.1] }; }
+    else if (i.kind === "shirt") { l.shirt_style = i.name; l.tshirt = ""; l.hats = []; v = { yaw: 0.45, zoom: [0.15, 3.6] }; }
+    else if (i.kind === "pants") { l.pants_style = i.name; v = { yaw: 0.45, zoom: [-1.45, 3.1] }; }
+    else if (i.kind === "tshirt") { l.tshirt = i.name; l.hats = []; v = { yaw: 0.1, zoom: [0.2, 2.6] }; }
+    else {
+      l.hats = [i.name];
+      v = i.slot === "head" ? { headOnly: true, yaw: 0.5, zoom: [2.4, 3.0] }
+        : i.slot === "face" ? { headOnly: true, yaw: 0.35, zoom: [1.85, 2.5] }
+        : i.slot === "neck" ? { yaw: 0.35, zoom: [0.8, 2.6] }
+        : { yaw: Math.PI + 0.55, zoom: [0.4, 4.2] };
+    }
+    return avatarPicture(l, v, w, h);
+  }
+
+  function tile(i) {
+    const on = wearing(i), own = mine(i);
+    const tag = own ? (i.price === 0 ? "" : `<span class="owned">&#10003; Yours</span>`) : `<span class="price">${brixIcon}${num(i.price)}</span>`;
+    return `<div class="item${on ? " on" : ""}${own ? "" : " forsale"}" data-item="${i.id}" title="${esc(i.title)}${own ? "" : ` (${i.price} Brix)`}">
+      <img src="${itemPicture(i)}" width="84" height="84" alt="">
+      <span class="nm">${esc(i.title)}</span>${tag}</div>`;
+  }
+
+  function colorRow(key, label) {
+    return `<div class="label">${label}</div><div class="palette">${BRICK_COLORS.map((c, k) =>
+      `<div class="swatch${same(c, look[key]) ? " on" : ""}" data-color="${key}" data-k="${k}" style="background:${rgb(c)}" title="rgb(${c.join(", ")})"></div>`).join("")}</div>`;
+  }
+
+  function bodyPanel() {
+    const fig = (i, x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${rgb(look.body[i])}" class="bp${part === i ? " on" : ""}" data-part="${i}"/>`;
+    return `<div class="bodycolors">
+      <div class="figure"><svg viewBox="0 0 150 196" width="150" height="196">
+        ${fig(0, 50, 2, 50, 44)}${fig(1, 40, 50, 70, 70)}${fig(2, 4, 50, 32, 70)}${fig(3, 114, 50, 32, 70)}${fig(4, 40, 124, 33, 70)}${fig(5, 77, 124, 33, 70)}
+      </svg><p class="hint">Click a body part, then a colour.<br><b>${["Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"][part]}</b></p></div>
+      <div class="pick">
+        <div class="palette big">${BRICK_COLORS.map((c, k) => `<div class="swatch${same(c, look.body[part]) ? " on" : ""}" data-body="${k}" style="background:${rgb(c)}"></div>`).join("")}</div>
+        <p style="margin-top:8px"><a href="#" id="all-skin">Use this colour for the head, arms and legs</a></p>
+        <p class="hint">Clothes go over your body colours: take your shirt or pants off (in Shirts and Pants) to show them.</p>
+      </div></div>`;
+  }
+
+  function draw() {
+    for (const a of document.querySelectorAll(".modes a")) a.classList.toggle("on", a.dataset.mode === mode);
+    tabsEl.innerHTML = TABS.map(([k, label]) => `<a href="#" data-tab="${k}" class="${tab === k ? "on" : ""}">${label}</a>`).join("");
+    if (tab === "body") {
+      panel.innerHTML = bodyPanel();
+    } else {
+      let list = shop.items.filter((i) => i.kind === tab);
+      if (tab === "hat" && hatSlot !== "all") list = list.filter((i) => i.slot === hatSlot);
+      const shown = mode === "wardrobe" ? list.filter(mine) : list;
+      const forSale = list.filter((i) => !mine(i)).length;
+      const head = tab === "shirt" ? colorRow("shirt", "Shirt colour") : tab === "pants" ? colorRow("pants", "Pants colour")
+        : tab === "hat" ? `<div class="chips">${["all", "head", "face", "neck", "back"].map((s) => `<a href="#" data-slot="${s}" class="${hatSlot === s ? "on" : ""}">${s === "all" ? "All" : s[0].toUpperCase() + s.slice(1)}</a>`).join("")}
+            <span class="hint">One on each: head, face, neck and back. Click one you're wearing to take it off.</span></div>`
+        : tab === "tshirt" ? `<p class="hint" style="margin:0 0 6px">A picture on the front of your shirt. Click it again to take it off.</p>` : "";
+      panel.innerHTML = `${head}<div class="items">${shown.map(tile).join("")}
+        ${mode === "wardrobe" && forSale ? `<a class="item more" href="#catalog" data-mode="catalog"><span class="plus">+</span><span class="nm">${forSale} more in the Catalog</span></a>` : ""}</div>
+        ${!shown.length ? `<p class="hint">Nothing here yet.</p>` : ""}`;
+    }
+    wire();
+  }
+
+  function wire() {
+    tabsEl.querySelectorAll("[data-tab]").forEach((a) => a.onclick = (e) => { e.preventDefault(); tab = a.dataset.tab; draw(); });
+    document.querySelectorAll("[data-mode]").forEach((a) => a.onclick = (e) => { e.preventDefault(); mode = a.dataset.mode; history.replaceState(null, "", `#${mode}`); if (tab === "body" && mode === "catalog") tab = "hat"; draw(); });
+    panel.querySelectorAll("[data-item]").forEach((d) => d.onclick = () => wear(item(d.dataset.item)));
+    panel.querySelectorAll("[data-slot]").forEach((a) => a.onclick = (e) => { e.preventDefault(); hatSlot = a.dataset.slot; draw(); });
+    panel.querySelectorAll("[data-color]").forEach((d) => d.onclick = () => { look[d.dataset.color] = [...BRICK_COLORS[d.dataset.k]]; update(); });
+    panel.querySelectorAll("[data-part]").forEach((r) => r.onclick = () => { part = Number(r.dataset.part); draw(); });
+    panel.querySelectorAll("[data-body]").forEach((d) => d.onclick = () => { look.body[part] = [...BRICK_COLORS[d.dataset.body]]; if (part === 0) look.skin = look.body[0]; update(); });
+    const allSkin = document.getElementById("all-skin");
+    if (allSkin) allSkin.onclick = (e) => { e.preventDefault(); const c = look.body[part]; for (const k of [0, 2, 3, 4, 5]) look.body[k] = [...c]; look.skin = [...c]; update(); };
+  }
+
+  function update() {
+    redraw();
+    draw();
+    sidebar();
+  }
+
+  // --- outfits -----------------------------------------------------------------
+  let outfits = me ? await api("/api/outfits").catch(() => []) : [];
+  const outfitBox = document.getElementById("outfits");
+  function drawOutfits() {
+    if (!me) { document.getElementById("outfit-box").style.display = "none"; return; }
+    const rows = [];
+    for (let slot = 0; slot < 5; slot++) {
+      const o = outfits.find((x) => x.slot === slot);
+      rows.push(o ? `<div class="outfit"><img src="${avatarPicture(o.avatar, {}, 40, 56)}" width="40" height="56" alt="">
+          <div><b>${esc(o.name)}</b><br><a href="#" data-wear="${slot}">Wear</a> &middot; <a href="#" data-over="${slot}">Save over</a> &middot; <a href="#" data-del="${slot}">Delete</a></div></div>`
+        : `<div class="outfit empty"><a href="#" data-new="${slot}">+ Save what I'm wearing</a></div>`);
+    }
+    outfitBox.innerHTML = rows.join("");
+    const saveAs = async (slot, name) => {
+      if (!name) return;
+      try { await api(`/api/outfits/${slot}`, "PUT", { name, avatar: look }); outfits = await api("/api/outfits"); drawOutfits(); }
+      catch (e) { alert(e.message); }
+    };
+    outfitBox.querySelectorAll("[data-new]").forEach((a) => a.onclick = (e) => { e.preventDefault(); saveAs(Number(a.dataset.new), (prompt("Name this outfit:", `Outfit ${Number(a.dataset.new) + 1}`) || "").trim()); });
+    outfitBox.querySelectorAll("[data-over]").forEach((a) => a.onclick = (e) => { e.preventDefault(); const o = outfits.find((x) => x.slot === Number(a.dataset.over)); saveAs(o.slot, o.name); });
+    outfitBox.querySelectorAll("[data-wear]").forEach((a) => a.onclick = (e) => { e.preventDefault(); look = fullLook(outfits.find((x) => x.slot === Number(a.dataset.wear)).avatar); update(); });
+    outfitBox.querySelectorAll("[data-del]").forEach((a) => a.onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm("Delete this outfit?")) return;
+      await api(`/api/outfits/${a.dataset.del}`, "DELETE").catch(() => {});
+      outfits = await api("/api/outfits"); drawOutfits();
+    });
+  }
+
+  document.getElementById("earn-text").innerHTML = `
+    <p><b>Brix</b> ${brixIcon} buy things in the Catalog. You can't buy Brix: you earn them.</p>
+    <ul class="earn">
+      <li><b>Visit every day:</b> ${brixIcon}${shop.daily_bonus} the first time you're on Brixo each day.</li>
+      <li><b>Complete challenges in games:</b> each game's page lists its challenges and what they pay. Up to ${brixIcon}${shop.daily_challenge_limit} a day.</li>
+      <li><b>New here?</b> Everyone starts with ${brixIcon}50.</li>
+    </ul>`;
+  if (location.pathname === "/catalog") document.title = "Catalog · Brixo";
+  update();
+  drawOutfits();
 })();
 </script></body></html>

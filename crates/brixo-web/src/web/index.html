@@ -10,23 +10,23 @@
   const top = popular(games);
   const content = document.getElementById("content");
   const grid = (list) => `<div class="grid">${list.map(gameCard).join("") || "<p>No games yet.</p>"}</div>`;
-  const featured = top.find((g) => g.has_thumbnail) || top[0];
+  const featured = featuredGame(games);
 
   if (!me) {
-    // Visitors: what Brixo is, the popular games, and signing up right here.
-    content.innerHTML = `<div class="cols"><div class="main">
-      <div class="box"><h2>Welcome to Brixo!</h2><div class="inner hero">
-        <a class="shot bigthumb" href="${featured ? `/games/${featured.id}` : "/games"}">${featured ? thumb(featured) : ""}</a>
-        <div class="words">
-          <h1>Brick by brick.</h1>
-          <p>Brixo is a free place to play games made of bricks, and to make your own.
-             Everything you see here was built in <b>Brixo Studio</b>, from the castles to the rockets.</p>
+    // Visitors: the featured game, what Brixo is, the popular games, and
+    // signing up right here.
+    content.innerHTML = `${featureBanner(featured)}<div class="cols"><div class="main">
+      <div class="box"><h2>Welcome to Brixo!</h2><div class="inner welcome">
+        <h1>Brick by brick.</h1>
+        <p>Brixo is a free place to play games made of bricks, and to make your own.
+           Everything you see here was built in <b>Brixo Studio</b>, from the castles to the rockets.</p>
+        <div class="features">
           <div class="feature"><div class="brick-icon" style="background:#c4281c"></div><div><b>Build</b><br>Drag out bricks, snap them together, paint them.</div></div>
           <div class="feature"><div class="brick-icon" style="background:#0d69ac"></div><div><b>Script</b><br>Make them do things with Rovik, a language built for Brixo.</div></div>
           <div class="feature"><div class="brick-icon" style="background:#4b974b"></div><div><b>Play together</b><br>Publish it, and your friends can join in.</div></div>
         </div>
       </div></div>
-      <div class="box"><h2>Popular Games <a href="/games">See all &raquo;</a></h2><div class="inner">${grid(top.slice(0, 5))}</div></div>
+      <div class="box"><h2>Popular Games <a href="/games">See all &raquo;</a></h2><div class="inner">${grid(top.slice(0, 6))}</div></div>
     </div><div class="side">
       <div class="box gold"><h2>Sign up and play!</h2><div class="inner">
         <form id="signup" autocomplete="on">
@@ -48,6 +48,7 @@
         <a class="btn" href="/download">Get Brixo &raquo;</a>
       </div></div>
     </div></div>`;
+    wireJoins(content);
     const f = document.getElementById("signup");
     f.onsubmit = async (e) => {
       e.preventDefault();
@@ -60,20 +61,61 @@
     return;
   }
 
-  // Logged in: My Brixo.
-  const mine = await api(`/api/users/${encodeURIComponent(me.username)}`).then((p) => p.games).catch(() => []);
-  content.innerHTML = `<div class="cols"><div class="side" style="width:240px">
+  // Logged in: My Brixo. You on the left; your friends, what you played
+  // last and what's popular in the middle.
+  const noHome = { friends_online: [], friend_count: 0, recent: [] };
+  const [home, mine] = await Promise.all([
+    api("/api/home").catch(() => noHome),
+    api(`/api/users/${encodeURIComponent(me.username)}`).then((p) => p.games).catch(() => []),
+  ]);
+  const friendTile = (f) => {
+    const url = `/users/${encodeURIComponent(f.username)}`;
+    return `<div class="friend-tile ${f.status}">
+      <a class="head" href="${url}">${avatarHead(f.avatar, 64)}<span class="pip"></span></a>
+      <a class="nm" href="${url}">${esc(f.username)}</a>
+      <div class="doing">${f.status === "playing" ? (f.game ? esc(f.game.name) : "In a game") : "Online"}</div>
+      ${f.game ? `<button class="btn small green" data-join="${f.game.id}" data-name="${esc(f.game.name)}">Join</button>` : ""}
+    </div>`;
+  };
+  const friendsInner = (h) => h.friends_online.length ? `<div class="friend-strip">${h.friends_online.map(friendTile).join("")}</div>`
+    : h.friend_count ? `<p class="hint" style="margin:0">None of your ${num(h.friend_count)} friend${h.friend_count === 1 ? " is" : "s are"} on right now.</p>`
+    : `<p class="hint" style="margin:0">No friends yet. Visit someone's profile and press <b>Add Friend</b>, or <a href="/friends">find them by name</a>.</p>`;
+  const friendsTitle = (h) => `Friends Online${h.friends_online.length ? ` (${h.friends_online.length})` : ""} <a href="/friends">All friends &raquo;</a>`;
+  content.innerHTML = `<div class="cols"><div class="side" style="width:230px">
       <div class="box"><h2>Hello, ${esc(me.username)}!</h2><div class="inner">
         <div class="avatar-frame">${avatarSvg(me.avatar)}</div>
-        <p style="margin-top:8px"><a href="/avatar">&raquo; Change your character</a><br>
-           <a href="/users/${encodeURIComponent(me.username)}">&raquo; View your profile</a><br>
-           <a href="/download">&raquo; Get Brixo Player and Studio</a></p>
+        ${me.brix !== undefined ? `<div class="wallet"><span class="brix-icon"></span><b>${num(me.brix)}</b> Brix</div>` : ""}
+        <ul class="quick">
+          <li><a href="/avatar">Change your character</a></li>
+          <li><a href="/catalog">Shop the Catalog</a></li>
+          <li><a href="/users/${encodeURIComponent(me.username)}">Your profile</a></li>
+          <li><a href="/friends">Friends${me.friend_requests ? ` <span class="badge">${me.friend_requests}</span>` : ""}</a></li>
+          <li><a href="/download">Get Player and Studio</a></li>
+        </ul>
       </div></div>
+      <div class="box"><h2>Right now</h2><div class="inner numbers">
+        <div><b>${num(stats.online)}</b><span>playing</span></div>
+        <div><b>${num(stats.games)}</b><span>games</span></div>
+      </div></div>
+      ${mine.length ? "" : `<div class="box navy"><h2>Make your own</h2><div class="inner soft">
+        <p>Build a game in <b>Brixo Studio</b> and press <b>Publish</b>: it shows up here and in Games.</p>
+        <a class="btn" href="/download">Get Brixo Studio</a>
+      </div></div>`}
     </div><div class="main">
-      <div class="box"><h2>Popular Games <a href="/games">See all &raquo;</a></h2><div class="inner">${grid(top.slice(0, 8))}</div></div>
-      <div class="box"><h2>Your Games</h2><div class="inner">${mine.length ? grid(mine)
-        : `<p>You haven't published a game yet. Build one in <b>Brixo Studio</b> and press <b>Publish</b>: it shows up here and in Games.</p>
-           <a class="btn" href="/download">Get Brixo Studio</a>`}</div></div>
+      <div class="box" id="friends-online"><h2>${friendsTitle(home)}</h2><div class="inner">${friendsInner(home)}</div></div>
+      ${home.recent.length ? `<div class="box"><h2>Continue Playing</h2><div class="inner">${grid(home.recent.slice(0, 4))}</div></div>` : ""}
+      <div class="box"><h2>Popular Games <a href="/games">See all &raquo;</a></h2><div class="inner">${grid(top.slice(0, home.recent.length ? 4 : 8))}</div></div>
+      ${mine.length ? `<div class="box"><h2>Your Games <a href="/users/${encodeURIComponent(me.username)}">See all &raquo;</a></h2><div class="inner">${grid(popular(mine).slice(0, 4))}</div></div>` : ""}
     </div></div>`;
+  wireJoins(content);
+  // Keep who's on up to date while the page is open.
+  setInterval(async () => {
+    if (document.hidden) return;
+    const h = await api("/api/home").catch(() => null);
+    if (!h) return;
+    const box = document.getElementById("friends-online");
+    box.innerHTML = `<h2>${friendsTitle(h)}</h2><div class="inner">${friendsInner(h)}</div>`;
+    wireJoins(box);
+  }, 30000);
 })();
 </script></body></html>

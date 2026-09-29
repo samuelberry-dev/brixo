@@ -105,6 +105,9 @@ on died(p)
     end
     if killer != nil and killer.team != p.team then
         killer.kos += 1
+        if killer.kos == 5 then
+            complete_challenge(killer, "five_knockouts")
+        end
         scores[killer.team] = scores[killer.team] + 1
         say(killer.name + " knocked out " + p.name)
     else
@@ -184,6 +187,11 @@ every 0.5 seconds
         else
             banner.text = w + " team wins the round!"
             banner.background_color = team_color(w)
+            for p in players() do
+                if p.team == w then
+                    complete_challenge(p, "win_round")
+                end
+            end
         end
         banner.visible = true
         play_sound(find("Round Horn"))

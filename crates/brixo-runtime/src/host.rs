@@ -78,6 +78,22 @@ fn color_mut(world: &mut DataModel, id: InstanceId, facet: u32) -> Option<&mut C
     })
 }
 
+/// After a script changes a player's colour: skin colours the head, arms
+/// and legs; a shirt (or pants) colour on someone wearing none puts a plain
+/// one on, so team colours always show.
+fn colored(world: &mut DataModel, id: InstanceId, facet: u32) {
+    let Some(p) = world.player_mut(id) else { return };
+    match facet {
+        FACET_SKIN => {
+            let c = p.skin_color;
+            p.set_skin(c);
+        }
+        FACET_SHIRT if p.shirt == brixo_core::Shirt::None => p.shirt = brixo_core::Shirt::Tee,
+        FACET_PANTS if p.pants == brixo_core::Pants::None => p.pants = brixo_core::Pants::Plain,
+        _ => {}
+    }
+}
+
 fn avatar_color_facet(name: &str) -> Option<u32> {
     match name {
         "skin_color" => Some(FACET_SKIN),
@@ -106,6 +122,9 @@ pub struct WorldHost {
     pub clock: Arc<Mutex<f64>>,
     /// Sounds and music scripts asked for, for the players to hear.
     pub sounds: Arc<Mutex<Vec<SoundEvent>>>,
+    /// Lines for everyone's chat from the game itself ("Sam completed Win
+    /// a Round!").
+    pub notices: Arc<Mutex<Vec<String>>>,
     /// Explosions scripts set off, carried out by the game's next step.
     pub blasts: Arc<Mutex<Vec<Blast>>>,
     /// Saved player data, for save() and load().
@@ -294,7 +313,8 @@ fn fields_for(class: Class) -> Vec<&'static str> {
         Class::Model => f.extend(["driver", "speed", "steer", "drift", "boosting", "spinning", "locked", "top_speed"]),
         Class::Player => f.extend([
             "position", "size", "rotation", "velocity", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
-            "skin_color", "shirt_color", "pants_color", "shoes_color", "camera_mode", "equipped", "kart", "bot", "camera_part",
+            "skin_color", "shirt_color", "pants_color", "shoes_color", "shirt", "pants", "tshirt", "hats", "camera_mode", "equipped", "kart", "bot",
+            "camera_part",
         ]),
         Class::TextLabel | Class::TextButton | Class::Frame => f.extend([
             "text", "text_size", "text_color", "background", "background_color", "visible", "x", "y", "width",
@@ -514,6 +534,18 @@ impl Host for WorldHost {
                 "face" => match world.player(id) {
                     Some(p) => Ok(Value::str(p.face.name())),
                     None => Err(format!("a {} doesn't have a face. Only players do", class_name(inst.class))),
+                },
+                "hats" => match world.player(id) {
+                    Some(p) => Ok(Value::list(p.hats.iter().flatten().map(|h| Value::str(h.name())).collect())),
+                    None => Err(format!("a {} doesn't have hats. Only players do", class_name(inst.class))),
+                },
+                "shirt" | "pants" | "tshirt" => match world.player(id) {
+                    Some(p) => Ok(match name {
+                        "shirt" => Value::str(p.shirt.name()),
+                        "pants" => Value::str(p.pants.name()),
+                        _ => p.tshirt.map(|t| Value::str(t.name())).unwrap_or(Value::Nil),
+                    }),
+                    None => Err(format!("a {} doesn't have {name}. Only players do", class_name(inst.class))),
                 },
                 "skin_color" | "shirt_color" | "pants_color" | "shoes_color" => match world.player(id) {
                     Some(_) => Ok(facet_object(id, avatar_color_facet(name).unwrap())),
@@ -890,12 +922,60 @@ impl Host for WorldHost {
                     p.face = face;
                     Ok(())
                 }
+                // player.hats = ["crown", "cape"]: one per slot (head, face,
+                // neck, back); [] takes them all off.
+                "hats" => {
+                    let Value::List(items) = &value else {
+                        return Err("hats should be a list of names, like [\"crown\", \"cape\"]".into());
+                    };
+                    let mut wanted = Vec::new();
+                    for v in items.read().unwrap().iter() {
+                        let Value::Str(n) = v else { return Err("hats should be a list of names, like [\"crown\", \"cape\"]".into()) };
+                        if brixo_core::Hat::from_name(n).is_none() {
+                            let all: Vec<&str> = brixo_core::Hat::ALL.iter().map(|h| h.name()).collect();
+                            return Err(format!("there's no hat called '{n}'. Try one of: {}", all.join(", ")));
+                        }
+                        wanted.push(n.to_string());
+                    }
+                    let p = world.player_mut(id).ok_or_else(|| format!("a {} doesn't have hats. Only players do", class_name(class)))?;
+                    p.hats = brixo_core::Hat::list(&wanted);
+                    Ok(())
+                }
+                "shirt" | "pants" | "tshirt" => {
+                    fn names(all: impl Iterator<Item = &'static str>) -> String {
+                        all.collect::<Vec<_>>().join(", ")
+                    }
+                    let p = world
+                        .player_mut(id)
+                        .ok_or_else(|| format!("a {} doesn't have {name}. Only players do", class_name(class)))?;
+                    match (name, &value) {
+                        ("tshirt", Value::Nil) => p.tshirt = None,
+                        ("shirt", Value::Str(t)) => {
+                            p.shirt = brixo_core::Shirt::from_name(t).ok_or_else(|| {
+                                format!("there's no shirt called '{t}'. Try one of: {}", names(brixo_core::Shirt::ALL.iter().map(|x| x.name())))
+                            })?
+                        }
+                        ("pants", Value::Str(t)) => {
+                            p.pants = brixo_core::Pants::from_name(t).ok_or_else(|| {
+                                format!("there are no pants called '{t}'. Try one of: {}", names(brixo_core::Pants::ALL.iter().map(|x| x.name())))
+                            })?
+                        }
+                        ("tshirt", Value::Str(t)) => {
+                            p.tshirt = Some(brixo_core::TShirt::from_name(t).ok_or_else(|| {
+                                format!("there's no t-shirt picture called '{t}'. Try one of: {}", names(brixo_core::TShirt::ALL.iter().map(|x| x.name())))
+                            })?)
+                        }
+                        _ => return Err(format!("{name} should be text (the name of one){}", if name == "tshirt" { ", or nil for none" } else { "" })),
+                    }
+                    Ok(())
+                }
                 "skin_color" | "shirt_color" | "pants_color" | "shoes_color" => {
                     let facet = avatar_color_facet(name).unwrap();
                     let current = color_of(&world, id, facet)
                         .ok_or_else(|| format!("a {} doesn't have {name}. Only players do", class_name(class)))?;
                     let c = self.to_color(&world, &value, current)?;
                     *color_mut(&mut world, id, facet).unwrap() = c;
+                    colored(&mut world, id, facet);
                     Ok(())
                 }
                 "health" | "max_health" | "walk_speed" | "jump_power" => {
@@ -1019,6 +1099,7 @@ impl Host for WorldHost {
                     "b" => c.b = n,
                     other => return Err(format!("a color only has r, g and b, not '{other}'")),
                 }
+                colored(&mut world, id, facet);
                 Ok(())
             }
 
@@ -1071,7 +1152,7 @@ impl Host for WorldHost {
     }
 
     fn function_names(&self) -> Vec<&'static str> {
-        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_sound_at", "play_music", "stop_music", "explode", "save", "load", "leaderboard", "boost", "spin_out", "place_kart", "add_bot"]
+        vec!["find", "destroy", "clone", "time", "players", "create", "play_sound", "play_sound_at", "play_music", "stop_music", "explode", "save", "load", "complete_challenge", "leaderboard", "boost", "spin_out", "place_kart", "add_bot"]
     }
 
     fn call(&self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -1263,6 +1344,38 @@ impl Host for WorldHost {
                 } else {
                     saves.load(player, key)
                 }
+            }
+            // complete_challenge(player, "win_round"): gives them the
+            // challenge's Brix (once, or once a day), says so in the chat,
+            // and gives back how many Brix they got.
+            "complete_challenge" => {
+                let usage = "complete_challenge(player, \"win_round\")";
+                need(2).map_err(|_| format!("complete_challenge works like {usage}"))?;
+                let player = instance_arg(&args[0])?;
+                let Value::Str(challenge) = &args[1] else {
+                    return Err(format!("complete_challenge needs the challenge's name, in quotes: {usage}"));
+                };
+                let ok = !challenge.is_empty()
+                    && challenge.chars().count() <= 40
+                    && challenge.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ');
+                if !ok {
+                    return Err("a challenge's name is 1 to 40 letters, numbers, spaces or _".into());
+                }
+                let who = {
+                    let world = self.world.lock();
+                    if world.player(player).is_none() {
+                        return Err(format!("complete_challenge needs a player first: {usage}"));
+                    }
+                    if matches!(world.get(player).and_then(|i| i.attributes.get("bot")), Some(brixo_core::Attribute::Bool(true))) {
+                        return Ok(Value::Num(0.0));
+                    }
+                    world.get(player).map(|i| i.name.clone()).unwrap_or_default()
+                };
+                let done = self.saves.lock().unwrap().challenge(player, &challenge.to_lowercase());
+                let Some(done) = done else { return Ok(Value::Num(0.0)) };
+                let paid = if done.brix > 0 { format!(" (+{} Brix)", done.brix) } else { String::new() };
+                self.notices.lock().unwrap().push(format!("{who} completed {}!{paid}", done.title));
+                Ok(Value::Num(done.brix as f64))
             }
             // leaderboard("coins", "wins"): these player fields become the
             // leaderboard's columns (sorted by the first). leaderboard()

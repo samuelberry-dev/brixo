@@ -1,7 +1,7 @@
-//! Hats: each one built from a few simple shapes (domes, cylinders, cones,
-//! rings, boxes) in fixed colours, sitting on the round head. They belong to
-//! the head, so they turn with it and fly off with it when a player falls
-//! apart.
+//! Accessories: each one built from a few simple shapes (domes, cylinders,
+//! cones, rings, boxes) in fixed colours. Hats and face things sit on the
+//! round head (and fly off with it when a player falls apart); neck and back
+//! things sit on the body, in the character's own space.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -123,6 +123,137 @@ pub(crate) fn hat_pieces(hat: Hat) -> Vec<([u8; 3], Mesh)> {
         }
         Hat::Halo => {
             b.add([255, 220, 90], |m| m.torus(at(0.0, 1.15, 0.0), none, 0.55, 0.07, 0.0, TAU));
+        }
+        Hat::WizardHat => {
+            const PURPLE: [u8; 3] = [84, 52, 168];
+            const GOLD: [u8; 3] = [250, 205, 60];
+            b.add(PURPLE, |m| m.frustum(at(0.0, 0.62, 0.0), none, 1.2, 1.2, 0.06));
+            let tilt = Quat::from_rotation_x(-0.22);
+            let base = at(0.0, 0.66, 0.0);
+            b.add(PURPLE, |m| m.frustum(base + tilt * Vec3::Y * 0.75, tilt, 0.64, 0.0, 1.5));
+            b.add(GOLD, |m| m.frustum(at(0.0, 0.73, 0.0), none, 0.66, 0.63, 0.12));
+            for (k, a) in [(0.3f32, 0.4f32), (0.55, 2.4), (0.75, 4.3)] {
+                let r = 0.64 * (1.0 - k) + 0.02;
+                let p = base + tilt * Vec3::new(a.cos() * r, 1.5 * k, a.sin() * r);
+                b.add(GOLD, |m| m.ellipsoid(p, Vec3::splat(0.07)));
+            }
+        }
+        Hat::PirateHat => {
+            const BLACK: [u8; 3] = [28, 26, 30];
+            b.add(BLACK, |m| m.dome(at(0.0, 0.25, 0.0), none, Vec3::new(0.93, 0.66, 0.93), 0.0, TAU));
+            // The big folded-up front and back.
+            b.add(BLACK, |m| m.ellipsoid(at(0.0, 0.68, 0.05), Vec3::new(1.3, 0.42, 0.3)));
+            b.add([240, 238, 230], |m| m.ellipsoid(at(0.0, 0.74, 0.33), Vec3::new(0.12, 0.12, 0.04)));
+            for side in [-1.0f32, 1.0] {
+                b.add([240, 238, 230], |m| m.cuboid_at(at(0.0, 0.58, 0.34), Quat::from_rotation_z(side * 0.7), Vec3::new(0.34, 0.05, 0.03)));
+            }
+            b.add([230, 180, 40], |m| m.ellipsoid(at(0.0, 0.34, 0.0), Vec3::new(0.95, 0.06, 0.95)));
+        }
+        Hat::BunnyEars => {
+            b.add([240, 240, 245], |m| m.torus(c, Quat::from_rotation_x(-FRAC_PI_2), 0.9, 0.05, 0.0, PI));
+            for side in [-1.0f32, 1.0] {
+                let p = at(side * 0.3, 1.3, -0.05);
+                b.add([245, 245, 248], |m| m.ellipsoid(p, Vec3::new(0.17, 0.52, 0.08)));
+                b.add([248, 170, 190], |m| m.ellipsoid(p + Vec3::new(0.0, -0.02, 0.05), Vec3::new(0.09, 0.38, 0.04)));
+            }
+        }
+        Hat::Fedora => {
+            const FELT: [u8; 3] = [96, 84, 72];
+            b.add(FELT, |m| m.frustum(at(0.0, 0.55, 0.0), none, 1.16, 1.16, 0.05));
+            b.add(FELT, |m| m.frustum(at(0.0, 0.86, 0.0), none, 0.64, 0.56, 0.58));
+            b.add(FELT, |m| m.dome(at(0.0, 1.15, 0.0), none, Vec3::new(0.56, 0.1, 0.5), 0.0, TAU));
+            b.add([36, 32, 30], |m| m.frustum(at(0.0, 0.66, 0.0), none, 0.65, 0.64, 0.14));
+        }
+        Hat::Sunglasses => {
+            const DARK: [u8; 3] = [18, 18, 24];
+            for side in [-1.0f32, 1.0] {
+                b.add(DARK, |m| m.cuboid_at(at(side * 0.25, 0.09, 0.84), none, Vec3::new(0.4, 0.24, 0.05)));
+                b.add(DARK, |m| m.cuboid_at(at(side * 0.74, 0.12, 0.42), Quat::from_rotation_y(side * 0.5), Vec3::new(0.04, 0.05, 0.62)));
+            }
+            b.add(DARK, |m| m.cuboid_at(at(0.0, 0.14, 0.87), none, Vec3::new(0.18, 0.05, 0.04)));
+        }
+        Hat::NerdGlasses => {
+            const FRAME: [u8; 3] = [30, 28, 34];
+            let facing = Quat::from_rotation_x(FRAC_PI_2);
+            for side in [-1.0f32, 1.0] {
+                b.add(FRAME, |m| m.torus(at(side * 0.24, 0.09, 0.84), facing, 0.16, 0.035, 0.0, TAU));
+                b.add(FRAME, |m| m.cuboid_at(at(side * 0.72, 0.12, 0.44), Quat::from_rotation_y(side * 0.5), Vec3::new(0.04, 0.05, 0.62)));
+            }
+            b.add(FRAME, |m| m.cuboid_at(at(0.0, 0.12, 0.87), none, Vec3::new(0.16, 0.04, 0.04)));
+        }
+        Hat::EyePatch => {
+            const BLACK: [u8; 3] = [22, 20, 24];
+            b.add(BLACK, |m| m.ellipsoid(at(0.24, 0.09, 0.8), Vec3::new(0.18, 0.16, 0.07)));
+            b.add(BLACK, |m| m.torus(at(0.0, 0.18, 0.0), Quat::from_rotation_z(0.35), 0.875, 0.025, 0.0, TAU));
+        }
+        Hat::Mustache => {
+            const BROWN: [u8; 3] = [72, 46, 26];
+            for side in [-1.0f32, 1.0] {
+                b.add(BROWN, |m| m.ellipsoid(at(side * 0.12, -0.17, 0.83), Vec3::new(0.15, 0.06, 0.05)));
+                b.add(BROWN, |m| m.ellipsoid(at(side * 0.27, -0.12, 0.79), Vec3::new(0.06, 0.06, 0.05)));
+            }
+        }
+        Hat::Scarf => {
+            const RED: [u8; 3] = [200, 34, 44];
+            b.add(RED, |m| m.torus(Vec3::new(0.0, 1.12, 0.0), none, 0.52, 0.14, 0.0, TAU));
+            b.add(RED, |m| m.cuboid_at(Vec3::new(0.32, 0.72, 0.6), Quat::from_rotation_z(0.08), Vec3::new(0.28, 0.72, 0.09)));
+            b.add([240, 240, 240], |m| m.cuboid_at(Vec3::new(0.34, 0.5, 0.6), Quat::from_rotation_z(0.08), Vec3::new(0.29, 0.07, 0.1)));
+        }
+        Hat::BowTie => {
+            const RED: [u8; 3] = [176, 22, 34];
+            for side in [-1.0f32, 1.0] {
+                let turn = Quat::from_rotation_z(-side * FRAC_PI_2);
+                b.add(RED, |m| m.frustum(Vec3::new(side * 0.15, 0.97, 0.57), turn, 0.13, 0.03, 0.24));
+            }
+            b.add(RED, |m| m.ellipsoid(Vec3::new(0.0, 0.97, 0.58), Vec3::new(0.06, 0.06, 0.05)));
+        }
+        Hat::GoldChain => {
+            const GOLD: [u8; 3] = [240, 190, 40];
+            b.add(GOLD, |m| m.torus(Vec3::new(0.0, 1.0, 0.0), Quat::from_rotation_x(-0.35), 0.62, 0.035, 0.0, TAU));
+            b.add(GOLD, |m| m.ellipsoid(Vec3::new(0.0, 0.68, 0.6), Vec3::new(0.11, 0.11, 0.04)));
+        }
+        Hat::Necktie => {
+            const BLUE: [u8; 3] = [32, 62, 150];
+            b.add(BLUE, |m| m.cuboid_at(Vec3::new(0.0, 0.96, 0.56), none, Vec3::new(0.16, 0.13, 0.05)));
+            b.add(BLUE, |m| m.cuboid_at(Vec3::new(0.0, 0.5, 0.552), none, Vec3::new(0.2, 0.8, 0.03)));
+            b.add(BLUE, |m| m.cuboid_at(Vec3::new(0.0, 0.1, 0.552), Quat::from_rotation_z(FRAC_PI_2 / 2.0), Vec3::new(0.14, 0.14, 0.03)));
+            b.add([240, 200, 50], |m| m.cuboid_at(Vec3::new(0.0, 0.62, 0.57), none, Vec3::new(0.22, 0.04, 0.01)));
+        }
+        Hat::Backpack => {
+            const BLUE: [u8; 3] = [52, 104, 188];
+            b.add(BLUE, |m| m.cuboid_at(Vec3::new(0.0, 0.2, -0.8), none, Vec3::new(1.3, 1.4, 0.5)));
+            b.add([36, 78, 150], |m| m.cuboid_at(Vec3::new(0.0, -0.08, -1.08), none, Vec3::new(0.9, 0.6, 0.1)));
+            for side in [-1.0f32, 1.0] {
+                b.add([40, 40, 46], |m| m.cuboid_at(Vec3::new(side * 0.5, 1.09, 0.0), none, Vec3::new(0.2, 0.05, 1.12)));
+                b.add([40, 40, 46], |m| m.cuboid_at(Vec3::new(side * 0.5, 0.62, 0.55), none, Vec3::new(0.2, 0.95, 0.03)));
+            }
+        }
+        Hat::Cape => {
+            const RED: [u8; 3] = [190, 28, 36];
+            b.add(RED, |m| m.cuboid_at(Vec3::new(0.0, -0.18, -0.66), Quat::from_rotation_x(0.12), Vec3::new(1.9, 2.4, 0.06)));
+            for side in [-1.0f32, 1.0] {
+                b.add([240, 196, 50], |m| m.ellipsoid(Vec3::new(side * 0.7, 1.0, 0.45), Vec3::splat(0.1)));
+                b.add(RED, |m| m.cuboid_at(Vec3::new(side * 0.72, 1.08, -0.1), none, Vec3::new(0.3, 0.05, 1.1)));
+            }
+        }
+        Hat::AngelWings => {
+            const WHITE: [u8; 3] = [246, 246, 250];
+            for side in [-1.0f32, 1.0] {
+                // Three feathered layers each side, sweeping up and out.
+                b.add(WHITE, |m| m.ellipsoid(Vec3::new(side * 0.55, 0.55, -0.66), Vec3::new(0.58, 0.46, 0.07)));
+                b.add(WHITE, |m| m.ellipsoid(Vec3::new(side * 1.0, 0.95, -0.72), Vec3::new(0.52, 0.4, 0.06)));
+                b.add([226, 230, 240], |m| m.ellipsoid(Vec3::new(side * 1.3, 1.28, -0.78), Vec3::new(0.34, 0.26, 0.05)));
+                b.add([226, 230, 240], |m| m.ellipsoid(Vec3::new(side * 0.8, 0.2, -0.7), Vec3::new(0.4, 0.28, 0.05)));
+            }
+        }
+        Hat::Jetpack => {
+            const STEEL: [u8; 3] = [150, 156, 168];
+            b.add([70, 72, 80], |m| m.cuboid_at(Vec3::new(0.0, 0.3, -0.6), none, Vec3::new(1.0, 0.9, 0.12)));
+            for side in [-1.0f32, 1.0] {
+                b.add(STEEL, |m| m.frustum(Vec3::new(side * 0.35, 0.25, -0.88), none, 0.28, 0.28, 1.1));
+                b.add([200, 40, 36], |m| m.frustum(Vec3::new(side * 0.35, 0.95, -0.88), none, 0.28, 0.0, 0.3));
+                b.add([50, 50, 56], |m| m.frustum(Vec3::new(side * 0.35, -0.4, -0.88), none, 0.24, 0.2, 0.2));
+            }
         }
         Hat::TrafficCone => {
             const ORANGE: [u8; 3] = [240, 108, 22];
@@ -263,7 +394,9 @@ impl Mesh {
 
     /// A whole egg shape (or a ball, with equal radii).
     fn ellipsoid(&mut self, center: Vec3, radii: Vec3) {
-        let (rings, segs) = (10, 16);
+        // Small ones (gems, pom-poms) need fewer triangles to look round.
+        let big = radii.max_element();
+        let (rings, segs) = if big < 0.2 { (6, 10) } else if big < 0.4 { (8, 12) } else { (10, 16) };
         let point = |ring: usize, seg: usize| {
             let theta = ring as f32 / rings as f32 * PI;
             let phi = seg as f32 / segs as f32 * TAU;
@@ -309,7 +442,7 @@ mod tests {
 
     #[test]
     fn every_hat_has_triangles_facing_outward() {
-        for hat in Hat::ALL {
+        for &hat in Hat::ALL {
             let pieces = hat_pieces(hat);
             assert!(!pieces.is_empty(), "{hat:?} has no pieces");
             for (_, m) in &pieces {
@@ -341,12 +474,29 @@ mod tests {
 
     #[test]
     fn hats_sit_on_the_head_not_the_body() {
-        for hat in Hat::ALL {
+        for &hat in Hat::ALL.iter().filter(|h| h.slot().on_head()) {
             for (_, m) in hat_pieces(hat) {
                 for v in &m.vertices {
                     let p = Vec3::from(v.position);
                     assert!(p.y > HEAD_CENTER.y - 0.5, "{hat:?} hangs down to y={}", p.y);
                     assert!(p.y < HEAD_CENTER.y + 2.2 && p.x.abs() < 1.6 && p.z.abs() < 1.6, "{hat:?} is too big");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn neck_and_back_things_sit_on_the_body() {
+        use brixo_core::HatSlot;
+        for &hat in Hat::ALL.iter().filter(|h| !h.slot().on_head()) {
+            for (_, m) in hat_pieces(hat) {
+                for v in &m.vertices {
+                    let p = Vec3::from(v.position);
+                    assert!(p.y > -1.6 && p.y < 1.7 && p.x.abs() < 1.7, "{hat:?} at {p}");
+                    match hat.slot() {
+                        HatSlot::Back => assert!(p.z < 0.6, "{hat:?} pokes out the front at {p}"),
+                        _ => assert!(p.z > -0.7, "{hat:?} pokes out the back at {p}"),
+                    }
                 }
             }
         }

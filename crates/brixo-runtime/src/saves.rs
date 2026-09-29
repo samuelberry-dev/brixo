@@ -20,11 +20,41 @@ use serde_json::Value as Json;
 pub trait SaveStore: Send + Sync {
     fn load(&self, key: &str) -> Option<String>;
     fn save(&self, key: &str, data: &str);
+    /// A player (`key`) completed one of the game's challenges: what it's
+    /// called and the Brix it paid, or None if it doesn't count (done
+    /// already, or unknown here).
+    fn challenge(&self, key: &str, name: &str) -> Option<Completed> {
+        let _ = (key, name);
+        None
+    }
 }
 
-/// Keeps saved data in memory (Studio, local games, tests).
+/// A challenge a player just completed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Completed {
+    pub title: String,
+    /// Brix they were given (0 when it doesn't pay: not approved yet, the
+    /// day's limit reached, or a game outside the website).
+    pub brix: i64,
+}
+
+/// "win_round" -> "Win Round".
+pub fn challenge_title(name: &str) -> String {
+    name.split(['_', ' '])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Keeps saved data in memory (Studio, local games, tests). Challenges
+/// count once per player and pay nothing: Brix only come from games on
+/// the website.
 #[derive(Default)]
-pub struct MemoryStore(Mutex<HashMap<String, String>>);
+pub struct MemoryStore(Mutex<HashMap<String, String>>, Mutex<std::collections::HashSet<(String, String)>>);
 
 impl SaveStore for MemoryStore {
     fn load(&self, key: &str) -> Option<String> {
@@ -32,6 +62,9 @@ impl SaveStore for MemoryStore {
     }
     fn save(&self, key: &str, data: &str) {
         self.0.lock().unwrap().insert(key.to_string(), data.to_string());
+    }
+    fn challenge(&self, key: &str, name: &str) -> Option<Completed> {
+        self.1.lock().unwrap().insert((key.to_string(), name.to_string())).then(|| Completed { title: challenge_title(name), brix: 0 })
     }
 }
 
@@ -97,6 +130,12 @@ impl Saves {
             store.save(&slot.key, &text);
         }
         slot.dirty = false;
+    }
+
+    /// A player completed a challenge (None: it doesn't count).
+    pub fn challenge(&self, player: InstanceId, name: &str) -> Option<Completed> {
+        let slot = self.slots.get(&player)?;
+        self.store.challenge(&slot.key, name)
     }
 
     pub fn load(&self, player: InstanceId, key: &str) -> Result<Value, String> {

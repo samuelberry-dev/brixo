@@ -175,6 +175,7 @@ fn capture(p)
     taken = p.carrying
     p.carrying = nil
     p.captures += 1
+    complete_challenge(p, "capture_flag")
     score[p.team] = score[p.team] + 1
     send_home(taken)
     say(p.name + " captured the " + taken + " flag!", p.team)
@@ -291,6 +292,11 @@ fn end_match(winner)
         banner.text = winner + " team wins!"
         banner.background_color = team_color(winner)
         fireworks(STANDS[winner].position, team_color(winner))
+        for p in players() do
+            if p.team == winner then
+                complete_challenge(p, "win_match")
+            end
+        end
     end
     banner.visible = true
     play_sound(find("Victory"))

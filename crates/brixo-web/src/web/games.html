@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Games &middot; Brixo</title>
 <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
 <body><div id="page"><div id="banner"></div><div id="nav"></div>
-<div id="content"><div class="box"><h2>Games</h2><div class="inner">
+<div id="content"><div id="featured"></div><div class="box"><h2>Games</h2><div class="inner">
   <div class="searchbar"><input id="q" placeholder="Search games by name or creator" aria-label="Search games"></div>
   <div class="sorts" id="sorts"></div>
   <div id="list"></div>
@@ -11,6 +11,9 @@
 (async () => {
   await shell("games");
   const games = await api("/api/games");
+  const feat = document.getElementById("featured");
+  feat.innerHTML = featureBanner(featuredGame(games));
+  wireJoins(feat);
   const SORTS = {
     popular: ["Popular", popular],
     visits: ["Most Visited", (l) => [...l].sort((a, b) => b.visits - a.visits || a.id - b.id)],

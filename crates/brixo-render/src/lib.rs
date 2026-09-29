@@ -119,11 +119,11 @@ struct InstanceRaw {
 }
 
 /// The atlas's plain white cell, for everything without a picture.
-const WHITE: [f32; 4] = [0.5 / avatar::ATLAS_SLOTS as f32, 0.5, 0.0, 0.0];
+const WHITE: [f32; 4] = [0.5 / avatar::COLS as f32, 0.5 / avatar::ROWS as f32, 0.0, 0.0];
 
 fn atlas_rect(slot: u32) -> [f32; 4] {
-    let w = 1.0 / avatar::ATLAS_SLOTS as f32;
-    [slot as f32 * w, 0.0, w, 1.0]
+    let (w, h) = (1.0 / avatar::COLS as f32, 1.0 / avatar::ROWS as f32);
+    [(slot % avatar::COLS) as f32 * w, (slot / avatar::COLS) as f32 * h, w, h]
 }
 
 impl InstanceRaw {
@@ -524,6 +524,7 @@ fn scatter(limb: avatar::Limb, t: f32, seed: f32) -> Mat4 {
 fn avatar_instance(
     p: &brixo_core::PlayerProps,
     slot: avatar::Slot,
+    tex: avatar::Tex,
     limb: avatar::Limb,
     pose: [f32; 4],
     seed: f32,
@@ -531,16 +532,13 @@ fn avatar_instance(
 ) -> InstanceRaw {
     let c = |c: brixo_core::Color| rgb(c.r, c.g, c.b);
     let color = match slot {
-        avatar::Slot::Skin => c(p.skin_color),
+        avatar::Slot::Body(part) => c(p.body_colors()[part.index()]),
         avatar::Slot::Shirt => c(p.shirt_color),
         avatar::Slot::Pants => c(p.pants_color),
         avatar::Slot::Decal => rgb(255, 255, 255),
         avatar::Slot::Paint([r, g, b]) => rgb(r, g, b),
     };
-    let uv_rect = match slot {
-        avatar::Slot::Decal => atlas_rect(avatar::face_slot(p.face)),
-        _ => WHITE,
-    };
+    let uv_rect = avatar::tex_slot(tex, p).map(atlas_rect).unwrap_or(WHITE);
     let base = Mat4::from_translation(to_glam(p.body.position)) * Mat4::from_rotation_y(p.body.rotation.y.to_radians());
     let angle = match limb {
         avatar::Limb::Body | avatar::Limb::Head => 0.0,
@@ -568,7 +566,8 @@ fn avatar_instance(
 struct AvatarDraw {
     slot: avatar::Slot,
     limb: avatar::Limb,
-    hat: Option<brixo_core::Hat>,
+    show: avatar::Show,
+    tex: avatar::Tex,
     vertices: std::ops::Range<u32>,
 }
 
@@ -630,7 +629,8 @@ impl SceneRenderer {
             avatar_draws.push(AvatarDraw {
                 slot: mesh.slot,
                 limb: mesh.limb,
-                hat: mesh.hat,
+                show: mesh.show,
+                tex: mesh.tex,
                 vertices: start..avatar_vertices.len() as u32,
             });
         }
@@ -662,8 +662,8 @@ impl SceneRenderer {
         let atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("face atlas"),
             size: wgpu::Extent3d {
-                width: avatar::CELL * avatar::ATLAS_SLOTS,
-                height: avatar::CELL,
+                width: avatar::CELL * avatar::COLS,
+                height: avatar::CELL * avatar::ROWS,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1007,12 +1007,12 @@ impl SceneRenderer {
                 if chest.distance(camera.position) < 5.0 {
                     continue;
                 }
-                if draw.hat.is_some_and(|h| !p.hats.contains(&Some(h))) {
+                if !avatar::shows(draw.show, p) {
                     continue;
                 }
                 let grip_up = p.equipped.is_some_and(|t| brixo_core::holds_up(model, t));
                 let pose = pose(p, self.time, id.raw() as f32 * 1.7, grip_up);
-                instances.push(avatar_instance(p, draw.slot, draw.limb, pose, id.raw() as f32, *highlight));
+                instances.push(avatar_instance(p, draw.slot, draw.tex, draw.limb, pose, id.raw() as f32, *highlight));
             }
             let end = instances.len() as u32;
             if end > start {
@@ -1066,7 +1066,7 @@ impl SceneRenderer {
                 }
                 shadow.set_vertex_buffer(0, self.avatar_buffer.slice(..));
                 for (i, batch) in &avatar_batches {
-                    // A printed face casts no shadow of its own.
+                    // A printed picture casts no shadow of its own.
                     if self.avatar_draws[*i].slot != avatar::Slot::Decal {
                         shadow.draw(self.avatar_draws[*i].vertices.clone(), batch.clone());
                     }

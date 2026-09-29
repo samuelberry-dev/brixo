@@ -140,6 +140,7 @@ on touched(other)
     end
     if self.item == "Tower" then
         play_sound("win")
+        complete_challenge(other, "finish_tycoon")
         hint = child(other, "Hint")
         if hint != nil then
             hint.text = "You finished your tycoon! Nice work, " + other.name

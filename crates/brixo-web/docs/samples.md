@@ -109,6 +109,17 @@ end
 - **F and G** are `on key`: F puts you in the nearest free kart, or gets you out. Practice karts (`practice = true`) are always free, and the script brings back any that leave the Drift Park.
 - **Per-player GUI**: each player gets their own lap and place label and item slot, made with `create("TextLabel", p)` when they join. The standings and the jumbotron are shared.
 
+## Their challenges
+
+Each sample game pays Brix for a few [challenges](challenges); search its scripts for `complete_challenge` to see where:
+
+| Game | Challenges |
+|---|---|
+| Coin Tycoon | Build the Tower (`finish_tycoon`) |
+| Flagfall | Capture a Flag, Win a Match (daily) |
+| Spire Wars | Win a Round (daily), 5 Knockouts in a Round |
+| Brickport Speedway | Finish a Race, Win a Race (daily) |
+
 ## The gear kit
 
 Flagfall and Spire Wars share Brixo's standard **gear kit**. Open **Gear Range** to try them all and read their scripts. Things worth looking at:

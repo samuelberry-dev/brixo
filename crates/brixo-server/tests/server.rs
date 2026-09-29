@@ -155,7 +155,11 @@ fn ticketed_servers_let_in_ticket_holders_as_their_account() {
         pants: brixo_core::Color::new(27, 42, 53),
         shoes: brixo_core::Color::new(27, 27, 27),
         face: brixo_core::Face::Determined,
-        hats: [Some(brixo_core::Hat::Crown), None, None],
+        hats: [Some(brixo_core::Hat::Crown), None, None, None],
+        body: None,
+        shirt_style: brixo_core::Shirt::Hoodie,
+        pants_style: brixo_core::Pants::Cargo,
+        tshirt: None,
     };
     // One valid ticket, usable once (the website's rule).
     let valid = Arc::new(Mutex::new(Some("good-ticket".to_string())));

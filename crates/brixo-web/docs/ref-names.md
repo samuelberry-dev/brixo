@@ -27,7 +27,26 @@ Built-in tracks for `play_music`: `sunny` (bright and bouncy), `rush` (fast, for
 
 ## Faces
 
-`smile`, `happy`, `surprised`, `determined`
+`smile`, `happy`, `surprised`, `determined`, `wink`, `grin`, `silly`, `sleepy`, `angry`, `smirk`, `cat`, `heart_eyes`, `worried`, `laugh`
+
+## Clothes
+
+Shirts (`player.shirt`): `none`, `tee`, `tank`, `long_sleeve`, `striped`, `polo`, `hoodie`, `flannel`, `jacket`, `sweater`, `jersey`, `camo`
+
+Pants (`player.pants`): `none`, `plain`, `jeans`, `shorts`, `cargo`, `track`, `plaid`
+
+T-shirt pictures (`player.tshirt`, or `nil` for none): `brick`, `smiley`, `heart`, `star`, `flame`, `lightning`, `rocket`, `pizza`, `rainbow`, `ghost`, `number_one`
+
+## Accessories
+
+`player.hats` holds one for each place they go:
+
+| Where | Names |
+|---|---|
+| Head | `cap`, `beanie`, `top_hat`, `cowboy_hat`, `crown`, `headphones`, `party_hat`, `chef_hat`, `viking_helmet`, `hard_hat`, `propeller_cap`, `halo`, `traffic_cone`, `wizard_hat`, `pirate_hat`, `bunny_ears`, `fedora` |
+| Face | `sunglasses`, `nerd_glasses`, `eye_patch`, `mustache` |
+| Neck | `scarf`, `bow_tie`, `gold_chain`, `necktie` |
+| Back | `backpack`, `cape`, `angel_wings`, `jetpack` |
 
 ## Camera modes
 

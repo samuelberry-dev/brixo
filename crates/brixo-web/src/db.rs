@@ -19,14 +19,47 @@ pub struct Avatar {
     /// Still saved (games' scripts can read shoes_color), but not drawn.
     pub shoes: Rgb,
     pub face: String,
-    /// The hats they wear, by name (up to brixo_core::MAX_HATS).
+    /// The accessories they wear, by name (one per slot).
     #[serde(default)]
     pub hats: Vec<String>,
+    /// Each body part's colour: head, torso, left arm, right arm, left leg,
+    /// right leg. None for avatars from before body colours (skin, with the
+    /// torso in the shirt colour).
+    #[serde(default)]
+    pub body: Option<[Rgb; 6]>,
+    /// Which shirt, pants and t-shirt picture ("" for none) they wear, by
+    /// name. The colours above are what the shirt and pants are worn in.
+    #[serde(default = "default_shirt")]
+    pub shirt_style: String,
+    #[serde(default = "default_pants")]
+    pub pants_style: String,
+    #[serde(default)]
+    pub tshirt: String,
+}
+
+fn default_shirt() -> String {
+    "tee".into()
+}
+
+fn default_pants() -> String {
+    "plain".into()
 }
 
 impl Default for Avatar {
     fn default() -> Self {
-        Avatar { skin: (227, 185, 138), shirt: (13, 105, 172), pants: (27, 42, 53), shoes: (27, 27, 27), face: "smile".into(), hats: Vec::new() }
+        let skin = (227, 185, 138);
+        Avatar {
+            skin,
+            shirt: (13, 105, 172),
+            pants: (27, 42, 53),
+            shoes: (27, 27, 27),
+            face: "smile".into(),
+            hats: Vec::new(),
+            body: Some([skin, (13, 105, 172), skin, skin, skin, skin]),
+            shirt_style: default_shirt(),
+            pants_style: default_pants(),
+            tshirt: String::new(),
+        }
     }
 }
 
@@ -42,6 +75,11 @@ pub struct User {
     /// Can use the admin page (ban accounts, take games down).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub admin: bool,
+    /// When they were last on the website (Unix seconds; 0 if never seen).
+    #[serde(skip)]
+    pub last_seen: i64,
+    /// Their Brix (only they see this).
+    pub brix: i64,
 }
 
 /// An account, as the admin page lists it.
@@ -66,6 +104,8 @@ pub struct AdminGame {
     pub owner_banned: bool,
     /// Only admins can see and play it (the Test Lab).
     pub admin_only: bool,
+    /// In the big banner on Home and Games.
+    pub featured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +119,8 @@ pub struct GameRow {
     /// When it was first published (Unix seconds; 0 if unknown).
     pub created: i64,
     pub has_thumbnail: bool,
+    /// Picked by an admin for the big banner on Home and Games.
+    pub featured: bool,
 }
 
 /// A toolbox item, as the Toolbox lists it (without what it's made of).
@@ -136,7 +178,7 @@ pub fn now() -> i64 {
 /// Games anyone can see and play: not taken down, and not by a banned account.
 const LISTED: &str = "g.hidden = 0 AND u.banned = 0 AND g.admin_only = 0";
 
-const GAME_COLUMNS: &str = "g.id, g.name, u.username, g.description, g.visits, g.created, g.thumbnail IS NOT NULL";
+const GAME_COLUMNS: &str = "g.id, g.name, u.username, g.description, g.visits, g.created, g.thumbnail IS NOT NULL, g.featured";
 
 fn game_from_row(r: &rusqlite::Row) -> rusqlite::Result<GameRow> {
     Ok(GameRow {
@@ -147,6 +189,7 @@ fn game_from_row(r: &rusqlite::Row) -> rusqlite::Result<GameRow> {
         visits: r.get(4)?,
         created: r.get(5)?,
         has_thumbnail: r.get(6)?,
+        featured: r.get::<_, i64>(7)? != 0,
     })
 }
 
@@ -179,7 +222,7 @@ pub fn random_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-const USER_COLUMNS: &str = "id, username, avatar, blurb, created, admin";
+const USER_COLUMNS: &str = "id, username, avatar, blurb, created, admin, last_seen, brix";
 
 fn user_from_row(r: &rusqlite::Row) -> rusqlite::Result<User> {
     let avatar: String = r.get(2)?;
@@ -190,6 +233,8 @@ fn user_from_row(r: &rusqlite::Row) -> rusqlite::Result<User> {
         blurb: r.get(3)?,
         created: r.get(4)?,
         admin: r.get::<_, i64>(5)? != 0,
+        last_seen: r.get(6)?,
+        brix: r.get(7)?,
     })
 }
 
@@ -286,6 +331,17 @@ impl Db {
              );",
         )?;
         add_column(&conn, "users", "last_seen", "INTEGER NOT NULL DEFAULT 0")?;
+        // The game an admin picked for the banner on Home and Games, and
+        // what each player last played (Continue Playing on Home).
+        add_column(&conn, "games", "featured", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS plays (
+                 user_id INTEGER NOT NULL REFERENCES users(id),
+                 game_id INTEGER NOT NULL REFERENCES games(id),
+                 at INTEGER NOT NULL,
+                 PRIMARY KEY (user_id, game_id)
+             );",
+        )?;
         // The toolbox: ready-made things Studio can insert. Built-in ones
         // have a slug (seeded from brixo_samples::toolbox, kept up to date);
         // admins add the rest. Removing one hides it (so a removed built-in
@@ -303,6 +359,60 @@ impl Db {
                  created INTEGER NOT NULL DEFAULT 0
              );",
         )?;
+        // Brix and the Catalog: what everyone owns, admins' price changes,
+        // a record of every Brix given or spent, the challenges games have
+        // (and who's done them), saved outfits, and one-off upgrades done.
+        add_column(&conn, "users", "brix", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&conn, "users", "bonus_day", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS owned (
+                 user_id INTEGER NOT NULL REFERENCES users(id),
+                 item TEXT NOT NULL,
+                 at INTEGER NOT NULL,
+                 PRIMARY KEY (user_id, item)
+             );
+             CREATE TABLE IF NOT EXISTS prices (
+                 item TEXT PRIMARY KEY,
+                 price INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS brix_log (
+                 id INTEGER PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id),
+                 amount INTEGER NOT NULL,
+                 why TEXT NOT NULL,
+                 at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS brix_log_user ON brix_log (user_id, at);
+             CREATE TABLE IF NOT EXISTS challenges (
+                 id INTEGER PRIMARY KEY,
+                 game_id INTEGER NOT NULL REFERENCES games(id),
+                 name TEXT NOT NULL,
+                 title TEXT NOT NULL,
+                 reward INTEGER NOT NULL DEFAULT 0,
+                 daily INTEGER NOT NULL DEFAULT 0,
+                 approved INTEGER NOT NULL DEFAULT 0,
+                 created INTEGER NOT NULL,
+                 UNIQUE (game_id, name)
+             );
+             CREATE TABLE IF NOT EXISTS challenge_done (
+                 user_id INTEGER NOT NULL REFERENCES users(id),
+                 challenge_id INTEGER NOT NULL REFERENCES challenges(id),
+                 day INTEGER NOT NULL,
+                 at INTEGER NOT NULL,
+                 PRIMARY KEY (user_id, challenge_id, day)
+             );
+             CREATE TABLE IF NOT EXISTS outfits (
+                 user_id INTEGER NOT NULL REFERENCES users(id),
+                 slot INTEGER NOT NULL,
+                 name TEXT NOT NULL,
+                 avatar TEXT NOT NULL,
+                 PRIMARY KEY (user_id, slot)
+             );
+             CREATE TABLE IF NOT EXISTS meta (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );",
+        )?;
         Ok(Db(Mutex::new(conn)))
     }
 
@@ -312,10 +422,10 @@ impl Db {
         let avatar = Avatar::default();
         let created = now();
         conn.execute(
-            "INSERT INTO users (username, password_hash, avatar, created) VALUES (?1, ?2, ?3, ?4)",
-            params![username, password_hash, serde_json::to_string(&avatar).unwrap(), created],
+            "INSERT INTO users (username, password_hash, avatar, created, brix) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![username, password_hash, serde_json::to_string(&avatar).unwrap(), created, crate::shop::WELCOME_BRIX],
         )?;
-        Ok(User { id: conn.last_insert_rowid(), username: username.to_string(), avatar, blurb: String::new(), created, admin: false })
+        Ok(User { id: conn.last_insert_rowid(), username: username.to_string(), avatar, blurb: String::new(), created, admin: false, last_seen: 0, brix: crate::shop::WELCOME_BRIX })
     }
 
     /// Makes an account with an invite code, using the code up. Ok(None)
@@ -335,13 +445,13 @@ impl Db {
         let avatar = Avatar::default();
         let created = now();
         tx.execute(
-            "INSERT INTO users (username, password_hash, avatar, created) VALUES (?1, ?2, ?3, ?4)",
-            params![username, password_hash, serde_json::to_string(&avatar).unwrap(), created],
+            "INSERT INTO users (username, password_hash, avatar, created, brix) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![username, password_hash, serde_json::to_string(&avatar).unwrap(), created, crate::shop::WELCOME_BRIX],
         )?;
         let id = tx.last_insert_rowid();
         tx.execute("UPDATE invites SET used_by = ?1, used_at = ?2 WHERE code = ?3", params![id, created, code])?;
         tx.commit()?;
-        Ok(Some(User { id, username: username.to_string(), avatar, blurb: String::new(), created, admin: false }))
+        Ok(Some(User { id, username: username.to_string(), avatar, blurb: String::new(), created, admin: false, last_seen: 0, brix: crate::shop::WELCOME_BRIX }))
     }
 
     /// Makes `count` new invite codes.
@@ -521,7 +631,7 @@ impl Db {
     pub fn admin_games(&self, limit: i64) -> rusqlite::Result<Vec<AdminGame>> {
         let conn = self.0.lock().unwrap();
         let mut q = conn.prepare(
-            "SELECT g.id, g.name, u.username, g.visits, g.created, g.hidden, u.banned, g.admin_only FROM games g JOIN users u ON u.id = g.owner_id
+            "SELECT g.id, g.name, u.username, g.visits, g.created, g.hidden, u.banned, g.admin_only, g.featured FROM games g JOIN users u ON u.id = g.owner_id
              ORDER BY g.id DESC LIMIT ?1",
         )?;
         let rows = q.query_map([limit], |r| {
@@ -534,6 +644,7 @@ impl Db {
                 hidden: r.get::<_, i64>(5)? != 0,
                 owner_banned: r.get::<_, i64>(6)? != 0,
                 admin_only: r.get::<_, i64>(7)? != 0,
+                featured: r.get::<_, i64>(8)? != 0,
             })
         })?;
         rows.collect()
@@ -551,7 +662,7 @@ impl Db {
     pub fn session_user(&self, token: &str) -> rusqlite::Result<Option<User>> {
         let conn = self.0.lock().unwrap();
         conn.query_row(
-            "SELECT u.id, u.username, u.avatar, u.blurb, u.created, u.admin FROM sessions s JOIN users u ON u.id = s.user_id
+            "SELECT u.id, u.username, u.avatar, u.blurb, u.created, u.admin, u.last_seen, u.brix FROM sessions s JOIN users u ON u.id = s.user_id
              WHERE s.token = ?1 AND s.created >= ?2 AND u.banned = 0",
             params![token, now() - SESSION_DAYS * 86400],
             user_from_row,
@@ -628,6 +739,36 @@ impl Db {
     pub fn thumbnail(&self, id: i64) -> rusqlite::Result<Option<Vec<u8>>> {
         let conn = self.0.lock().unwrap();
         Ok(conn.query_row("SELECT thumbnail FROM games WHERE id = ?1", [id], |r| r.get::<_, Option<Vec<u8>>>(0)).optional()?.flatten())
+    }
+
+    /// Puts a game in the banner on Home and Games (only one at a time), or
+    /// takes it out. False if there's no such game.
+    pub fn set_featured(&self, id: i64, featured: bool) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        if featured {
+            conn.execute("UPDATE games SET featured = 0 WHERE featured = 1 AND id != ?1", [id])?;
+        }
+        Ok(conn.execute("UPDATE games SET featured = ?1 WHERE id = ?2", params![featured as i64, id])? > 0)
+    }
+
+    /// Notes that someone pressed Play on a game (for Continue Playing).
+    pub fn played(&self, user_id: i64, game_id: i64) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO plays (user_id, game_id, at) VALUES (?1, ?2, ?3) ON CONFLICT(user_id, game_id) DO UPDATE SET at = excluded.at",
+            params![user_id, game_id, now()],
+        )?;
+        Ok(())
+    }
+
+    /// The games someone played last, newest first (listed ones only).
+    pub fn recently_played(&self, user_id: i64, limit: i64) -> rusqlite::Result<Vec<GameRow>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare(&format!(
+            "SELECT {GAME_COLUMNS} FROM plays p JOIN games g ON g.id = p.game_id JOIN users u ON u.id = g.owner_id
+             WHERE p.user_id = ?1 AND {LISTED} ORDER BY p.at DESC, g.id DESC LIMIT ?2"
+        ))?;
+        let rows = q.query_map(params![user_id, limit], game_from_row)?;
+        rows.collect()
     }
 
     pub fn add_visit(&self, id: i64) -> rusqlite::Result<()> {
@@ -837,4 +978,266 @@ impl Db {
             id,
         )
     }
+
+    // --- Brix and the Catalog ------------------------------------------------
+
+    /// A one-off upgrade: true the first time it's asked about (and never again).
+    pub fn first_time(&self, key: &str) -> rusqlite::Result<bool> {
+        Ok(self.0.lock().unwrap().execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, '1')", [key])? == 1)
+    }
+
+    pub fn user_ids(&self) -> rusqlite::Result<Vec<i64>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare("SELECT id FROM users")?;
+        let rows = q.query_map([], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    fn give(conn: &Connection, user_id: i64, amount: i64, why: &str) -> rusqlite::Result<()> {
+        conn.execute("UPDATE users SET brix = brix + ?1 WHERE id = ?2", params![amount, user_id])?;
+        conn.execute("INSERT INTO brix_log (user_id, amount, why, at) VALUES (?1, ?2, ?3, ?4)", params![user_id, amount, why, now()])?;
+        Ok(())
+    }
+
+    /// Gives (or, negative, takes) Brix, noting why. Never below zero.
+    pub fn add_brix(&self, user_id: i64, amount: i64, why: &str) -> rusqlite::Result<i64> {
+        let conn = self.0.lock().unwrap();
+        let have: i64 = conn.query_row("SELECT brix FROM users WHERE id = ?1", [user_id], |r| r.get(0))?;
+        Self::give(&conn, user_id, amount.max(-have), why)?;
+        conn.query_row("SELECT brix FROM users WHERE id = ?1", [user_id], |r| r.get(0))
+    }
+
+    /// The day's visit bonus, the first time someone's seen each day (UTC).
+    /// Some(Brix given) when it was given just now.
+    pub fn daily_bonus(&self, user_id: i64) -> rusqlite::Result<Option<i64>> {
+        let today = now() / 86400;
+        let conn = self.0.lock().unwrap();
+        let n = conn.execute("UPDATE users SET bonus_day = ?1 WHERE id = ?2 AND bonus_day < ?1", params![today, user_id])?;
+        if n == 0 {
+            return Ok(None);
+        }
+        Self::give(&conn, user_id, crate::shop::DAILY_BONUS, "daily visit")?;
+        Ok(Some(crate::shop::DAILY_BONUS))
+    }
+
+    /// The Catalog items someone owns (free ones aren't listed).
+    pub fn owned(&self, user_id: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare("SELECT item FROM owned WHERE user_id = ?1 ORDER BY at")?;
+        let rows = q.query_map([user_id], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    pub fn grant(&self, user_id: i64, item: &str) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute("INSERT OR IGNORE INTO owned (user_id, item, at) VALUES (?1, ?2, ?3)", params![user_id, item, now()])?;
+        Ok(())
+    }
+
+    /// Buys something for `price` Brix: the new balance, or why not.
+    pub fn buy(&self, user_id: i64, item: &str, price: i64) -> rusqlite::Result<Result<i64, Bought>> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let owned: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM owned WHERE user_id = ?1 AND item = ?2)", params![user_id, item], |r| r.get(0))?;
+        if owned {
+            return Ok(Err(Bought::AlreadyOwned));
+        }
+        let have: i64 = tx.query_row("SELECT brix FROM users WHERE id = ?1", [user_id], |r| r.get(0))?;
+        if have < price {
+            return Ok(Err(Bought::TooFewBrix { have }));
+        }
+        Self::give(&tx, user_id, -price, &format!("bought {item}"))?;
+        tx.execute("INSERT INTO owned (user_id, item, at) VALUES (?1, ?2, ?3)", params![user_id, item, now()])?;
+        tx.commit()?;
+        Ok(Ok(have - price))
+    }
+
+    /// Admins' price changes: item -> Brix.
+    pub fn prices(&self) -> rusqlite::Result<std::collections::HashMap<String, i64>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare("SELECT item, price FROM prices")?;
+        let rows = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// Changes a price (None: back to the usual one).
+    pub fn set_price(&self, item: &str, price: Option<i64>) -> rusqlite::Result<()> {
+        let conn = self.0.lock().unwrap();
+        match price {
+            Some(p) => conn.execute("INSERT INTO prices (item, price) VALUES (?1, ?2) ON CONFLICT(item) DO UPDATE SET price = excluded.price", params![item, p])?,
+            None => conn.execute("DELETE FROM prices WHERE item = ?1", [item])?,
+        };
+        Ok(())
+    }
+
+    /// Someone's saved outfits: (slot, name, look).
+    pub fn outfits(&self, user_id: i64) -> rusqlite::Result<Vec<Outfit>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare("SELECT slot, name, avatar FROM outfits WHERE user_id = ?1 ORDER BY slot")?;
+        let rows = q.query_map([user_id], |r| {
+            let a: String = r.get(2)?;
+            Ok(Outfit { slot: r.get(0)?, name: r.get(1)?, avatar: serde_json::from_str(&a).unwrap_or_default() })
+        })?;
+        rows.collect()
+    }
+
+    pub fn set_outfit(&self, user_id: i64, slot: i64, name: &str, avatar: &Avatar) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO outfits (user_id, slot, name, avatar) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, slot) DO UPDATE SET name = excluded.name, avatar = excluded.avatar",
+            params![user_id, slot, name, serde_json::to_string(avatar).unwrap()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_outfit(&self, user_id: i64, slot: i64) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute("DELETE FROM outfits WHERE user_id = ?1 AND slot = ?2", params![user_id, slot])?;
+        Ok(())
+    }
+
+    /// A player completed a game's challenge (`name`, from its script).
+    /// A challenge a game hasn't used before is added, waiting for an admin
+    /// to approve it and set its Brix; until then it doesn't count. Each
+    /// counts once per player (or once a day, for daily ones), and pays its
+    /// Brix up to the day's limit. None when it doesn't count.
+    pub fn complete_challenge(&self, game_id: i64, user_id: i64, name: &str) -> rusqlite::Result<Option<(String, i64)>> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let found = tx
+            .query_row("SELECT id, title, reward, daily, approved FROM challenges WHERE game_id = ?1 AND name = ?2", params![game_id, name], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)? != 0, r.get::<_, i64>(4)? != 0))
+            })
+            .optional()?;
+        let Some((id, title, reward, daily, approved)) = found else {
+            let count: i64 = tx.query_row("SELECT COUNT(*) FROM challenges WHERE game_id = ?1", [game_id], |r| r.get(0))?;
+            if count < crate::shop::MAX_CHALLENGES {
+                tx.execute(
+                    "INSERT INTO challenges (game_id, name, title, created) VALUES (?1, ?2, ?3, ?4)",
+                    params![game_id, name, brixo_runtime::challenge_title(name), now()],
+                )?;
+                tx.commit()?;
+            }
+            return Ok(None);
+        };
+        if !approved {
+            return Ok(None);
+        }
+        let today = now() / 86400;
+        let day = if daily { today } else { 0 };
+        let fresh = tx.execute(
+            "INSERT OR IGNORE INTO challenge_done (user_id, challenge_id, day, at) VALUES (?1, ?2, ?3, ?4)",
+            params![user_id, id, day, now()],
+        )? == 1;
+        if !fresh {
+            return Ok(None);
+        }
+        let earned: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(amount), 0) FROM brix_log WHERE user_id = ?1 AND at >= ?2 AND why LIKE 'challenge%'",
+            params![user_id, today * 86400],
+            |r| r.get(0),
+        )?;
+        let pay = reward.min(crate::shop::DAILY_CHALLENGE_LIMIT - earned).max(0);
+        if pay > 0 {
+            Self::give(&tx, user_id, pay, &format!("challenge {id}"))?;
+        }
+        tx.commit()?;
+        Ok(Some((title, pay)))
+    }
+
+    /// A game's approved challenges, and whether `user_id` has done each
+    /// (today, for daily ones).
+    pub fn game_challenges(&self, game_id: i64, user_id: Option<i64>) -> rusqlite::Result<Vec<ChallengeRow>> {
+        let conn = self.0.lock().unwrap();
+        let today = now() / 86400;
+        let mut q = conn.prepare(
+            "SELECT c.title, c.reward, c.daily,
+                    EXISTS(SELECT 1 FROM challenge_done d WHERE d.challenge_id = c.id AND d.user_id = ?2 AND d.day = (CASE WHEN c.daily = 1 THEN ?3 ELSE 0 END))
+             FROM challenges c WHERE c.game_id = ?1 AND c.approved = 1 ORDER BY c.reward, c.id",
+        )?;
+        let rows = q.query_map(params![game_id, user_id.unwrap_or(-1), today], |r| {
+            Ok(ChallengeRow { title: r.get(0)?, reward: r.get(1)?, daily: r.get::<_, i64>(2)? != 0, done: r.get::<_, i64>(3)? != 0 })
+        })?;
+        rows.collect()
+    }
+
+    /// Every game's challenges, waiting ones first, for the admin page.
+    pub fn admin_challenges(&self) -> rusqlite::Result<Vec<AdminChallenge>> {
+        let conn = self.0.lock().unwrap();
+        let mut q = conn.prepare(
+            "SELECT c.id, c.game_id, g.name, c.name, c.title, c.reward, c.daily, c.approved,
+                    (SELECT COUNT(*) FROM challenge_done d WHERE d.challenge_id = c.id)
+             FROM challenges c JOIN games g ON g.id = c.game_id ORDER BY c.approved, g.name, c.id",
+        )?;
+        let rows = q.query_map([], |r| {
+            Ok(AdminChallenge {
+                id: r.get(0)?,
+                game_id: r.get(1)?,
+                game: r.get(2)?,
+                name: r.get(3)?,
+                title: r.get(4)?,
+                reward: r.get(5)?,
+                daily: r.get::<_, i64>(6)? != 0,
+                approved: r.get::<_, i64>(7)? != 0,
+                completed: r.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// An admin sets a challenge up. False if there's no such challenge.
+    pub fn set_challenge(&self, id: i64, title: &str, reward: i64, daily: bool, approved: bool) -> rusqlite::Result<bool> {
+        Ok(self.0.lock().unwrap().execute(
+            "UPDATE challenges SET title = ?1, reward = ?2, daily = ?3, approved = ?4 WHERE id = ?5",
+            params![title, reward, daily as i64, approved as i64, id],
+        )? > 0)
+    }
+
+    /// Adds (or updates) a challenge for a game: the sample games' own.
+    pub fn seed_challenge(&self, game_id: i64, name: &str, title: &str, reward: i64, daily: bool) -> rusqlite::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO challenges (game_id, name, title, reward, daily, approved, created) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+             ON CONFLICT(game_id, name) DO NOTHING",
+            params![game_id, name, title, reward, daily as i64, now()],
+        )?;
+        Ok(())
+    }
+}
+
+/// Why buying something didn't work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bought {
+    AlreadyOwned,
+    TooFewBrix { have: i64 },
+}
+
+/// A saved outfit.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct Outfit {
+    pub slot: i64,
+    pub name: String,
+    pub avatar: Avatar,
+}
+
+/// A game's challenge, as its page shows it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChallengeRow {
+    pub title: String,
+    pub reward: i64,
+    pub daily: bool,
+    /// Done by the one looking (today, for daily ones).
+    pub done: bool,
+}
+
+/// A challenge, as the admin page shows it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminChallenge {
+    pub id: i64,
+    pub game_id: i64,
+    pub game: String,
+    pub name: String,
+    pub title: String,
+    pub reward: i64,
+    pub daily: bool,
+    pub approved: bool,
+    /// How many times players have completed it.
+    pub completed: i64,
 }
