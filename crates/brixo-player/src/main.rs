@@ -199,6 +199,9 @@ struct Player {
     need_update: bool,
     /// Updating because a server asked (not on launch): tried once only.
     server_update: bool,
+    /// When you last swung a tool online: your arm swings at once instead
+    /// of a ping later (see brixo_client::smooth::predict_swing).
+    my_swing: Option<Instant>,
     /// Your settings, and what's in the file (saved when they differ and
     /// the menu's closed).
     settings: Settings,
@@ -232,6 +235,7 @@ impl Player {
             last_link: None,
             need_update: false,
             server_update: false,
+            my_swing: None,
             locked: false,
             confined: false,
             started: Instant::now(),
@@ -621,6 +625,7 @@ impl Player {
                     }
                     if queued_use {
                         net.activate();
+                        self.my_swing = Some(Instant::now());
                     }
                     for text in &queued_say {
                         net.chat(text);
@@ -665,6 +670,16 @@ impl Player {
                     s.predictor.apply(&mut s.view);
                     // Your tool in your (predicted) hand.
                     brixo_client::smooth::hold_tools(&mut s.view, &net.world);
+                    // Your own swing, shown now (the server's copy of it
+                    // arrives a ping later and is ignored meanwhile).
+                    if let (Some(at), Some(me)) = (self.my_swing, net.me) {
+                        let since = at.elapsed().as_secs_f32();
+                        if since < brixo_core::SWING_TIME + 0.6 {
+                            brixo_client::smooth::predict_swing(&mut s.view, me, (brixo_core::SWING_TIME - since).max(0.0));
+                        } else {
+                            self.my_swing = None;
+                        }
+                    }
                     brixo_runtime::kart::pose_all(&mut s.view);
                     hidden = s.follow.update(&mut self.camera, &s.view, net.me);
                     write_position(&s.view, net.me);
@@ -883,6 +898,7 @@ impl Player {
                     }
                     if let Some(aim) = swing {
                         net.activate_at(aim);
+                        self.my_swing = Some(Instant::now());
                     }
                 }
             }

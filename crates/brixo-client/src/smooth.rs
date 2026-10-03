@@ -84,6 +84,37 @@ pub fn hold_tools(view: &mut DataModel, source: &DataModel) {
     }
 }
 
+/// Your own tool swing, shown the moment you click instead of a ping
+/// later: draws your arm (and the tool in it) at `swing` seconds left of a
+/// swing, whatever the server has. The hit itself is still the server's.
+/// Call after `hold_tools`.
+pub fn predict_swing(view: &mut DataModel, me: InstanceId, swing: f32) {
+    use glam::{EulerRot, Quat, Vec3 as G};
+    let Some(p) = view.player(me).copied() else { return };
+    let Some(tool) = p.equipped else { return };
+    let up = brixo_core::holds_up(view, tool);
+    let delta = brixo_core::held_arm_angle(swing, up) - brixo_core::held_arm_angle(p.swing, up);
+    if let Some(v) = view.player_mut(me) {
+        v.swing = swing;
+    }
+    if delta.abs() < 1e-4 {
+        return;
+    }
+    // Turn the tool about the shoulder by the difference in arm angle.
+    let body = Quat::from_rotation_y(p.body.rotation.y.to_radians());
+    let s = brixo_core::RIGHT_SHOULDER;
+    let shoulder = G::new(p.body.position.x, p.body.position.y, p.body.position.z) + body * G::new(s.x, s.y, s.z);
+    let turn = body * Quat::from_rotation_x(delta) * body.inverse();
+    let euler = |r: Vec3| Quat::from_euler(EulerRot::YXZ, r.y.to_radians(), r.x.to_radians(), r.z.to_radians());
+    for id in view.parts_under(tool) {
+        let Some(q) = view.part_mut(id) else { continue };
+        let at = shoulder + turn * (G::new(q.position.x, q.position.y, q.position.z) - shoulder);
+        let (y, x, z) = (turn * euler(q.rotation)).to_euler(EulerRot::YXZ);
+        q.position = Vec3::new(at.x, at.y, at.z);
+        q.rotation = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+    }
+}
+
 fn lerp(a: Vec3, b: Vec3, t: f32) -> Vec3 {
     Vec3::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
 }
