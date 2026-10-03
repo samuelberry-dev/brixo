@@ -15,6 +15,8 @@
 //!                                   add to it: FILE is what you copied in Studio
 //!                                   (select it, Ctrl+C, paste into a file)
 //!   brixo-web toolbox-remove ID     take something out of the toolbox
+//!   brixo-web backup FILE           a safe copy of the whole database (even
+//!                                   while the website runs); see deploy/brixo-backup
 //!
 //! Settings (all optional; the defaults suit your own PC):
 //! - PORT: the website's port (7420).
@@ -150,7 +152,12 @@ fn main() {
             }
             println!("Took {id} out of the toolbox.");
         }
-        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite, invites, admin, ban, unban, hide, show, reset, toolbox, toolbox-add or toolbox-remove")),
+        Some("backup") => {
+            let file = args.get(1).unwrap_or_else(|| fail("usage: brixo-web backup FILE"));
+            let (users, games) = brixo_web::db::backup(&db_path, file).unwrap_or_else(|e| fail(e));
+            println!("Backed up to {file}: {users} users, {games} games, checked OK.");
+        }
+        Some(other) => fail(format!("unknown command {other:?}: try set-password, invite, invites, admin, ban, unban, hide, show, reset, toolbox, toolbox-add, toolbox-remove or backup")),
     }
 }
 

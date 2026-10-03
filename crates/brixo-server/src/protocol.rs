@@ -9,6 +9,18 @@ use serde::{Deserialize, Serialize};
 /// The port servers listen on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 4570;
 
+/// This build's version of the wire format, sent in `Hello`. Bump it when a
+/// change would break older Players (they can't understand something the
+/// server now relies on). Players from before this existed send 0.
+pub const PROTOCOL: u32 = 1;
+
+/// The oldest Player a server lets in. Raise it to PROTOCOL when you bump
+/// PROTOCOL for a breaking change: older Players are then told to update
+/// (`UpdateRequired`), update themselves, and come straight back in. Players
+/// from before the handshake (0) can't understand that, so keep this at 0
+/// until everyone has a Player with the handshake.
+pub const MIN_PROTOCOL: u32 = 0;
+
 /// Player -> server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ToServer {
@@ -18,6 +30,9 @@ pub enum ToServer {
         name: String,
         #[serde(default)]
         ticket: Option<String>,
+        /// The Player's PROTOCOL (0 from Players before it was sent).
+        #[serde(default)]
+        protocol: u32,
     },
     /// What the player is pressing (camera-relative, already turned into
     /// a world direction).
@@ -81,6 +96,9 @@ pub enum ToClient {
     Asset { id: u64, format: String, data: String },
     /// Someone said something (already filtered).
     Chat { from: u64, name: String, text: String },
+    /// Your Player is too old for this server (it needs `min`): update and
+    /// try again. The connection closes after this.
+    UpdateRequired { min: u32 },
 }
 
 pub fn write_msg<T: Serialize>(w: &mut impl Write, msg: &T) -> io::Result<()> {
@@ -209,10 +227,10 @@ mod tests {
     #[test]
     fn messages_round_trip_one_per_line() {
         let mut buf = Vec::new();
-        write_msg(&mut buf, &ToServer::Hello { name: "Ann".into(), ticket: None }).unwrap();
+        write_msg(&mut buf, &ToServer::Hello { name: "Ann".into(), ticket: None, protocol: PROTOCOL }).unwrap();
         write_msg(&mut buf, &ToServer::Input { move_x: 0.5, move_z: -1.0, jump: true }).unwrap();
         let mut r = io::BufReader::new(&buf[..]);
-        assert_eq!(read_msg::<ToServer>(&mut r).unwrap(), Some(ToServer::Hello { name: "Ann".into(), ticket: None }));
+        assert_eq!(read_msg::<ToServer>(&mut r).unwrap(), Some(ToServer::Hello { name: "Ann".into(), ticket: None, protocol: PROTOCOL }));
         assert_eq!(
             read_msg::<ToServer>(&mut r).unwrap(),
             Some(ToServer::Input { move_x: 0.5, move_z: -1.0, jump: true })

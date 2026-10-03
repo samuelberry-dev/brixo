@@ -67,6 +67,28 @@ pub fn home_ui(ctx: &egui::Context, message: Option<&str>) {
     });
 }
 
+/// Updating on launch: the logo, what's happening, and a bar of bricks'
+/// worth of progress. Games open right after.
+pub fn updating_ui(ctx: &egui::Context, label: &str, fraction: f32) {
+    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+        let rect = ui.max_rect();
+        theme::paint_banner(ui.painter(), rect);
+        let height = 72.0;
+        let width = height * 0.86 * 5.0 + height * 0.1 * 4.0;
+        let top = rect.top() + rect.height() * 0.28;
+        theme::paint_small_logo(ui.painter(), egui::pos2(rect.center().x - width / 2.0, top), height);
+        let p = ui.painter();
+        p.text(egui::pos2(rect.center().x, top + 140.0), egui::Align2::CENTER_CENTER, label, FontId::proportional(18.0), Color32::WHITE);
+        let bar = egui::Rect::from_center_size(egui::pos2(rect.center().x, top + 180.0), egui::vec2(320.0, 14.0));
+        p.rect_filled(bar, 2.0, Color32::from_black_alpha(90));
+        let mut fill = bar;
+        fill.set_width(bar.width() * fraction.clamp(0.0, 1.0));
+        p.rect_filled(fill, 2.0, Color32::from_rgb(90, 200, 90));
+        p.text(rect.right_bottom() + egui::vec2(-10.0, -8.0), egui::Align2::RIGHT_BOTTOM, install::VERSION, FontId::proportional(11.0), Color32::from_white_alpha(70));
+    });
+    ctx.request_repaint();
+}
+
 /// "A new Brixo Player is out" along the top, until dismissed.
 pub fn update_notice(ctx: &egui::Context, latest: Option<&str>, hidden: &mut bool) {
     let Some(latest) = latest else { return };

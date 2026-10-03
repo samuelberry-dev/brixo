@@ -13,6 +13,7 @@ pub mod play;
 pub mod predict;
 pub mod smooth;
 pub mod theme;
+pub mod update;
 pub mod sound;
 
 pub use gui::{ChatLog, draw_beacons, draw_gui, draw_hotbar, hotbar_key, visible_gui, GuiEvents, Project};

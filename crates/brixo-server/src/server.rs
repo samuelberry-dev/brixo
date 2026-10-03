@@ -295,7 +295,7 @@ impl Server {
     fn handle_events(&mut self) {
         while let Ok((conn, event)) = self.events.try_recv() {
             match event {
-                Event::Message(ToServer::Hello { name, ticket }) => self.hello(conn, &name, ticket.as_deref()),
+                Event::Message(ToServer::Hello { name, ticket, protocol }) => self.hello(conn, &name, ticket.as_deref(), protocol),
                 Event::Message(ToServer::Input { move_x, move_z, jump }) => {
                     if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
                         let len = (move_x * move_x + move_z * move_z).sqrt();
@@ -352,7 +352,17 @@ impl Server {
 
     /// A new connection says hello: on a ticketed server, the ticket decides
     /// who they are; anywhere else, they pick a name.
-    fn hello(&mut self, conn: u64, requested: &str, ticket: Option<&str>) {
+    fn hello(&mut self, conn: u64, requested: &str, ticket: Option<&str>, protocol: u32) {
+        // Too old a Player: say so before the ticket's checked, so the
+        // same ticket still works once it has updated itself.
+        if protocol < crate::protocol::MIN_PROTOCOL {
+            if let Some(c) = self.connections.get_mut(&conn) {
+                let _ = write_msg(&mut c.writer, &ToClient::UpdateRequired { min: crate::protocol::MIN_PROTOCOL });
+            }
+            self.log.lock().unwrap().push(LogLine { source: "Server".into(), text: format!("A Player too old for this server tried to join (it sent {protocol})"), is_error: false });
+            self.connections.remove(&conn);
+            return;
+        }
         match &self.tickets {
             None => self.join(conn, requested, None, None),
             Some(check) => match ticket.and_then(|t| check(t)) {

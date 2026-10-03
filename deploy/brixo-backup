@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Brixo's backups: safe copies of the whole database (accounts, Brix, games,
+# saves, invites...). Run as root on the server:
+#   brixo-backup                 make one now ("manual")
+#   brixo-backup nightly         what the nightly timer runs
+#   brixo-backup pre-deploy      what deploy.sh runs before each deploy
+#   brixo-backup list            what backups there are
+#   brixo-backup restore FILE    put a backup back (asks first; keeps a copy
+#                                of what's there now, as "pre-restore")
+# Backups live in /var/backups/brixo, gzipped, named by date and kind. Kept:
+# the last 14 nightly, 10 pre-deploy, 10 manual and 10 pre-restore. Copy them
+# off the server too (tools/pull-backups.ps1 on your PC): a backup on the
+# same disk dies with the disk.
+set -euo pipefail
+
+DB=/var/lib/brixo/brixo-web.sqlite
+DIR=/var/backups/brixo
+# Which brixo-web to back up with (deploy.sh passes the freshly built one).
+BIN=${BRIXO_BIN:-/usr/local/bin/brixo-web}
+
+make_dir() {
+    install -d -o root -g brixo -m 770 "$DIR"
+}
+
+# Keeps the newest $2 backups of kind $1.
+prune() {
+    ls -1t "$DIR"/brixo-*-"$1".sqlite.gz 2>/dev/null | tail -n +"$(($2 + 1))" | xargs -r rm -f
+}
+
+backup() {
+    local kind=$1
+    make_dir
+    local name="brixo-$(date -u +%Y-%m-%d-%H%M%S)-$kind"
+    local tmp="$DIR/$name.sqlite"
+    if [ ! -f "$DB" ]; then
+        echo "No database at $DB yet: nothing to back up."
+        return 0
+    fi
+    # As the brixo user, like the website, so it can read the database.
+    sudo -u brixo env BRIXO_WEB_DB="$DB" "$BIN" backup "$tmp"
+    gzip -9 "$tmp"
+    chmod 640 "$tmp.gz"
+    chown root:brixo "$tmp.gz"
+    echo "Saved $tmp.gz ($(du -h "$tmp.gz" | cut -f1))"
+    case $kind in
+        nightly) prune nightly 14 ;;
+        pre-deploy) prune pre-deploy 10 ;;
+        pre-restore) prune pre-restore 10 ;;
+        *) prune "$kind" 10 ;;
+    esac
+}
+
+restore() {
+    local file=${1:-}
+    [ -n "$file" ] || { echo "usage: brixo-backup restore FILE   (see: brixo-backup list)"; exit 2; }
+    [ -f "$file" ] || file="$DIR/$file"
+    [ -f "$file" ] || { echo "There's no backup called $1"; exit 2; }
+    echo "This puts the live database back to: $(basename "$file")"
+    echo "Everything since then (new accounts, Brix, saves, game edits) is lost."
+    read -r -p "Type RESTORE to go ahead: " answer
+    [ "$answer" = "RESTORE" ] || { echo "Nothing changed."; exit 1; }
+    # A copy of what's there now, in case this was the wrong one.
+    backup pre-restore
+    local new="$DB.restoring"
+    case $file in
+        *.gz) gunzip -c "$file" > "$new" ;;
+        *) cp "$file" "$new" ;;
+    esac
+    chown brixo:brixo "$new"
+    chmod 640 "$new"
+    echo "Stopping Brixo (players in games are dropped)..."
+    systemctl stop brixo-web
+    rm -f "$DB-wal" "$DB-shm"
+    mv "$new" "$DB"
+    systemctl start brixo-web
+    sleep 2
+    if systemctl is-active --quiet brixo-web; then
+        echo "Restored, and Brixo is running."
+    else
+        echo "Restored, but Brixo didn't start. Log:"
+        journalctl -u brixo-web -n 30 --no-pager
+        exit 1
+    fi
+}
+
+case ${1:-manual} in
+    list)
+        make_dir
+        ls -lh "$DIR" | tail -n +2 | awk '{print $5, $9}'
+        ;;
+    restore) restore "${2:-}" ;;
+    nightly | pre-deploy | manual) backup "$1" ;;
+    *)
+        echo "usage: brixo-backup [nightly|pre-deploy|manual|list|restore FILE]"
+        exit 2
+        ;;
+esac

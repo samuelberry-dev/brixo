@@ -75,9 +75,11 @@ Copy-Item "target\release\brixo-player.exe" (Join-Path $dist "BrixoPlayer.exe") 
 Copy-Item "target\release\brixo-studio.exe" (Join-Path $dist "BrixoStudio.exe") -Force
 $files = @((Join-Path $dist "BrixoPlayer.exe"), (Join-Path $dist "BrixoStudio.exe"))
 $size = { param($name) (Get-Item (Join-Path $dist $name)).Length }
+# Player and Studio check what they download against this before using it.
+$sha = { param($name) (Get-FileHash -Algorithm SHA256 (Join-Path $dist $name)).Hash.ToLower() }
 $versions = [ordered]@{
-    player = [ordered]@{ version = $version; file = "BrixoPlayer.exe"; bytes = (& $size "BrixoPlayer.exe") }
-    studio = [ordered]@{ version = $version; file = "BrixoStudio.exe"; bytes = (& $size "BrixoStudio.exe") }
+    player = [ordered]@{ version = $version; file = "BrixoPlayer.exe"; bytes = (& $size "BrixoPlayer.exe"); sha256 = (& $sha "BrixoPlayer.exe") }
+    studio = [ordered]@{ version = $version; file = "BrixoStudio.exe"; bytes = (& $size "BrixoStudio.exe"); sha256 = (& $sha "BrixoStudio.exe") }
 }
 
 # --- Mac: from Codemagic, or wait for GitHub and fetch the .dmg files ----
@@ -89,8 +91,8 @@ if ($MacFolder) {
         Copy-Item (Join-Path $MacFolder $dmg) (Join-Path $dist $dmg) -Force
         $files += (Join-Path $dist $dmg)
     }
-    $versions["player_mac"] = [ordered]@{ version = $macVersion; file = "BrixoPlayer.dmg"; bytes = (& $size "BrixoPlayer.dmg") }
-    $versions["studio_mac"] = [ordered]@{ version = $macVersion; file = "BrixoStudio.dmg"; bytes = (& $size "BrixoStudio.dmg") }
+    $versions["player_mac"] = [ordered]@{ version = $macVersion; file = "BrixoPlayer.dmg"; bytes = (& $size "BrixoPlayer.dmg"); sha256 = (& $sha "BrixoPlayer.dmg") }
+    $versions["studio_mac"] = [ordered]@{ version = $macVersion; file = "BrixoStudio.dmg"; bytes = (& $size "BrixoStudio.dmg"); sha256 = (& $sha "BrixoStudio.dmg") }
     $macDone = $true
 } elseif ($macRun) {
     Write-Host "== Waiting for the Mac build on GitHub (10-20 minutes the first time, less after)"
@@ -104,8 +106,8 @@ if ($MacFolder) {
                 Copy-Item (Join-Path $macDir $dmg) (Join-Path $dist $dmg) -Force
                 $files += (Join-Path $dist $dmg)
             }
-            $versions["player_mac"] = [ordered]@{ version = $version; file = "BrixoPlayer.dmg"; bytes = (& $size "BrixoPlayer.dmg") }
-            $versions["studio_mac"] = [ordered]@{ version = $version; file = "BrixoStudio.dmg"; bytes = (& $size "BrixoStudio.dmg") }
+            $versions["player_mac"] = [ordered]@{ version = $version; file = "BrixoPlayer.dmg"; bytes = (& $size "BrixoPlayer.dmg"); sha256 = (& $sha "BrixoPlayer.dmg") }
+            $versions["studio_mac"] = [ordered]@{ version = $version; file = "BrixoStudio.dmg"; bytes = (& $size "BrixoStudio.dmg"); sha256 = (& $sha "BrixoStudio.dmg") }
             $macDone = $true
         }
     }

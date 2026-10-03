@@ -1,0 +1,6 @@
+[Unit]
+Description=Brixo nightly database backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/brixo-backup nightly

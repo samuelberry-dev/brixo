@@ -1,0 +1,10 @@
+[Unit]
+Description=Brixo nightly database backup (about 3:17 am Texas time)
+
+[Timer]
+OnCalendar=*-*-* 08:17:00 UTC
+# Missed one (the server was off)? Run it when it's back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

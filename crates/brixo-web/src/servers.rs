@@ -8,9 +8,11 @@ use std::time::{Duration, Instant};
 use brixo_server::ServerHandle;
 
 /// How long an empty server waits for players before shutting down.
-pub const IDLE_SHUTDOWN: Duration = Duration::from_secs(60);
+// (Long enough for a Player that's updating itself before it joins.)
+pub const IDLE_SHUTDOWN: Duration = Duration::from_secs(300);
 /// How long a Play ticket stays good.
-pub const TICKET_LIFETIME: Duration = Duration::from_secs(60);
+/// Long enough for the Player to update itself first (see brixo_client::update).
+pub const TICKET_LIFETIME: Duration = Duration::from_secs(300);
 
 /// Where players reach the game servers this website starts.
 #[derive(Clone, Debug)]

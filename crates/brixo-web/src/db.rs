@@ -9,6 +9,34 @@ use serde::Serialize;
 
 pub struct Db(Mutex<Connection>);
 
+/// A consistent copy of the database at `db_path` in `out` (which mustn't
+/// exist yet), safe while the website runs: SQLite's own `VACUUM INTO`, not
+/// a file copy (a copy taken mid-write can be broken). The database is
+/// opened as it is, without the website's upgrades, so a backup taken
+/// before a deploy is exactly what the old version left. Then checks the
+/// copy opens and is sound, and gives back (users, games) in it.
+pub fn backup(db_path: &str, out: &str) -> Result<(i64, i64), String> {
+    if !std::path::Path::new(db_path).exists() {
+        return Err(format!("there's no database at {db_path}"));
+    }
+    if std::path::Path::new(out).exists() {
+        return Err(format!("{out} already exists"));
+    }
+    {
+        let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|e| format!("couldn't open {db_path}: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(30)).map_err(|e| e.to_string())?;
+        conn.execute("VACUUM INTO ?1", params![out]).map_err(|e| format!("backup failed: {e}"))?;
+    }
+    let copy = Connection::open(out).map_err(|e| format!("the backup won't open: {e}"))?;
+    let check: String = copy.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(|e| format!("couldn't check the backup: {e}"))?;
+    if check != "ok" {
+        return Err(format!("the backup failed its check: {check}"));
+    }
+    let users: i64 = copy.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let games: i64 = copy.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    Ok((users, games))
+}
+
 pub type Rgb = (u8, u8, u8);
 
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]

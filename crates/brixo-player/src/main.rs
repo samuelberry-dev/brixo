@@ -16,6 +16,7 @@ use std::time::Instant;
 use brixo_client::{draw_beacons, keyboard_look, projector, trackpad_look, Audio, CameraKeys, ChatLog, Smoother, draw_gui, draw_hotbar, hotbar_key, movement_input, FollowCamera, GameEntry, GuiEvents, Held};
 use brixo_client::install::{self, App};
 
+mod film;
 mod mac_links;
 mod menus;
 mod protocol;
@@ -77,7 +78,12 @@ impl Gpu {
         let caps = surface.get_capabilities(&adapter);
         let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // Filming reads each frame back (film.rs).
+            usage: if std::env::var_os("BRIXO_FILM").is_some() {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            },
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -141,6 +147,9 @@ struct Session {
 enum Screen {
     /// Not in a game: games open from the website. Shows a message.
     Home { message: Option<String> },
+    /// Checking for (and getting) a newer Brixo Player before anything
+    /// else: see brixo_client::update. Play links wait until it's done.
+    Updating,
     Playing(Box<Session>),
 }
 
@@ -179,6 +188,17 @@ struct Player {
     /// A newer Brixo Player on the website, once the check finds one.
     update: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     update_hidden: bool,
+    /// Updating on launch (None once done, or for builds that don't).
+    updater: Option<brixo_client::update::Updater>,
+    /// A Play link (macOS) that arrived while updating: joined after, or
+    /// handed to the new version.
+    pending_link: Option<String>,
+    /// The Play link we joined with, to use again after an update.
+    last_link: Option<String>,
+    /// The game's server said this Player is too old.
+    need_update: bool,
+    /// Updating because a server asked (not on launch): tried once only.
+    server_update: bool,
     /// Your settings, and what's in the file (saved when they differ and
     /// the menu's closed).
     settings: Settings,
@@ -186,6 +206,8 @@ struct Player {
     pause_tab: menus::PauseTab,
     /// The volumes last given to the speakers.
     levels: Option<(f32, f32)>,
+    /// Filming a trailer shot (BRIXO_FILM).
+    film: Option<film::Film>,
 }
 
 impl Player {
@@ -205,6 +227,11 @@ impl Player {
             chat_text: String::new(),
             update: install::check_for_update(App::Player),
             update_hidden: false,
+            updater: brixo_client::update::Updater::start(App::Player),
+            pending_link: None,
+            last_link: None,
+            need_update: false,
+            server_update: false,
             locked: false,
             confined: false,
             started: Instant::now(),
@@ -212,6 +239,7 @@ impl Player {
             saved_settings: Settings::load(),
             pause_tab: menus::PauseTab::default(),
             levels: None,
+            film: film::load().inspect(|f| FILM_NO_HUD.store(!f.hud(), std::sync::atomic::Ordering::Relaxed)),
         }
     }
 
@@ -238,6 +266,95 @@ impl Player {
             shift_lock: false,
             predictor: brixo_client::Predictor::default(),
         }));
+    }
+
+    /// What we were opened to do: a Play link, a developer option, a file.
+    fn start_from_args(&mut self) {
+        // Opened by Play on the website: `brixo://play?server=...&ticket=...`.
+        if let Some(raw) = std::env::args().nth(1).filter(|a| protocol::parse(a).is_some()) {
+            self.last_link = Some(raw.clone());
+        }
+        if let Some(link) = std::env::args().nth(1).as_deref().and_then(protocol::parse) {
+            self.join_with_ticket(link);
+            return;
+        }
+        // Developer options below: `--join ADDR [--name NAME]` (the studio's
+        // test windows) and `brixo-player game.brixo`.
+        let args: Vec<String> = std::env::args().collect();
+        let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+        if let Some(addr) = flag("--join") {
+            let name = flag("--name").unwrap_or_else(|| "Player".to_string());
+            self.join(addr, name);
+            return;
+        }
+        // Just installed from the website's download.
+        if args.iter().any(|a| a == "--installed") {
+            let site = install::site();
+            let site = site.trim_start_matches("https://").trim_start_matches("http://");
+            self.screen = Screen::Home { message: Some(format!("{} is installed!\nPick a game on {site} and press Play.", App::Player.title())) };
+            return;
+        }
+        // `brixo-player path/to/game.brixo` plays that game straight away.
+        if let Some(path) = std::env::args().nth(1).filter(|a| !a.starts_with('-')) {
+            let path = Path::new(&path).to_path_buf();
+            let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            self.play(GameEntry { name, path });
+        }
+    }
+
+    /// While updating on launch: carry on once it's done or has failed, or
+    /// hand over to the new version.
+    fn poll_update(&mut self) {
+        // The game's server needs a newer Player: get it, then come back
+        // into the same game.
+        if self.need_update && self.updater.is_none() {
+            self.need_update = false;
+            let tried = std::mem::replace(&mut self.server_update, true);
+            match brixo_client::update::Updater::start(App::Player).filter(|_| !tried) {
+                Some(u) => {
+                    self.updater = Some(u);
+                    self.pending_link = self.last_link.clone();
+                    self.started = Instant::now();
+                    self.screen = Screen::Updating;
+                }
+                None => {
+                    self.screen = Screen::Home { message: Some("This game needs a newer Brixo Player than this one. Try again in a minute.".into()) };
+                }
+            }
+            return;
+        }
+        let Some(updater) = &self.updater else { return };
+        let state = updater.state();
+        // A check that hangs mustn't keep anyone out of their game.
+        let stuck = state == brixo_client::update::State::Checking && self.started.elapsed().as_secs() > 8;
+        if state.busy() && !stuck {
+            return;
+        }
+        if let brixo_client::update::State::Ready { .. } = state {
+            match updater.relaunch(self.pending_link.as_deref()) {
+                Ok(()) => {
+                    self.quit = true;
+                    return;
+                }
+                Err(e) => eprintln!("update: {e}"),
+            }
+        }
+        self.updater = None;
+        if self.server_update {
+            // Couldn't get the newer Player the game needs: don't loop.
+            let why = match state {
+                brixo_client::update::State::Failed(e) => format!(" ({e})"),
+                _ => String::new(),
+            };
+            self.pending_link = None;
+            self.screen = Screen::Home { message: Some(format!("This game needs a newer Brixo Player, and updating didn't work{why}. Download it again from the website.")) };
+            return;
+        }
+        self.screen = Screen::Home { message: None };
+        self.start_from_args();
+        if let Some(link) = self.pending_link.take().as_deref().and_then(protocol::parse) {
+            self.join_with_ticket(link);
+        }
     }
 
     /// Joins a server as `name`.
@@ -402,7 +519,8 @@ impl Player {
             // Test hook for filming: queued actions (see pending_actions).
             let (mut queued_equip, mut queued_use) = (None, false);
             let mut queued_say = Vec::new();
-            for line in pending_actions() {
+            let scripted = self.film.as_mut().map(|f| f.actions()).unwrap_or_default();
+            for line in pending_actions().into_iter().chain(scripted) {
                 // "say ..." chats; "menu", "help" and "settings" open the menu.
                 if let Some(text) = line.strip_prefix("say ") {
                     queued_say.push(text.to_string());
@@ -431,7 +549,7 @@ impl Player {
             }
             // Test hook for recording demos: walk toward the point in
             // BRIXO_GOTO_FILE ("x z"), exactly as if WASD were held.
-            if let Some(goto) = goto_target() {
+            if let Some(goto) = goto_target().or(self.film.as_ref().and_then(|f| f.walk())) {
                 let here = match &s.backend {
                     Backend::Local(game) => game.player_position(),
                     Backend::Online(net) => net.me.and_then(|m| net.world.player(m)).map(|p| glam::Vec3::new(p.body.position.x, 0.0, p.body.position.z)),
@@ -473,13 +591,20 @@ impl Player {
                     }
                     game.set_input(input);
                     game.step(dt as f64);
-                    s.output.extend(game.take_log());
+                    let log = game.take_log();
+                    if let Some(f) = &mut self.film {
+                        f.log(&log);
+                    }
+                    s.output.extend(log);
                     for (from, name, text) in game.take_chat() {
                         self.chat.push(from, name, text);
                     }
                     let me = game.player_id();
                     for cue in game.take_sounds().into_iter().filter_map(|e| e.for_player(me)) {
                         let world = game.world();
+                        if let Some(f) = &mut self.film {
+                            f.sound(&cue, &world);
+                        }
                         self.audio.cue_with(&cue, &|id| brixo_client::world_sound(&world, id));
                     }
                     s.view = self.smoother.view(&game.world());
@@ -518,6 +643,9 @@ impl Player {
                         self.chat.push(from, name, text);
                     }
                     s.lost |= !net.connected;
+                    if net.update_required {
+                        self.need_update = true;
+                    }
                     // Your own character: predicted, so it moves the moment
                     // you press a key (BRIXO_NO_PREDICT turns this off, to
                     // compare).
@@ -552,8 +680,17 @@ impl Player {
         if let Some((at, look)) = camera_shot() {
             aim(&mut self.camera, at, look);
         }
+        self.film_camera();
+        // Filming: nothing's drawn while the game warms up (it's faster).
+        if self.film.as_ref().is_some_and(|f| f.warming()) && matches!(self.screen, Screen::Playing(_)) {
+            return;
+        }
                 let Some(gpu) = self.gpu.as_mut() else { return };
-        let raw_input = gpu.egui_state.take_egui_input(&gpu.window);
+        let mut raw_input = gpu.egui_state.take_egui_input(&gpu.window);
+        // Filming: effects that animate by the clock follow the game's time.
+        if let Some(f) = &self.film {
+            raw_input.time = Some(f.sim as f64);
+        }
         let mut action = None;
         let camera = &mut self.camera;
         let (chat, chat_open, chat_text) = (&self.chat, &mut self.chat_open, &mut self.chat_text);
@@ -569,6 +706,10 @@ impl Player {
         let pause_tab = &mut self.pause_tab;
         let full_output = gpu.egui_ctx.run(raw_input, |ctx| { match &mut self.screen {
             Screen::Home { message } => menus::home_ui(ctx, message.as_deref()),
+            Screen::Updating => {
+                let state = self.updater.as_ref().map(|u| u.state()).unwrap_or(brixo_client::update::State::Checking);
+                menus::updating_ui(ctx, &state.label(), state.fraction());
+            }
             Screen::Playing(s) => {
                 // The game's own GUI and the hotbar, under our menus. The
                 // world is read in its own scope: game_ui reads it again.
@@ -767,12 +908,19 @@ impl Player {
             aim(&mut self.camera, at, look);
             hidden = None;
         }
+        if self.film_camera() {
+            hidden = None;
+        }
+        let Some(gpu) = self.gpu.as_mut() else { return };
         gpu.scene.hidden_player = hidden;
-        gpu.scene.time = self.started.elapsed().as_secs_f32();
+        gpu.scene.time = match &self.film {
+            Some(f) => f.sim,
+            None => self.started.elapsed().as_secs_f32(),
+        };
         {
             let model = match &self.screen {
                 Screen::Playing(s) => &s.view,
-                Screen::Home { .. } => &self.empty,
+                Screen::Home { .. } | Screen::Updating => &self.empty,
             };
             gpu.scene.render(
                 &gpu.device,
@@ -811,6 +959,14 @@ impl Player {
             gpu.egui_renderer.render(&mut pass, &paint_jobs, &screen);
         }
         gpu.queue.submit(Some(encoder.finish()));
+        if let Some(f) = self.film.as_mut().filter(|f| !f.warming() && matches!(self.screen, Screen::Playing(_))) {
+            let pixels = film::read_back(&gpu.device, &gpu.queue, &frame.texture);
+            let bgra = matches!(gpu.config.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+            f.save(&pixels, gpu.config.width, gpu.config.height, bgra);
+            if f.done() {
+                self.quit = true;
+            }
+        }
         frame.present();
         for id in &full_output.textures_delta.free {
             gpu.egui_renderer.free_texture(id);
@@ -845,7 +1001,24 @@ impl Player {
 /// The point in BRIXO_GOTO_FILE, if that's set and the file says "x z".
 /// Test hook for filming: hide the interface (BRIXO_CINEMATIC set).
 fn cinematic() -> bool {
-    std::env::var_os("BRIXO_CINEMATIC").is_some()
+    std::env::var_os("BRIXO_CINEMATIC").is_some() || FILM_NO_HUD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Filming a shot without the interface (see film.rs).
+static FILM_NO_HUD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+impl Player {
+    /// Filming: puts the camera where the shot says. True if it did.
+    fn film_camera(&mut self) -> bool {
+        let (Some(f), Screen::Playing(s)) = (&mut self.film, &self.screen) else { return false };
+        f.track(&s.view);
+        let Some((at, look, fov)) = f.camera(&s.view) else { return false };
+        aim(&mut self.camera, at, look);
+        if let Some(fov) = fov {
+            self.camera.fov_degrees = fov;
+        }
+        true
+    }
 }
 
 /// Puts the camera at `at`, looking toward `look`.
@@ -977,34 +1150,13 @@ impl ApplicationHandler for Player {
         let attrs = brixo_client::filming::window_attributes("Brixo", 1280.0, 800.0);
         let window = Arc::new(event_loop.create_window(attrs).expect("failed to create window"));
         self.gpu = Some(Gpu::new(window));
-
-        // Opened by Play on the website: `brixo://play?server=...&ticket=...`.
-        if let Some(link) = std::env::args().nth(1).as_deref().and_then(protocol::parse) {
-            self.join_with_ticket(link);
+        // Bring this copy up to date first; the game opens after (or in the
+        // new version).
+        if self.updater.is_some() {
+            self.screen = Screen::Updating;
             return;
         }
-        // Developer options below: `--join ADDR [--name NAME]` (the studio's
-        // test windows) and `brixo-player game.brixo`.
-        let args: Vec<String> = std::env::args().collect();
-        let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
-        if let Some(addr) = flag("--join") {
-            let name = flag("--name").unwrap_or_else(|| "Player".to_string());
-            self.join(addr, name);
-            return;
-        }
-        // Just installed from the website's download.
-        if args.iter().any(|a| a == "--installed") {
-            let site = install::site();
-            let site = site.trim_start_matches("https://").trim_start_matches("http://");
-            self.screen = Screen::Home { message: Some(format!("{} is installed!\nPick a game on {site} and press Play.", App::Player.title())) };
-            return;
-        }
-        // `brixo-player path/to/game.brixo` plays that game straight away.
-        if let Some(path) = std::env::args().nth(1).filter(|a| !a.starts_with('-')) {
-            let path = Path::new(&path).to_path_buf();
-            let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            self.play(GameEntry { name, path });
-        }
+        self.start_from_args();
     }
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: winit::event::DeviceId, event: winit::event::DeviceEvent) {
@@ -1070,13 +1222,28 @@ impl ApplicationHandler for Player {
             WindowEvent::RedrawRequested => {
                 // macOS: Play on the website (see mac_links); joining
                 // replaces whatever game is open.
-                if let Some(link) = mac_links::take().as_deref().and_then(protocol::parse) {
-                    self.join_with_ticket(link);
+                if let Some(link) = mac_links::take() {
+                    if matches!(self.screen, Screen::Updating) {
+                        self.pending_link = Some(link);
+                    } else if let Some(parsed) = protocol::parse(&link) {
+                        self.last_link = Some(link.clone());
+                        self.join_with_ticket(parsed);
+                    }
                 }
+                self.poll_update();
                 let now = Instant::now();
-                let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+                let mut dt = (now - self.last_frame).as_secs_f32().min(0.1);
                 self.last_frame = now;
+                // Filming: the game moves a fixed step per frame.
+                if let Some(f) = &self.film {
+                    dt = f.dt();
+                }
                 self.frame(dt);
+                if let Some(f) = &mut self.film {
+                    if matches!(self.screen, Screen::Playing(_)) {
+                        f.advance(dt);
+                    }
+                }
                 if self.quit {
                     event_loop.exit();
                     return;
@@ -1094,6 +1261,7 @@ fn main() {
     // The downloaded BrixoPlayer.exe installs itself, then hands over to the
     // installed copy; `--uninstall` is what Windows' Uninstall runs.
     // (Only the Windows download is offered; elsewhere there's nothing to set up.)
+    brixo_client::update::tidy(App::Player);
     let startup = install::on_startup(App::Player, |exe| if cfg!(windows) { protocol::register_exe(exe).map(|_| ()) } else { Ok(()) });
     if startup == install::Startup::Exit {
         return;

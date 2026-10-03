@@ -5,6 +5,7 @@
 //! Players send what they're pressing and draw what the server sends back.
 
 pub mod client;
+pub mod lag;
 pub mod protocol;
 pub mod server;
 

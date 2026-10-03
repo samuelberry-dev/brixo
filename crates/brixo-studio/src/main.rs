@@ -3849,6 +3849,11 @@ fn main() {
     if install::on_startup(App::Studio, |_| Ok(())) == install::Startup::Exit {
         return;
     }
+    // A newer Studio on the website: get it first, then it starts itself.
+    brixo_client::update::tidy(App::Studio);
+    if brixo_client::update::update_before_start(App::Studio) {
+        return;
+    }
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut studio = Studio::new();

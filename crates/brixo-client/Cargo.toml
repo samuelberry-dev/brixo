@@ -17,3 +17,7 @@ wgpu = "24"
 egui-wgpu = "0.31"
 egui-winit = "0.31"
 pollster = "0.4"
+sha2 = "0.10"
+
+[dev-dependencies]
+brixo-server = { path = "../brixo-server" }
