@@ -165,6 +165,18 @@ enum Event {
 struct Connection {
     writer: TcpStream,
     player: Option<InstanceId>,
+    /// What their Player said it speaks (PROTOCOL).
+    protocol: u32,
+    /// Numbered input steps waiting to be applied, one per physics step.
+    steps: std::collections::VecDeque<(u64, PlayerInput)>,
+    /// The newest step number received (older repeats are ignored).
+    last_step: Option<u64>,
+    /// The step applied last: what `You` reports.
+    ack: Option<u64>,
+    /// Ticks run with none of their steps waiting (their last keys were
+    /// used again): that many late steps are skipped when they arrive, as
+    /// already done, so their character doesn't fall behind them.
+    owed: u32,
     /// Which Sounds' audio this player already has.
     assets_sent: std::collections::HashSet<u64>,
 }
@@ -233,9 +245,11 @@ impl Server {
             self.accept();
             self.handle_events();
             self.do_kicks();
+            self.feed_steps();
             self.game.step(1.0 / TICK_RATE);
             self.log.lock().unwrap().extend(self.game.take_log());
             self.broadcast();
+            self.send_you();
             self.send_sounds();
             self.player_count.store(self.game.players().len(), Ordering::Relaxed);
 
@@ -288,7 +302,7 @@ impl Server {
                 }
             }
         })?;
-        self.connections.insert(id, Connection { writer: stream, player: None, assets_sent: Default::default() });
+        self.connections.insert(id, Connection { writer: stream, player: None, protocol: 0, steps: Default::default(), last_step: None, ack: None, owed: 0, assets_sent: Default::default() });
         Ok(())
     }
 
@@ -296,8 +310,26 @@ impl Server {
         while let Ok((conn, event)) = self.events.try_recv() {
             match event {
                 Event::Message(ToServer::Hello { name, ticket, protocol }) => self.hello(conn, &name, ticket.as_deref(), protocol),
+                Event::Message(ToServer::Steps { first, inputs }) => {
+                    if let Some(c) = self.connections.get_mut(&conn) {
+                        for (i, (x, z, jump)) in inputs.into_iter().enumerate() {
+                            let seq = first + i as u64;
+                            if c.last_step.is_some_and(|last| seq <= last) || !x.is_finite() || !z.is_finite() {
+                                continue;
+                            }
+                            c.last_step = Some(seq);
+                            c.steps.push_back((seq, clamp_input(x, z, jump)));
+                        }
+                        // Way behind (a burst after a stall): keep the newest,
+                        // so their character isn't running on old keys.
+                        while c.steps.len() > MAX_QUEUED_STEPS {
+                            c.steps.pop_front();
+                        }
+                    }
+                }
                 Event::Message(ToServer::Input { move_x, move_z, jump }) => {
-                    if let Some(player) = self.connections.get(&conn).and_then(|c| c.player) {
+                    // (Players sending Steps get their keys from those.)
+                    if let Some(player) = self.connections.get(&conn).filter(|c| c.last_step.is_none()).and_then(|c| c.player) {
                         let len = (move_x * move_x + move_z * move_z).sqrt();
                         // Never trust a client: no moving faster than walking.
                         let (move_x, move_z) = if len > 1.0 { (move_x / len, move_z / len) } else { (move_x, move_z) };
@@ -352,7 +384,55 @@ impl Server {
 
     /// A new connection says hello: on a ticketed server, the ticket decides
     /// who they are; anywhere else, they pick a name.
+    /// Each player sending Steps: their next step's keys, for this tick's
+    /// one physics step. (None waiting: the last keys carry on, and their
+    /// Player replays from where the server got to.)
+    fn feed_steps(&mut self) {
+        for c in self.connections.values_mut() {
+            let Some(player) = c.player else { continue };
+            // Late steps the server already stood in for (with their last
+            // keys): count them as done.
+            while c.owed > 0 && c.steps.len() > 1 {
+                let (seq, _) = c.steps.pop_front().unwrap();
+                c.ack = Some(seq);
+                c.owed -= 1;
+            }
+            match c.steps.pop_front() {
+                Some((seq, input)) => {
+                    self.game.set_input_for(player, input);
+                    c.ack = Some(seq);
+                }
+                // None waiting: their last keys carry on this tick.
+                None if c.ack.is_some() => c.owed = (c.owed + 1).min(MAX_QUEUED_STEPS as u32),
+                None => {}
+            }
+        }
+    }
+
+    /// Tells each player that sends Steps where their character is, as of
+    /// the step it applied last.
+    fn send_you(&mut self) {
+        let mut dead = Vec::new();
+        for (id, c) in &mut self.connections {
+            let (Some(player), Some(ack)) = (c.player, c.ack) else { continue };
+            if c.protocol < 2 {
+                continue;
+            }
+            let Some(state) = self.game.character_state(player) else { continue };
+            let queued = c.steps.len() as u32;
+            if write_msg(&mut c.writer, &ToClient::You { ack, state, queued }).is_err() {
+                dead.push(*id);
+            }
+        }
+        for id in dead {
+            self.disconnect(id);
+        }
+    }
+
     fn hello(&mut self, conn: u64, requested: &str, ticket: Option<&str>, protocol: u32) {
+        if let Some(c) = self.connections.get_mut(&conn) {
+            c.protocol = protocol;
+        }
         // Too old a Player: say so before the ticket's checked, so the
         // same ticket still works once it has updated itself.
         if protocol < crate::protocol::MIN_PROTOCOL {
@@ -386,7 +466,7 @@ impl Server {
         }
         let name = self.unique_name(requested);
         let player = self.game.add_player_saved(&name, look, save_key);
-        let welcome = ToClient::Welcome { you: player.raw(), world: client_view(&self.game.world()) };
+        let welcome = ToClient::Welcome { you: player.raw(), world: client_view(&self.game.world()), steps: true };
         let c = self.connections.get_mut(&conn).unwrap();
         c.player = Some(player);
         let music = ToClient::Music { name: self.music.clone() };
@@ -519,6 +599,16 @@ impl Server {
             self.disconnect(id);
         }
     }
+}
+
+/// Most input steps kept waiting for one player (half a second).
+const MAX_QUEUED_STEPS: usize = 30;
+
+/// Never trust a client: no moving faster than walking.
+fn clamp_input(move_x: f32, move_z: f32, jump: bool) -> PlayerInput {
+    let len = (move_x * move_x + move_z * move_z).sqrt();
+    let (move_x, move_z) = if len > 1.0 { (move_x / len, move_z / len) } else { (move_x, move_z) };
+    PlayerInput { move_x, move_z, jump }
 }
 
 /// What players were last told about the world, so each update carries only

@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 /// The port servers listen on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 4570;
 
-/// This build's version of the wire format, sent in `Hello`. Bump it when a
+/// This build's version of the wire format, sent in `Hello`. (2: numbered
+/// input steps and `You`, for rewind-and-replay prediction.) Bump it when a
 /// change would break older Players (they can't understand something the
 /// server now relies on). Players from before this existed send 0.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// The oldest Player a server lets in. Raise it to PROTOCOL when you bump
 /// PROTOCOL for a breaking change: older Players are then told to update
@@ -35,8 +36,12 @@ pub enum ToServer {
         protocol: u32,
     },
     /// What the player is pressing (camera-relative, already turned into
-    /// a world direction).
+    /// a world direction). From Players that don't send `Steps`.
     Input { move_x: f32, move_z: f32, jump: bool },
+    /// What the player pressed on each of their physics steps, numbered
+    /// from `first`: (move_x, move_z, jump). The server applies one a step,
+    /// in order, and says which it's up to in `You` (see ToClient::You).
+    Steps { first: u64, inputs: Vec<(f32, f32, bool)> },
     /// Clicked a TextButton.
     Click { button: u64 },
     /// Pressed a hotbar key: hold that backpack slot (again to put it away).
@@ -60,7 +65,13 @@ pub enum ToServer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ToClient {
     /// You're in: this is your character's id and the world.
-    Welcome { you: u64, world: String },
+    Welcome {
+        you: u64,
+        world: String,
+        /// The server takes `Steps` and sends `You` (older servers: false).
+        #[serde(default)]
+        steps: bool,
+    },
     /// Things were added, removed, renamed or moved in the tree.
     World { world: String },
     /// Where everything is now, and how it looks.
@@ -99,6 +110,17 @@ pub enum ToClient {
     /// Your Player is too old for this server (it needs `min`): update and
     /// try again. The connection closes after this.
     UpdateRequired { min: u32 },
+    /// Your character, after the server applied your step `ack` (to rewind
+    /// to and replay your later steps). Only to Players that sent PROTOCOL 2+.
+    You {
+        ack: u64,
+        state: brixo_core::CharacterState,
+        /// How many of your steps are waiting on the server: the Player
+        /// runs a touch slower when it's more than a couple, faster at 0,
+        /// so your keys reach the game with as little wait as is safe.
+        #[serde(default)]
+        queued: u32,
+    },
 }
 
 pub fn write_msg<T: Serialize>(w: &mut impl Write, msg: &T) -> io::Result<()> {

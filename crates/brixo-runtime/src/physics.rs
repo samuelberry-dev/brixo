@@ -870,6 +870,44 @@ impl Physics {
         }
     }
 
+    /// A character's motion, for the server to send its player (who rewinds
+    /// to it and replays: see brixo_client's prediction).
+    pub fn character_state(&self, id: InstanceId) -> Option<brixo_core::CharacterState> {
+        let c = self.characters.get(&id)?;
+        let at = self.bodies.get(c.body)?.translation();
+        Some(brixo_core::CharacterState {
+            position: from_glam(at),
+            vertical_speed: c.vertical_speed,
+            push: from_glam(c.push),
+            grounded: c.grounded,
+            coyote: c.coyote,
+            jump_buffer: c.jump_buffer,
+            jump_held: c.jump_was_held,
+            yaw: c.yaw,
+        })
+    }
+
+    /// Puts a character back exactly as `state` says (rewinding to what the
+    /// server had), in `world` too, so it isn't taken for a teleport.
+    pub fn set_character_state(&mut self, world: &mut DataModel, id: InstanceId, state: &brixo_core::CharacterState) {
+        let Some(c) = self.characters.get_mut(&id) else { return };
+        let Some(body) = self.bodies.get_mut(c.body) else { return };
+        let at = to_glam(state.position);
+        body.set_translation(at, true);
+        body.set_next_kinematic_translation(at);
+        c.vertical_speed = state.vertical_speed;
+        c.push = to_glam(state.push);
+        c.grounded = state.grounded;
+        c.coyote = state.coyote;
+        c.jump_buffer = state.jump_buffer;
+        c.jump_was_held = state.jump_held;
+        c.yaw = state.yaw;
+        c.synced_position = state.position;
+        if let Some(p) = world.player_mut(id) {
+            p.body.position = state.position;
+        }
+    }
+
     pub fn character_position(&self, id: InstanceId) -> Option<Vec3> {
         let c = self.characters.get(&id)?;
         self.bodies.get(c.body).map(|b| b.translation())

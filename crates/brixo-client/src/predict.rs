@@ -12,12 +12,20 @@
 //! way and starts again from where the server says.
 //!
 //! Everyone else, and every part, is still drawn from the server.
+//!
+//! With a server that takes numbered steps (`step_steps`), walking is
+//! predicted the exact way, Server Authority style: every physics step's
+//! keys are numbered and sent; the server applies them in order and says
+//! where you were after each (`You`); if that isn't where we had you, we
+//! rewind to the server's word and replay our keys since. The server stays
+//! the referee, and corrections are only for what we couldn't know (a
+//! push, a door, a teleport), eased out on screen instead of snapped.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
-use brixo_core::{DataModel, InstanceId, Vec3};
-use brixo_runtime::physics::Physics;
+use brixo_core::{CharacterState, DataModel, InstanceId, Vec3};
+use brixo_runtime::physics::{Physics, PHYSICS_DT};
 use brixo_runtime::PlayerInput;
 
 /// The server's word is off our recent path by more than this: it moved
@@ -42,11 +50,47 @@ pub struct Predictor {
     /// Where the server last had us.
     last_server: Option<Vec3>,
     base: Instant,
+    /// Rewind-and-replay, with a server that takes numbered steps.
+    rb: Rollback,
+}
+
+/// Rewind-and-replay state (see `step_steps`).
+#[derive(Default)]
+struct Rollback {
+    /// The number of our newest step.
+    seq: u64,
+    /// Time not yet made into a whole step.
+    acc: f32,
+    /// Our steps the server hasn't confirmed: (number, keys, where that
+    /// step left us).
+    history: VecDeque<(u64, PlayerInput, CharacterState)>,
+    /// The newest step the server has told us about.
+    last_ack: u64,
+    /// Drawn = predicted + this: a correction, eased out over a few frames.
+    offset: glam::Vec3,
+    /// Corrections so far (for measuring).
+    corrections: u64,
+}
+
+/// How many of our steps we like waiting on the server: enough to ride out
+/// a little jitter, few enough not to add lag.
+const QUEUE_TARGET: f32 = 1.0;
+/// Most unconfirmed steps kept (4 seconds): more than any sane lag.
+const MAX_HISTORY: usize = 240;
+/// How fast a correction's leftover is eased out, per second.
+const OFFSET_EASE: f32 = 12.0;
+/// A correction bigger than this is a teleport: shown at once, not eased.
+const TELEPORT: f32 = 10.0;
+
+/// Whether our prediction for a step and the server's word differ enough
+/// to rewind.
+fn disagree(ours: &CharacterState, server: &CharacterState) -> bool {
+    dist(ours.position, server.position) > 0.01 || (ours.vertical_speed - server.vertical_speed).abs() > 0.05 || dist(ours.push, server.push) > 0.05
 }
 
 impl Default for Predictor {
     fn default() -> Self {
-        Predictor { physics: Physics::new(), me: None, kart: None, history: VecDeque::new(), now: None, last_server: None, base: Instant::now() }
+        Predictor { physics: Physics::new(), me: None, kart: None, history: VecDeque::new(), now: None, last_server: None, base: Instant::now(), rb: Rollback::default() }
     }
 }
 
@@ -186,6 +230,142 @@ impl Predictor {
         self.history.push_back((t, predicted));
         while self.history.front().is_some_and(|(when, _)| t - when > HISTORY) {
             self.history.pop_front();
+        }
+    }
+
+    /// Corrections made so far by rewind-and-replay (for measuring).
+    pub fn corrections(&self) -> u64 {
+        self.rb.corrections
+    }
+
+    /// Server Authority prediction, for a server that takes numbered steps
+    /// (NetClient::server_steps). `you` is the server's newest word on your
+    /// character (NetClient::you). Gives back the keys to send for the
+    /// physics steps this frame made: (first step's number, keys), for
+    /// NetClient::send_steps. Driving still uses the kart prediction.
+    pub fn step_steps(
+        &mut self,
+        server: &DataModel,
+        me: Option<InstanceId>,
+        you: Option<(u64, CharacterState)>,
+        queued: u32,
+        input: PlayerInput,
+        facing: Option<f32>,
+        dt: f32,
+    ) -> (u64, Vec<PlayerInput>) {
+        let t = Instant::now().saturating_duration_since(self.base).as_secs_f64();
+        // Whole physics steps this frame, numbered; their keys go to the
+        // server whatever we're doing (walking, driving, knocked out).
+        // Keep about two waiting on the server: a little slower when more
+        // pile up (they'd be old by the time they're used), a little faster
+        // when it's run out (it repeats our last keys meanwhile).
+        let pace = 1.0 + 0.03 * (QUEUE_TARGET - queued as f32).clamp(-3.0, 2.0);
+        self.rb.acc = (self.rb.acc + dt.max(0.0) * pace).min(0.25);
+        let mut keys = Vec::new();
+        while self.rb.acc >= PHYSICS_DT {
+            self.rb.acc -= PHYSICS_DT;
+            keys.push(input);
+        }
+        let first = self.rb.seq + 1;
+        self.rb.seq += keys.len() as u64;
+        let numbered: Vec<(u64, PlayerInput)> = keys.iter().enumerate().map(|(i, k)| (first + i as u64, *k)).collect();
+
+        let Some(me) = me else {
+            self.me = None;
+            self.now = None;
+            return (first, keys);
+        };
+        if self.me != Some(me) {
+            let rb = std::mem::take(&mut self.rb);
+            self.reset();
+            self.rb = Rollback { seq: rb.seq, ..Rollback::default() };
+            self.me = Some(me);
+        }
+        let Some(said) = server.player(me) else {
+            self.now = None;
+            return (first, keys);
+        };
+        if let Some(kart) = said.kart.filter(|k| brixo_core::is_kart(server, *k)) {
+            self.now = None;
+            self.rb.history.clear();
+            self.step_kart(server, me, kart, input, dt, t);
+            return (first, keys);
+        }
+        if self.kart.take().is_some() {
+            self.physics = Physics::new(); // back on foot: start the walking physics fresh
+        }
+        if said.dead > 0.0 || said.health <= 0.0 {
+            self.now = None;
+            self.rb.history.clear();
+            return (first, keys);
+        }
+
+        // A copy of the world to run the physics in, with us where we have us.
+        let mut world = server.clone();
+        if let (Some(ours), Some(p)) = (self.physics.character_state(me), world.player_mut(me)) {
+            p.body.position = ours.position;
+        }
+        self.physics.hold_facing(me, facing);
+        // Sync the physics with the world (no time passes).
+        self.physics.step(&mut world, 0.0, &HashSet::new(), &HashMap::new());
+
+        // The server's word on a step of ours: if it isn't where we had
+        // us, rewind to it and replay our keys since.
+        if let Some((ack, theirs)) = you.filter(|(ack, _)| *ack > self.rb.last_ack) {
+            self.rb.last_ack = ack;
+            let mut ours = None;
+            while let Some(&(n, _, state)) = self.rb.history.front() {
+                if n > ack {
+                    break;
+                }
+                self.rb.history.pop_front();
+                if n == ack {
+                    ours = Some(state);
+                }
+            }
+            if ours.is_none_or(|o| disagree(&o, &theirs)) {
+                let before = self.physics.character_state(me).map(|s| s.position);
+                self.physics.set_character_state(&mut world, me, &theirs);
+                let replay: Vec<(u64, PlayerInput)> = self.rb.history.drain(..).map(|(n, k, _)| (n, k)).collect();
+                for (n, k) in replay {
+                    self.one_step(&mut world, me, n, k);
+                }
+                if let (Some(b), Some(a)) = (before, self.physics.character_state(me).map(|s| s.position)) {
+                    let jump = glam::Vec3::new(b.x - a.x, b.y - a.y, b.z - a.z);
+                    // Small: ease it out. A teleport: show it at once.
+                    self.rb.offset = if (self.rb.offset + jump).length() < TELEPORT { self.rb.offset + jump } else { glam::Vec3::ZERO };
+                }
+                self.rb.corrections += 1;
+            }
+        }
+
+        // This frame's new steps.
+        for (n, k) in numbered {
+            self.one_step(&mut world, me, n, k);
+        }
+        while self.rb.history.len() > MAX_HISTORY {
+            self.rb.history.pop_front();
+        }
+
+        self.rb.offset *= (-OFFSET_EASE * dt).exp();
+        if self.rb.offset.length() < 0.001 {
+            self.rb.offset = glam::Vec3::ZERO;
+        }
+        if let Some(s) = self.physics.character_state(me) {
+            let o = self.rb.offset;
+            let shown = Vec3::new(s.position.x + o.x, s.position.y + o.y, s.position.z + o.z);
+            let speed = world.player(me).map(|p| p.speed).unwrap_or(0.0);
+            self.now = Some((shown, s.yaw.to_degrees(), speed, !s.grounded));
+        }
+        (first, keys)
+    }
+
+    /// One physics step of ours, remembered.
+    fn one_step(&mut self, world: &mut DataModel, me: InstanceId, n: u64, keys: PlayerInput) {
+        let inputs: HashMap<InstanceId, PlayerInput> = [(me, keys)].into_iter().collect();
+        self.physics.step(world, PHYSICS_DT, &HashSet::new(), &inputs);
+        if let Some(state) = self.physics.character_state(me) {
+            self.rb.history.push_back((n, keys, state));
         }
     }
 

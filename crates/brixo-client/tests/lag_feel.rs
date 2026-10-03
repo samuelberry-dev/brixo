@@ -15,13 +15,42 @@ use brixo_runtime::PlayerInput;
 use brixo_server::lag::Lag;
 use brixo_server::NetClient;
 
-fn arena() -> DataModel {
+/// What's being tried.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Scene {
+    /// Walking, turning, jumping, stopping on flat ground.
+    Walk,
+    /// Walking over a jump pad: the server throws you (unpredictable).
+    JumpPad,
+    /// Standing on a platform a script slides back and forth.
+    Platform,
+}
+
+fn arena(scene: Scene) -> DataModel {
     let mut dm = DataModel::new();
     let root = dm.root();
     let floor = dm.create(Class::Part, "Floor", root).unwrap();
     let p = dm.part_mut(floor).unwrap();
     p.size = Vec3::new(400.0, 1.0, 400.0);
     p.position = Vec3::new(0.0, -0.5, 0.0);
+    let script_in = |dm: &mut DataModel, name: &str, at: Vec3, size: Vec3, solid: bool, source: &str| {
+        let root = dm.root();
+        let part = dm.create(Class::Part, name, root).unwrap();
+        let p = dm.part_mut(part).unwrap();
+        p.position = at;
+        p.size = size;
+        p.anchored = true;
+        p.can_collide = solid;
+        let s = dm.create(Class::Script, "Script", part).unwrap();
+        dm.script_mut(s).unwrap().source = source.into();
+    };
+    match scene {
+        Scene::Walk => {}
+        Scene::JumpPad => script_in(&mut dm, "Pad", Vec3::new(0.0, 0.1, 10.0), Vec3::new(10.0, 0.2, 3.0), false,
+            "on touched(other)\n    if other.class == \"player\" then\n        other.velocity = {x = 0, y = 45, z = 0}\n    end\nend\n"),
+        Scene::Platform => script_in(&mut dm, "Platform", Vec3::new(0.0, 0.5, 14.0), Vec3::new(14.0, 1.0, 14.0), true,
+            "t = 0\nevery 0.03 seconds\n    t += 0.03\n    self.position = {x = sin(t * 1.5) * 8, y = 0.5, z = 14}\nend\n"),
+    }
     dm
 }
 
@@ -41,10 +70,21 @@ struct Feel {
     biggest_pop: f32,
     /// Off from the server once you've stopped and settled.
     settled_off: f32,
+    /// Times prediction had to rewind (new mode only).
+    corrections: u64,
 }
 
 /// The input at `t` seconds into the script.
-fn script(t: f32) -> PlayerInput {
+fn script(scene: Scene, t: f32) -> PlayerInput {
+    if scene == Scene::Platform {
+        // Onto the platform, ride it, then off.
+        return match t {
+            t if t < 0.9 => PlayerInput { move_z: 1.0, ..Default::default() },
+            t if t < 3.5 => PlayerInput::default(),
+            t if t < 4.2 => PlayerInput { move_z: 1.0, ..Default::default() },
+            _ => PlayerInput::default(),
+        };
+    }
     match t {
         t if t < 1.5 => PlayerInput { move_z: 1.0, ..Default::default() },
         t if t < 2.5 => PlayerInput { move_x: 1.0, ..Default::default() },
@@ -53,10 +93,22 @@ fn script(t: f32) -> PlayerInput {
         _ => PlayerInput::default(),
     }
 }
-const SCRIPT_SECONDS: f32 = 5.0;
+const SCRIPT_SECONDS: f32 = 6.0;
+
+/// Old: path-matching prediction (servers without steps). New: Server
+/// Authority rewind-and-replay (numbered steps).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Mode {
+    Old,
+    New,
+}
 
 fn measure(lag: Option<Lag>) -> Feel {
-    let server = brixo_server::start(arena(), 0).unwrap();
+    measure_with(lag, Mode::New, Scene::Walk)
+}
+
+fn measure_with(lag: Option<Lag>, mode: Mode, scene: Scene) -> Feel {
+    let server = brixo_server::start(arena(scene), 0).unwrap();
     let mut net = NetClient::connect_lagged(&server.local_addr(), "Ann", lag).unwrap();
     let mut predictor = Predictor::default();
     let frame = Duration::from_secs_f32(1.0 / 60.0);
@@ -65,7 +117,7 @@ fn measure(lag: Option<Lag>) -> Feel {
     let start = Instant::now();
     loop {
         net.poll();
-        predictor.step(&net.world, net.me, PlayerInput::default(), None, 1.0 / 60.0);
+        drive(&mut net, &mut predictor, mode, PlayerInput::default(), 1.0 / 60.0);
         if net.me.is_some() && start.elapsed() > Duration::from_millis(1500) {
             break;
         }
@@ -76,7 +128,7 @@ fn measure(lag: Option<Lag>) -> Feel {
     let origin_pred = predictor.position().unwrap();
     let origin_server = net.world.player(me).unwrap().body.position;
 
-    let mut feel = Feel { respond_ms: f32::NAN, server_ms: f32::NAN, pops: 0, biggest_pop: 0.0, settled_off: 0.0 };
+    let mut feel = Feel { respond_ms: f32::NAN, server_ms: f32::NAN, pops: 0, biggest_pop: 0.0, settled_off: 0.0, corrections: 0 };
     let began = Instant::now();
     let mut last = origin_pred;
     let mut last_t = Instant::now();
@@ -85,13 +137,12 @@ fn measure(lag: Option<Lag>) -> Feel {
         if t > SCRIPT_SECONDS {
             break;
         }
-        let input = script(t);
-        net.send_input(input);
+        let input = script(scene, t);
         net.poll();
         let now = Instant::now();
         let dt = (now - last_t).as_secs_f32().min(0.1);
         last_t = now;
-        predictor.step(&net.world, Some(me), input, None, dt);
+        drive(&mut net, &mut predictor, mode, input, dt);
         let here = predictor.position().unwrap_or(last);
         let server_at = net.world.player(me).map(|p| p.body.position).unwrap_or(origin_server);
         if feel.respond_ms.is_nan() && dist(here, origin_pred) > 0.05 {
@@ -105,8 +156,10 @@ fn measure(lag: Option<Lag>) -> Feel {
         // fall is legitimately fast.)
         let step = dist(Vec3::new(here.x, 0.0, here.z), Vec3::new(last.x, 0.0, last.z));
         // (A frame can hold two physics steps when the timing lands that
-        // way, so two steps' walking is allowed too.)
-        let allowed = (20.0 * dt).max(2.0 * 16.0 / 60.0) + 0.05;
+        // way, so two steps' walking is allowed too. Riding a platform
+        // adds its speed, about 12.)
+        let ride = if scene == Scene::Platform { 12.0 } else { 0.0 };
+        let allowed = ((20.0 + ride) * dt).max(2.0 * (16.0 + ride) / 60.0) + 0.05;
         if step > allowed {
             feel.pops += 1;
             if std::env::var_os("LAGFEEL_DEBUG").is_some() { eprintln!("pop t={t:.2} step={step:.2} dt={dt:.3} y={:.2}", here.y); }
@@ -117,7 +170,20 @@ fn measure(lag: Option<Lag>) -> Feel {
     }
     let server_at = net.world.player(me).unwrap().body.position;
     feel.settled_off = dist(last, server_at);
+    feel.corrections = predictor.corrections();
     feel
+}
+
+/// One frame of the Player: predict, and tell the server.
+fn drive(net: &mut NetClient, predictor: &mut Predictor, mode: Mode, input: PlayerInput, dt: f32) {
+    if mode == Mode::New {
+        assert!(net.me.is_none() || net.server_steps, "the server takes steps");
+        let (first, keys) = predictor.step_steps(&net.world, net.me, net.you, net.queued, input, None, dt);
+        net.send_steps(first, &keys);
+    } else {
+        net.send_input(input);
+        predictor.step(&net.world, net.me, input, None, dt);
+    }
 }
 
 #[test]
@@ -141,9 +207,24 @@ fn the_table() {
         ("200 ms + jitter", Some(Lag { ping_ms: 200.0, jitter_ms: 40.0, stall_percent: 0.0 })),
         ("200 ms + 3% stalls", Some(Lag { ping_ms: 200.0, jitter_ms: 40.0, stall_percent: 3.0 })),
     ];
-    println!("\n{:<20} {:>10} {:>10} {:>6} {:>10} {:>10}", "connection", "respond", "server", "pops", "worst pop", "settled");
+    let header = || println!("{:<20} {:<4} {:>10} {:>10} {:>6} {:>10} {:>10} {:>6}", "connection", "", "respond", "server", "pops", "worst pop", "settled", "fixes");
+    let row = |name: &str, mode: Mode, f: &Feel| {
+        println!("{:<20} {:<4} {:>8.0}ms {:>8.0}ms {:>6} {:>7.2} st {:>7.2} st {:>6}", name, format!("{mode:?}"), f.respond_ms, f.server_ms, f.pops, f.biggest_pop, f.settled_off, f.corrections);
+    };
+    println!("\n== Walk");
+    header();
     for (name, lag) in cases {
-        let f = measure(lag);
-        println!("{:<20} {:>8.0}ms {:>8.0}ms {:>6} {:>7.2} st {:>7.2} st", name, f.respond_ms, f.server_ms, f.pops, f.biggest_pop, f.settled_off);
+        for mode in [Mode::Old, Mode::New] {
+            row(name, mode, &measure_with(lag, mode, Scene::Walk));
+        }
+    }
+    for scene in [Scene::JumpPad, Scene::Platform] {
+        println!("\n== {scene:?}");
+        header();
+        for (name, lag) in [cases[0], cases[3], cases[5]] {
+            for mode in [Mode::Old, Mode::New] {
+                row(name, mode, &measure_with(lag, mode, scene));
+            }
+        }
     }
 }

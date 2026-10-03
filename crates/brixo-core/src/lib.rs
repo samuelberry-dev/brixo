@@ -769,6 +769,24 @@ impl Default for PlayerProps {
     }
 }
 
+/// Everything about a walking character's motion that the next physics
+/// step depends on: what the server sends a player about themselves, so
+/// their Player can rewind to it and replay their own inputs since (see
+/// brixo_client's prediction).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct CharacterState {
+    pub position: Vec3,
+    pub vertical_speed: f32,
+    /// Sideways momentum from a launch, wearing off.
+    pub push: Vec3,
+    pub grounded: bool,
+    pub coyote: f32,
+    pub jump_buffer: f32,
+    pub jump_held: bool,
+    /// Radians around Y.
+    pub yaw: f32,
+}
+
 impl PlayerProps {
     /// Each body part's colour (filling in for players from before body
     /// colours: skin, with the torso in the shirt colour).

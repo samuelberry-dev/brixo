@@ -347,6 +347,17 @@ impl Game {
     }
 
     /// What one player is pressing (servers: one per connected player).
+    /// A walking character's motion right now (None while driving, dead,
+    /// or not in the game). See Physics::character_state.
+    pub fn character_state(&self, player: InstanceId) -> Option<brixo_core::CharacterState> {
+        self.physics.character_state(player)
+    }
+
+    /// How many fixed physics steps have run (60 a second).
+    pub fn physics_steps(&self) -> u64 {
+        self.physics.steps_run()
+    }
+
     pub fn set_input_for(&mut self, player: InstanceId, input: PlayerInput) {
         self.inputs.insert(player, input);
     }

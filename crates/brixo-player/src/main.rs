@@ -626,7 +626,10 @@ impl Player {
                         net.chat(text);
                     }
                     // The server runs the game; we send keys and draw its world.
-                    net.send_input(input);
+                    // (A server that takes numbered steps gets them below.)
+                    if !net.server_steps {
+                        net.send_input(input);
+                    }
                     net.poll();
                     let assets = net.assets.clone();
                     let lookup = |id: u64| {
@@ -649,7 +652,13 @@ impl Player {
                     // Your own character: predicted, so it moves the moment
                     // you press a key (BRIXO_NO_PREDICT turns this off, to
                     // compare).
-                    if std::env::var_os("BRIXO_NO_PREDICT").is_none() {
+                    if net.server_steps {
+                        // Server Authority: our keys for each physics step,
+                        // numbered; the server says where each left us, and
+                        // the predictor rewinds and replays when it differs.
+                        let (first, keys) = s.predictor.step_steps(&net.world, net.me, net.you, net.queued, input, facing, dt);
+                        net.send_steps(first, &keys);
+                    } else if std::env::var_os("BRIXO_NO_PREDICT").is_none() {
                         s.predictor.step(&net.world, net.me, input, facing, dt);
                     }
                     s.view = self.smoother.view(&net.world);

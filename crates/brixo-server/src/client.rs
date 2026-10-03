@@ -41,6 +41,14 @@ pub struct NetClient {
     last_facing: Option<f32>,
     /// The server said this Player is too old: update, then join again.
     pub update_required: bool,
+    /// The server takes numbered input steps and says where you are after
+    /// each (`You`): prediction can rewind and replay (brixo_client).
+    pub server_steps: bool,
+    /// The newest `You`: your character after the server applied your step
+    /// `.0`. Taken by the predictor.
+    pub you: Option<(u64, brixo_core::CharacterState)>,
+    /// How many of our steps were waiting on the server, as of `you`.
+    pub queued: u32,
 }
 
 impl NetClient {
@@ -114,7 +122,7 @@ impl NetClient {
                 Some((out_tx, failed))
             }
         };
-        Ok(NetClient { writer, incoming, held: VecDeque::new(), outgoing, world: DataModel::new(), me: None, connected: true, cues: Vec::new(), chat: Vec::new(), assets: Default::default(), last_input: None, last_facing: None, update_required: false })
+        Ok(NetClient { writer, incoming, held: VecDeque::new(), outgoing, world: DataModel::new(), me: None, connected: true, cues: Vec::new(), chat: Vec::new(), assets: Default::default(), last_input: None, last_facing: None, update_required: false, server_steps: false, you: None, queued: 0 })
     }
 
     /// Applies everything the server has sent since the last call.
@@ -146,8 +154,9 @@ impl NetClient {
 
     fn apply(&mut self, msg: ToClient) {
         match msg {
-            ToClient::Welcome { you, world } => {
+            ToClient::Welcome { you, world, steps } => {
                 self.me = Some(InstanceId::from_raw(you));
+                self.server_steps = steps;
                 if let Ok(w) = DataModel::from_json(&world) {
                     self.world = w;
                 }
@@ -170,6 +179,12 @@ impl NetClient {
             ToClient::Music { name } => self.cues.push(brixo_runtime::Cue::Music(name)),
             ToClient::Chat { from, name, text } => self.chat.push((InstanceId::from_raw(from), name, text)),
             ToClient::UpdateRequired { .. } => self.update_required = true,
+            ToClient::You { ack, state, queued } => {
+                if self.you.is_none_or(|(old, _)| ack >= old) {
+                    self.you = Some((ack, state));
+                    self.queued = queued;
+                }
+            }
             ToClient::Asset { id, format, data } => {
                 let props = brixo_core::SoundProps { format, data: data.into(), volume: 1.0 };
                 if let Some(bytes) = props.bytes() {
@@ -240,6 +255,17 @@ impl NetClient {
         }
         self.last_facing = yaw;
         self.send(ToServer::Face { yaw });
+    }
+
+    /// Your keys on each of your physics steps, numbered from `first` (to a
+    /// server with `server_steps`). Repeats are fine: the server skips steps
+    /// it already has.
+    pub fn send_steps(&mut self, first: u64, inputs: &[PlayerInput]) {
+        if inputs.is_empty() {
+            return;
+        }
+        let inputs = inputs.iter().map(|i| (i.move_x, i.move_z, i.jump)).collect();
+        self.send(ToServer::Steps { first, inputs });
     }
 
     /// Tells the server what you're pressing (only when it changes).
