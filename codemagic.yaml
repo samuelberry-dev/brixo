@@ -26,6 +26,9 @@ workflows:
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Build
         script: |
+          # Stop at the first failure (otherwise a broken build still
+          # "succeeds" with only version.txt).
+          set -euo pipefail
           source "$HOME/.cargo/env"
           BRIXO_BUILD="$(date -u +%Y.%m.%d.%H%M)"
           export BRIXO_BUILD
