@@ -98,3 +98,34 @@ fn numbered_steps_are_applied_in_order_and_confirmed() {
     assert_eq!(ack, 70);
     assert!((now.position.z - stopped.position.z).abs() < 0.05, "the repeats didn't walk again: {now:?} vs {stopped:?}");
 }
+
+#[test]
+fn online_a_seated_players_keys_drive_the_seat() {
+    use brixo_core::{Class, DataModel, Vec3};
+    use brixo_runtime::PlayerInput;
+    let mut dm = DataModel::new();
+    let root = dm.root();
+    let floor = dm.create(Class::Part, "Floor", root).unwrap();
+    let p = dm.part_mut(floor).unwrap();
+    p.size = Vec3::new(200.0, 1.0, 200.0);
+    p.position = Vec3::new(0.0, -0.5, 0.0);
+    let seat = dm.create(Class::Part, "Seat", root).unwrap();
+    let s = dm.part_mut(seat).unwrap();
+    s.position = Vec3::new(10.0, 0.5, 10.0);
+    s.size = Vec3::new(2.0, 1.0, 2.0);
+    s.seat = true;
+    let script = dm.create(Class::Script, "Seater", root).unwrap();
+    dm.script_mut(script).unwrap().source = "on player_joined(p)\n    p.seat = find(\"Seat\")\nend\n".into();
+    let server = brixo_server::start(dm, 0).unwrap();
+    let mut c = NetClient::connect(&server.local_addr(), "Ann").unwrap();
+    wait_for(&mut c, |c| c.me.is_some_and(|me| c.world.player(me).is_some_and(|p| p.seat.is_some())));
+    // Numbered steps of W: the seat hears throttle 1, everyone sees it.
+    let w = PlayerInput { move_z: 1.0, ..Default::default() };
+    for batch in 0..3 {
+        c.send_steps(1 + batch * 10, &[w; 10]);
+        std::thread::sleep(std::time::Duration::from_millis(160));
+    }
+    let seat_id = c.world.walk().into_iter().find(|i| c.world.get(*i).unwrap().name == "Seat").unwrap();
+    wait_for(&mut c, |c| matches!(c.world.get(seat_id).unwrap().attributes.get("throttle"), Some(brixo_core::Attribute::Num(n)) if *n == 1.0));
+    assert!(matches!(c.world.get(seat_id).unwrap().attributes.get("throttle"), Some(brixo_core::Attribute::Num(n)) if *n == 1.0));
+}

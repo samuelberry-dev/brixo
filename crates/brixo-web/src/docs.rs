@@ -69,6 +69,7 @@ pages! {
         ("howto-coins", "Coins and a leaderboard"),
         ("howto-door", "A door with a button"),
         ("howto-hinges", "Hinges: doors, wheels and spinners"),
+        ("howto-vehicles", "Vehicles and seats"),
         ("howto-karts", "Karts, racing and bots"),
         ("howto-moving-platform", "Moving platforms"),
         ("howto-teleporter", "Teleporters"),

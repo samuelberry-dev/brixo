@@ -345,7 +345,76 @@ on player_joined(p)
 end
 "#;
 
+/// The Car's driving: the seat says what its driver presses, and this turns
+/// the wheels' motors (tank steering: the two sides run apart to turn).
+const CAR: &str = r#"
+-- Walk into the seat to drive: W/S go, A/D turn, Space gets out.
+-- The seat's throttle and steer say what the driver presses; this
+-- turns the wheels' motors to match.
+seat = nil
+left = []
+right = []
+for c in self.children do
+    if c.name == "Seat" then
+        seat = c
+    elseif c.name == "Left Wheel" then
+        push(left, c)
+    elseif c.name == "Right Wheel" then
+        push(right, c)
+    end
+end
+-- Degrees a second at full throttle. (Wheels turned the other way round
+-- drive backwards: flip the sign.)
+speed = -300
+-- How hard it turns: the two sides run this much apart.
+turning = 2
+every 0.05 seconds
+    go = seat.throttle
+    turn = seat.steer
+    if go == nil then
+        go = 0
+    end
+    if turn == nil then
+        turn = 0
+    end
+    for w in left do
+        w.motor_speed = (go - turn * turning) * speed
+    end
+    for w in right do
+        w.motor_speed = (go + turn * turning) * speed
+    end
+end
+"#;
+
 // --- the items -------------------------------------------------------------------
+
+fn car() -> String {
+    build(|b| {
+        let m = b.model("Car");
+        let red: Rgb = (196, 40, 28);
+        let dark: Rgb = (27, 42, 53);
+        // The body first: the Model welds its other parts to it.
+        let body = b.part(m, "Body", (0.0, 1.6, 0.0), (5.0, 1.0, 8.0), red, Material::Plastic);
+        let hood = b.part(m, "Hood", (0.0, 2.4, 2.6), (5.0, 0.6, 2.8), red, Material::Plastic);
+        let back = b.part(m, "Back", (0.0, 2.9, -3.4), (5.0, 1.6, 1.2), red, Material::Plastic);
+        let seat = b.part(m, "Seat", (0.0, 2.6, -1.6), (2.0, 1.0, 2.0), dark, Material::Plastic);
+        for id in [body, hood, back, seat] {
+            b.dm.part_mut(id).unwrap().anchored = false;
+        }
+        b.dm.part_mut(seat).unwrap().seat = true;
+        for (x, z) in [(-3.0, -2.5), (3.0, -2.5), (-3.0, 2.5), (3.0, 2.5)] {
+            let name = if x < 0.0 { "Left Wheel" } else { "Right Wheel" };
+            let w = b.part(m, name, (x, 1.5, z), (3.0, 1.0, 3.0), (40, 40, 44), Material::Plastic);
+            let p = b.dm.part_mut(w).unwrap();
+            p.shape = Shape::Cylinder;
+            p.rotation = Vec3::new(0.0, 0.0, 90.0);
+            p.hinge = Hinge::Y;
+            p.anchored = false;
+        }
+        b.script(m, "Drive", CAR);
+        m
+    })
+}
 
 fn kart() -> String {
     build(|b| {
@@ -520,6 +589,14 @@ macro_rules! thumb {
 /// Every built-in item.
 pub fn items() -> Vec<Item> {
     vec![
+        Item {
+            slug: "car",
+            name: "Car",
+            category: "Vehicles",
+            description: "A car built from parts: walk into the seat to drive (W/S, A/D, Space to get out). Its script turns the wheels' motors: change it to make it your own.",
+            content: car(),
+            thumbnail: thumb!("car"),
+        },
         Item {
             slug: "kart",
             name: "Kart",

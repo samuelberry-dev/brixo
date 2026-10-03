@@ -15,6 +15,7 @@ You can put in as many copies as you like, and **Undo** (Ctrl+Z) takes one back 
 
 | Category | Thing | What it does |
 |---|---|---|
+| Vehicles | **Car** | A car built from parts: walk into the seat to drive (**W**/**S**, **A**/**D**, **Space** to get out). Its script turns the wheels' motors: see [Vehicles](howto-vehicles). |
 | Vehicles | **Kart** | A go-kart anyone can drive: walk up and press **F** (F again to get out). Drifts and boosts like [Brickport Speedway](howto-karts)'s. |
 | Vehicles | **Boost Pad** | Karts that drive over it get a burst of speed. |
 | Building | **Swinging Door** | A door on [hinges](howto-hinges) in its frame. Opens away from whoever walks into it, and closes behind them. |

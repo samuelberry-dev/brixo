@@ -492,7 +492,8 @@ impl Player {
                     Backend::Local(game) => game.player_id(),
                     Backend::Online(net) => net.me,
                 };
-                me.and_then(|m| s.view.player(m)).and_then(|p| p.kart).is_some()
+                // (In a seat too: W/S and A/D are the vehicle's keys.)
+                me.and_then(|m| s.view.player(m)).is_some_and(|p| p.kart.is_some() || p.seat.is_some())
             }
             _ => false,
         };

@@ -22,7 +22,7 @@ pub const BRIXO_FUNCTIONS: &[&str] =
 /// Fields scripts use on objects (after a `.`).
 pub const FIELDS: &[&str] = &[
     "name", "parent", "children", "class", "position", "size", "rotation", "color", "anchored", "can_collide",
-    "transparency", "material", "shape", "velocity", "floating", "bounce", "hinge", "hinge_at", "motor_speed", "swing_to", "hinge_angle", "time_of_day", "brightness", "fog_start", "fog_end", "fog_color", "sky_color", "health", "max_health", "walk_speed",
+    "transparency", "material", "shape", "velocity", "floating", "bounce", "hinge", "hinge_at", "motor_speed", "swing_to", "hinge_angle", "seat", "occupant", "throttle", "steer", "time_of_day", "brightness", "fog_start", "fog_end", "fog_color", "sky_color", "health", "max_health", "walk_speed",
     "jump_power", "face", "look", "swinging", "equipped", "team", "text", "visible", "text_color", "text_size",
     "background", "background_color", "attached_to", "volume", "shirt_color", "pants_color", "skin_color", "shirt", "pants", "tshirt", "hats", "x", "y",
     "z", "r", "g", "b",

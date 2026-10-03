@@ -309,12 +309,13 @@ fn fields_for(class: Class) -> Vec<&'static str> {
         Class::Part | Class::SpawnLocation => f.extend([
             "position", "size", "rotation", "color", "anchored", "can_collide", "shape", "material",
             "transparency", "velocity", "floating", "bounce", "hinge", "hinge_at", "motor_speed", "swing_to", "hinge_angle",
+            "seat", "occupant",
         ]),
         Class::Model => f.extend(["driver", "speed", "steer", "drift", "boosting", "spinning", "locked", "top_speed"]),
         Class::Player => f.extend([
             "position", "size", "rotation", "velocity", "health", "max_health", "walk_speed", "jump_power", "face", "swinging", "look", "mouse",
             "skin_color", "shirt_color", "pants_color", "shoes_color", "shirt", "pants", "tshirt", "hats", "camera_mode", "equipped", "kart", "bot",
-            "camera_part",
+            "camera_part", "seat",
         ]),
         Class::TextLabel | Class::TextButton | Class::Frame => f.extend([
             "text", "text_size", "text_color", "background", "background_color", "visible", "x", "y", "width",
@@ -593,6 +594,18 @@ impl Host for WorldHost {
                     })
                 }
                 "floating" if world.part(id).is_some() => Ok(Value::Bool(world.part(id).unwrap().floating)),
+                // A seat: whether it is one, and who's sitting in it (nil if nobody).
+                "seat" if world.part(id).is_some() => Ok(Value::Bool(world.part(id).unwrap().seat)),
+                "occupant" if world.part(id).is_some() => Ok(world
+                    .walk()
+                    .into_iter()
+                    .find(|p| world.player(*p).is_some_and(|pp| pp.seat == Some(id)))
+                    .map(object)
+                    .unwrap_or(Value::Nil)),
+                // The seat a player is sitting in (nil if none).
+                "seat" if world.player(id).is_some() => {
+                    Ok(world.player(id).unwrap().seat.filter(|s| world.get(*s).is_some()).map(object).unwrap_or(Value::Nil))
+                }
                 "hinge" if world.part(id).is_some() => Ok(Value::str(world.part(id).unwrap().hinge.name())),
                 "hinge_at" if world.part(id).is_some() => Ok(Value::str(world.part(id).unwrap().hinge_at.name())),
                 "motor_speed" if world.part(id).is_some() => Ok(Value::Num(world.part(id).unwrap().motor_speed as f64)),
@@ -761,7 +774,9 @@ impl Host for WorldHost {
                         if taken {
                             return Err("someone's already driving that kart".into());
                         }
-                        world.player_mut(id).unwrap().kart = Some(kart);
+                        let p = world.player_mut(id).unwrap();
+                        p.seat = None;
+                        p.kart = Some(kart);
                         Ok(())
                     }
                     other => Err(format!("a player's kart has to be a kart (or nil to get out), not a {}", other.type_name())),
@@ -804,6 +819,36 @@ impl Host for WorldHost {
                     }
                     Ok(())
                 }
+                "seat" if world.part(id).is_some() => {
+                    let Value::Bool(f) = value else {
+                        return Err(format!("seat has to be true or false, not a {}", value.type_name()));
+                    };
+                    world.part_mut(id).unwrap().seat = f;
+                    Ok(())
+                }
+                "occupant" if world.part(id).is_some() => Err("a seat's occupant can't be set: set the player's seat instead (player.seat = the_seat)".into()),
+                // Sit a player in a seat, or (nil) get them up.
+                "seat" if world.player(id).is_some() => match value {
+                    Value::Nil => {
+                        world.player_mut(id).unwrap().seat = None;
+                        Ok(())
+                    }
+                    Value::Object(o) => {
+                        let seat = InstanceId::from_raw(o.id);
+                        if !world.part(seat).is_some_and(|p| p.seat) {
+                            return Err("that isn't a seat: a seat is a part with seat = true".into());
+                        }
+                        let taken = world.walk().into_iter().any(|p| p != id && world.player(p).is_some_and(|pp| pp.seat == Some(seat)));
+                        if taken {
+                            return Err("someone's already sitting in that seat".into());
+                        }
+                        let p = world.player_mut(id).unwrap();
+                        p.kart = None;
+                        p.seat = Some(seat);
+                        Ok(())
+                    }
+                    other => Err(format!("a player's seat has to be a seat (or nil to get up), not a {}", other.type_name())),
+                },
                 "floating" if world.part(id).is_some() => {
                     let Value::Bool(f) = value else {
                         return Err(format!("floating has to be true or false, not a {}", value.type_name()));

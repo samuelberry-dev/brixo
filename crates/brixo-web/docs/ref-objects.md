@@ -29,6 +29,8 @@ Every kind of object, and everything scripts can read and change on it. **Vector
 | `hinge` | text | What it turns around: `"off"`, `"y"` (its height), `"x"` (its width), `"z"` (its depth). Setting one loosens the part. See [Hinges](howto-hinges). |
 | `hinge_at` | text | Where the hinge is: `"middle"`, `"left"`, `"right"`, `"top"`, `"bottom"`, `"front"`, `"back"`. |
 | `motor_speed` | degrees/s | Keeps it turning. 0 swings freely. |
+| `seat` | true/false | A seat: players who walk into it sit down. See [Vehicles](howto-vehicles). |
+| `occupant` | player or `nil` (read) | Who's sitting in it, if it's a seat. While someone sits, its custom fields `throttle` and `steer` say what they press. |
 | `swing_to` | degrees or `nil` | Turns to this angle and holds it. `nil` swings freely. |
 | `hinge_angle` | degrees (read) | How far it's turned from where it started. |
 
@@ -54,6 +56,7 @@ A **SpawnLocation** is a part players appear on. Give it a `team` custom field a
 | `swinging` | true/false (read) | Just used a tool. |
 | `children` | list (read) | Their tools, and their own GUI. |
 | `kart` | kart or `nil` | The kart they're driving. Set it to put them in one (a kart or any part of it), `nil` to get out. |
+| `seat` | seat or `nil` | The seat they're sitting in. Set it to sit them down, `nil` to get them up. |
 | `bot` | true/false (read) | A computer player, made by `add_bot`. |
 | `camera_part` | part or `nil` | A cutscene: their camera sits on this part, looking the way its front faces. Move the part to move the camera. `nil` gives them their usual camera back. |
 | `lane` | number | A bot's distance to the left of the racing line (negative: right). |

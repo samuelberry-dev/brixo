@@ -76,7 +76,7 @@ end
 
 Give every wheel the same **Motor speed** and the car drives. All four wheels turn around the same line, so the same speed makes them all roll the same way (opposite speeds on the two sides spin the car on the spot, like a tank).
 
-A driving script, where each player steers by standing on the car, could set `wheel.motor_speed` for each wheel: faster, slower, or backwards.
+To drive it, add a **seat**: players sit in it and its `throttle` and `steer` say what they press, for a script to turn into wheel speeds. See [Vehicles and seats](howto-vehicles).
 
 ## Things to know
 

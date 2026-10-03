@@ -88,6 +88,33 @@ fn the_kart_is_driven_with_f() {
 }
 
 #[test]
+fn the_car_is_driven_from_its_seat() {
+    let (dm, pasted) = world_with("car", Vec3::new(0.0, 0.0, 0.0));
+    let seat = game_part(&dm, pasted[0], "Seat");
+    let body = game_part(&dm, pasted[0], "Body");
+    let mut game = Game::start(dm);
+    let me = game.player_id().unwrap();
+    run(&mut game, 0.5);
+    // Drop onto the seat.
+    let s = game.world().part(seat).unwrap().position;
+    game.world().player_mut(me).unwrap().body.position = Vec3::new(s.x, s.y + 4.0, s.z);
+    run(&mut game, 1.0);
+    assert_eq!(game.world().player(me).unwrap().seat, Some(seat), "sat down");
+    let start = game.world().part(body).unwrap().position;
+    game.set_input(PlayerInput { move_x: 0.0, move_z: 1.0, jump: false });
+    run(&mut game, 2.0);
+    game.set_input(PlayerInput::default());
+    let end = game.world().part(body).unwrap().position;
+    assert!(end.z > start.z + 6.0, "drove forwards: {start:?} -> {end:?}");
+    game.set_input(PlayerInput { move_x: 0.0, move_z: 0.0, jump: true });
+    run(&mut game, 0.3);
+    game.set_input(PlayerInput::default());
+    run(&mut game, 0.3);
+    assert!(game.world().player(me).unwrap().seat.is_none(), "got out");
+    check(&game);
+}
+
+#[test]
 fn the_door_opens_when_walked_into() {
     let (dm, pasted) = world_with("swinging-door", Vec3::new(0.0, 0.0, 0.0));
     let door = game_part(&dm, pasted[0], "Door");

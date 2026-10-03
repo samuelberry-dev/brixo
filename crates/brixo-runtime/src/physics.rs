@@ -223,8 +223,12 @@ impl Physics {
             self.steps_run += 1;
             let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
             for id in ids {
-                // (Drivers sit in their kart instead.)
+                // (Drivers sit in their kart instead, and anyone in a seat
+                // rides it.)
                 if world.player(id).and_then(|p| p.kart).is_some_and(|k| self.karts.contains_key(&k)) {
+                    continue;
+                }
+                if world.player(id).is_some_and(|p| p.seat.is_some()) {
                     continue;
                 }
                 let input = inputs.get(&id).copied().unwrap_or_default();
@@ -264,6 +268,7 @@ impl Physics {
 
         self.push_to_world(world);
         self.push_karts(world);
+        self.place_seated(world);
         let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
         for id in ids {
             touches.extend(self.character_touches(world, id));
@@ -803,6 +808,43 @@ impl Physics {
             .collect();
         c.touching = now;
         started
+    }
+
+    /// Players in seats sit on them: their capsule stops bumping into
+    /// things (it would shove their own vehicle) and goes where the seat
+    /// is, facing the seat's front. Out of a seat, it's solid again.
+    fn place_seated(&mut self, world: &mut DataModel) {
+        let ids: Vec<InstanceId> = self.characters.keys().copied().collect();
+        for id in ids {
+            let seat = world.player(id).and_then(|p| p.seat).and_then(|s| world.part(s).copied());
+            let c = self.characters.get_mut(&id).unwrap();
+            if let Some(col) = self.colliders.get_mut(c.collider) {
+                if col.is_enabled() == seat.is_some() {
+                    col.set_enabled(seat.is_none());
+                }
+            }
+            let Some(s) = seat else { continue };
+            let turn = glam::Quat::from_euler(glam::EulerRot::YXZ, s.rotation.y.to_radians(), s.rotation.x.to_radians(), s.rotation.z.to_radians());
+            let up = turn * Vec3::Y;
+            let ahead = turn * Vec3::Z;
+            let yaw = ahead.x.atan2(ahead.z);
+            // Sitting: hips on the seat's top, a character's middle 1.55 above.
+            let at = to_glam(s.position) + up * (s.size.y / 2.0 + 1.55);
+            c.vertical_speed = 0.0;
+            c.push = Vec3::ZERO;
+            c.yaw = yaw;
+            c.synced_position = from_glam(at);
+            if let Some(b) = self.bodies.get_mut(c.body) {
+                b.set_translation(at, true);
+                b.set_next_kinematic_translation(at);
+            }
+            if let Some(p) = world.player_mut(id) {
+                p.body.position = from_glam(at);
+                p.body.rotation = BVec3::new(0.0, yaw.to_degrees(), 0.0);
+                p.speed = 0.0;
+                p.airborne = false;
+            }
+        }
     }
 
     /// Where the player's character is, if there is one.

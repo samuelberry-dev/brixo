@@ -149,6 +149,9 @@ pub const RESPAWN_TIME: f32 = 4.0;
 
 /// How long a tool swing animation lasts, in seconds.
 pub const SWING_TIME: f32 = brixo_core::SWING_TIME;
+/// Seconds after getting up before a player can sit again (or they'd sit
+/// straight back down on the seat they're standing over).
+const SEAT_COOLDOWN: f64 = 1.0;
 
 /// A part's own turn, in the same order the renderer uses.
 fn part_turn(p: &brixo_core::PartProps) -> glam::Quat {
@@ -250,6 +253,11 @@ pub struct Game {
     physics: Physics,
     /// What each player is pressing.
     inputs: HashMap<InstanceId, PlayerInput>,
+    /// Seats: whether each seated player's jump key was down last step
+    /// (getting up takes a fresh press), and when each player last got up
+    /// (so they don't sit straight back down).
+    seat_jump: HashMap<InstanceId, bool>,
+    left_seat: HashMap<InstanceId, f64>,
     /// The player on this machine, in single-player games.
     local_player: Option<InstanceId>,
     /// Everyone playing, in the order they joined.
@@ -325,6 +333,8 @@ impl Game {
             next_task: 0,
             physics: Physics::new(),
             inputs: HashMap::new(),
+            seat_jump: HashMap::new(),
+            left_seat: HashMap::new(),
             local_player: None,
             players: Vec::new(),
             grips: HashMap::new(),
@@ -1399,6 +1409,7 @@ impl Game {
             .filter_map(|s| s.parent)
             .collect();
         self.drive_karts(dt as f32);
+        self.drive_seats();
         let touches = {
             let mut world = self.world.lock();
             self.physics.step(&mut world, dt as f32, &listeners, &self.inputs)
@@ -1427,12 +1438,81 @@ impl Game {
             }
             all
         };
+        for &(a, b) in &touches {
+            self.try_sit(a, b);
+            self.try_sit(b, a);
+        }
         for (a, b) in touches {
             self.fire_touched(a, b);
             self.fire_touched(b, a);
         }
         self.check_respawn(dt as f32);
         self.clear_fallen_parts();
+    }
+
+    /// A player walked into a seat: they sit, if it's free and they're
+    /// on foot (and didn't just get up).
+    fn try_sit(&mut self, seat: InstanceId, player: InstanceId) {
+        let now = self.time;
+        let mut world = self.world.lock();
+        if !world.part(seat).is_some_and(|p| p.seat) {
+            return;
+        }
+        let Some(p) = world.player(player) else { return };
+        if p.seat.is_some() || p.kart.is_some() || p.dead > 0.0 || p.health <= 0.0 {
+            return;
+        }
+        if self.left_seat.get(&player).is_some_and(|t| now - t < SEAT_COOLDOWN) {
+            return;
+        }
+        let taken = world.walk().into_iter().any(|o| world.player(o).is_some_and(|op| op.seat == Some(seat)));
+        if taken {
+            return;
+        }
+        world.player_mut(player).unwrap().seat = Some(seat);
+        drop(world);
+        let held = self.inputs.get(&player).is_some_and(|i| i.jump);
+        self.seat_jump.insert(player, held);
+    }
+
+    /// Seated players: their keys go to the seat (`throttle`, `steer`),
+    /// and a fresh press of jump gets them up. A seat that's gone (or is no
+    /// longer a seat), or a knocked-out player, ends the ride.
+    fn drive_seats(&mut self) {
+        let key = |v: f32| if v > 0.3 { 1.0 } else if v < -0.3 { -1.0 } else { 0.0 };
+        let now = self.time;
+        let mut world = self.world.lock();
+        let seated: Vec<(InstanceId, InstanceId)> =
+            world.walk().into_iter().filter_map(|id| Some((id, world.player(id)?.seat?))).collect();
+        for (player, seat) in seated {
+            let input = self.inputs.get(&player).copied().unwrap_or_default();
+            let was = self.seat_jump.insert(player, input.jump).unwrap_or(false);
+            let gone = !world.part(seat).is_some_and(|p| p.seat);
+            let out = world.player(player).is_some_and(|p| p.dead > 0.0 || p.health <= 0.0);
+            let jumped = input.jump && !was;
+            let (throttle, steer) = if gone || out || jumped { (0.0, 0.0) } else { (key(input.move_z), key(input.move_x)) };
+            if let Some(inst) = world.get_mut(seat) {
+                for (k, v) in [("throttle", throttle), ("steer", steer)] {
+                    if inst.attributes.get(k) != Some(&brixo_core::Attribute::Num(v)) {
+                        inst.attributes.insert(k.into(), brixo_core::Attribute::Num(v));
+                    }
+                }
+            }
+            if gone || out || jumped {
+                let top = world.part(seat).map(|s| BVec3::new(s.position.x, s.position.y + s.size.y / 2.0 + 3.0, s.position.z));
+                if let Some(p) = world.player_mut(player) {
+                    p.seat = None;
+                    if !out {
+                        if let Some(top) = top {
+                            p.body.position = top;
+                        }
+                        // A little hop up and off.
+                        p.body.velocity = BVec3::new(0.0, 25.0, 0.0);
+                    }
+                }
+                self.left_seat.insert(player, now);
+            }
+        }
     }
 
     /// Runs `on touched` for every script inside `part`, passing `other`.

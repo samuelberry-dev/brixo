@@ -525,10 +525,20 @@ pub struct PartProps {
     /// there (a door opening, a drawbridge). None swings freely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swing_to: Option<f32>,
+    /// A seat: a player who walks into it sits down (Space gets up). While
+    /// someone sits, the seat's custom fields `throttle` (W/S: 1, 0, -1)
+    /// and `steer` (A/D: 1 left, -1 right) say what they're pressing, for a
+    /// vehicle's script to drive its motors with.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub seat: bool,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Default for PartProps {
@@ -550,6 +560,7 @@ impl Default for PartProps {
             hinge_at: Side::Middle,
             motor_speed: 0.0,
             swing_to: None,
+            seat: false,
         }
     }
 }
@@ -732,6 +743,10 @@ pub struct PlayerProps {
     /// The kart they're sitting in and driving (a Model with `kart = true`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kart: Option<InstanceId>,
+    /// The seat they're sitting in (a part with `seat` on): their keys go
+    /// to the seat instead of walking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<InstanceId>,
 }
 
 impl Default for PlayerProps {
@@ -765,6 +780,7 @@ impl Default for PlayerProps {
             swing: 0.0,
             dead: 0.0,
             kart: None,
+            seat: None,
         }
     }
 }

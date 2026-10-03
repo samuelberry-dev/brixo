@@ -70,6 +70,9 @@ struct Rollback {
     offset: glam::Vec3,
     /// Corrections so far (for measuring).
     corrections: u64,
+    /// How many of our steps have been waiting on the server, averaged
+    /// over about a second (the raw count jumps around with every packet).
+    queue_avg: f32,
 }
 
 /// How many of our steps we like waiting on the server: enough to ride out
@@ -167,8 +170,8 @@ impl Predictor {
             return;
         }
         self.kart = None;
-        // Knocked out: the server's in charge until you're back.
-        if said.dead > 0.0 || said.health <= 0.0 {
+        // Knocked out, or in a seat: the server's in charge until you're back.
+        if said.dead > 0.0 || said.health <= 0.0 || said.seat.is_some() {
             self.now = None;
             self.history.clear();
             return;
@@ -256,10 +259,13 @@ impl Predictor {
         let t = Instant::now().saturating_duration_since(self.base).as_secs_f64();
         // Whole physics steps this frame, numbered; their keys go to the
         // server whatever we're doing (walking, driving, knocked out).
-        // Keep about two waiting on the server: a little slower when more
+        // Keep about one waiting on the server: a little slower when more
         // pile up (they'd be old by the time they're used), a little faster
         // when it's run out (it repeats our last keys meanwhile).
-        let pace = 1.0 + 0.03 * (QUEUE_TARGET - queued as f32).clamp(-3.0, 2.0);
+        // (Averaged over about a second, and at most 2% either way: any
+        // more and you'd see yourself walk faster and slower.)
+        self.rb.queue_avg += (queued as f32 - self.rb.queue_avg) * (1.0 - (-dt.max(0.0)).exp());
+        let pace = 1.0 + 0.01 * (QUEUE_TARGET - self.rb.queue_avg).clamp(-2.0, 2.0);
         self.rb.acc = (self.rb.acc + dt.max(0.0) * pace).min(0.25);
         let mut keys = Vec::new();
         while self.rb.acc >= PHYSICS_DT {
@@ -294,7 +300,9 @@ impl Predictor {
         if self.kart.take().is_some() {
             self.physics = Physics::new(); // back on foot: start the walking physics fresh
         }
-        if said.dead > 0.0 || said.health <= 0.0 {
+        // Knocked out, or sitting in a seat (the vehicle carries you): the
+        // server's in charge.
+        if said.dead > 0.0 || said.health <= 0.0 || said.seat.is_some() {
             self.now = None;
             self.rb.history.clear();
             return (first, keys);

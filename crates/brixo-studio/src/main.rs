@@ -510,7 +510,8 @@ impl Studio {
 
     /// Whether you're driving a kart in Play.
     fn driving(&self) -> bool {
-        self.game.as_ref().is_some_and(|g| g.player_id().and_then(|me| g.world().player(me).and_then(|p| p.kart)).is_some())
+        // (In a seat too: W/S and A/D are the vehicle's keys.)
+        self.game.as_ref().is_some_and(|g| g.player_id().and_then(|me| g.world().player(me).copied()).is_some_and(|p| p.kart.is_some() || p.seat.is_some()))
     }
 
     fn player_input(&self) -> PlayerInput {
@@ -759,7 +760,7 @@ impl Studio {
         let mut first_person_player = None;
         if let Some(game) = self.game.as_mut() {
             // Shift lock: face where the camera looks, from over the shoulder.
-            let driving = game.player_id().and_then(|me| game.world().player(me).and_then(|p| p.kart)).is_some();
+            let driving = game.player_id().and_then(|me| game.world().player(me).copied()).is_some_and(|p| p.kart.is_some() || p.seat.is_some());
             let shift = self.editor.shift_lock && !driving;
             self.editor.follow.shoulder = shift;
             game.set_facing(shift.then(|| brixo_client::shift_lock_yaw(&self.camera)));
@@ -1214,6 +1215,7 @@ enum Action {
     Ungroup,
     Focus,
     AddSpawn,
+    AddSeat,
     AddScript,
     AddFolder,
     Delete,
@@ -1812,6 +1814,10 @@ fn build_ui(
                         action = Some(Action::AddTool);
                         ui.close_menu();
                     }
+                    if ui.button("Seat").on_hover_text("Players who walk into it sit down; their keys drive whatever it's part of").clicked() {
+                        action = Some(Action::AddSeat);
+                        ui.close_menu();
+                    }
                 });
                 ui.menu_button("Add GUI", |ui| {
                     menu_style(ui);
@@ -2006,6 +2012,22 @@ fn build_ui(
                 }
                 *selection = Some(id);
                 *status = "Added a SpawnLocation. Players appear here when you press Play".to_string();
+            }
+        }
+        Some(Action::AddSeat) => {
+            editor.history.checkpoint(model);
+            let parent = container_for(model, *selection);
+            if let Some(id) = model.create(Class::Part, "Seat", parent) {
+                let spot = camera.position + camera.forward() * 14.0;
+                if let Some(p) = model.part_mut(id) {
+                    p.position = V::new(spot.x.round(), spot.y.round().max(0.5), spot.z.round());
+                    p.size = V::new(2.0, 1.0, 2.0);
+                    p.color = brixo_core::Color::new(60, 60, 64);
+                    p.anchored = false;
+                    p.seat = true;
+                }
+                select(vec![id], selection, editor);
+                *status = "Added a Seat. Its front faces +Z: put it in a vehicle Model, facing forwards".to_string();
             }
         }
         Some(Action::AddScript) => {
@@ -2702,6 +2724,10 @@ fn properties_panel(
             });
             ui.horizontal(|ui| {
                 changed |= ui.checkbox(&mut p.floating, "Floating").on_hover_text("Loose, but no gravity: flies straight").changed();
+                changed |= ui
+                    .checkbox(&mut p.seat, "Seat")
+                    .on_hover_text("Players who walk into it sit down (Space gets up). Its throttle and steer fields say what they press")
+                    .changed();
                 ui.label("Bounce");
                 changed |= ui.add(egui::Slider::new(&mut p.bounce, 0.0..=1.0)).changed();
             });
