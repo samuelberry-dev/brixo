@@ -120,6 +120,18 @@ fn lerp(a: Vec3, b: Vec3, t: f32) -> Vec3 {
 }
 
 /// Blends angles the short way round (359 to 1 goes through 0).
+/// Blends two part rotations (degrees, turned y then x then z) the short
+/// way round, as whole rotations. Blending the three angles one by one
+/// goes wrong for anything tumbling or spinning: a wheel on its side
+/// spinning round its axle has angles that leap about as it turns, and
+/// halfway between them is some other way up entirely (it leans, and
+/// flickers).
+pub fn blend_rotation(a: Vec3, b: Vec3, t: f32) -> Vec3 {
+    let q = |r: Vec3| glam::Quat::from_euler(glam::EulerRot::YXZ, r.y.to_radians(), r.x.to_radians(), r.z.to_radians());
+    let (y, x, z) = q(a).slerp(q(b), t).to_euler(glam::EulerRot::YXZ);
+    Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
+}
+
 fn lerp_degrees(a: f32, b: f32, t: f32) -> f32 {
     let d = (b - a + 540.0).rem_euclid(360.0) - 180.0;
     a + d * t
@@ -180,11 +192,7 @@ impl Smoother {
                 p.position = position;
                 // Turning smoothly too (a kart going round a bend).
                 if !jumped && from.rotation != to.rotation {
-                    p.rotation = Vec3::new(
-                        lerp_degrees(from.rotation.x, to.rotation.x, t),
-                        lerp_degrees(from.rotation.y, to.rotation.y, t),
-                        lerp_degrees(from.rotation.z, to.rotation.z, t),
-                    );
+                    p.rotation = blend_rotation(from.rotation, to.rotation, t);
                 }
             }
         }
@@ -252,6 +260,26 @@ mod tests {
     fn angles_blend_the_short_way_round() {
         assert!((lerp_degrees(350.0, 10.0, 0.5) - 360.0).abs() < 1e-3);
         assert!((lerp_degrees(10.0, 350.0, 0.5) - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_spinning_wheel_stays_upright_between_updates() {
+        // A wheel on its side (turned 90 on z), its axle along X, spinning
+        // round that axle: every in-between keeps the axle level.
+        let q = |r: Vec3| glam::Quat::from_euler(glam::EulerRot::YXZ, r.y.to_radians(), r.x.to_radians(), r.z.to_radians());
+        let base = glam::Quat::from_rotation_z(90f32.to_radians());
+        let pose = |spin: f32| {
+            let (y, x, z) = (glam::Quat::from_rotation_x(spin.to_radians()) * base).to_euler(glam::EulerRot::YXZ);
+            Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
+        };
+        for step in 0..72 {
+            let (a, b) = (pose(step as f32 * 10.0), pose(step as f32 * 10.0 + 10.0));
+            for i in 0..=4 {
+                let r = blend_rotation(a, b, i as f32 / 4.0);
+                let axle = q(r) * glam::Vec3::Y;
+                assert!(axle.y.abs() < 1e-3 && axle.x.abs() > 0.999, "spin {}: leans {axle:?}", step * 10);
+            }
+        }
     }
 
     #[test]

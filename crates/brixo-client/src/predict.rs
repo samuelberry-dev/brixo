@@ -125,10 +125,9 @@ fn lerp(a: Vec3, b: Vec3, t: f32) -> Vec3 {
     Vec3::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
 }
 
-/// Blends rotations (degrees), each the short way round.
+/// Blends rotations (degrees) as whole rotations (see blend_rotation).
 fn lerp_angles(a: Vec3, b: Vec3, t: f32) -> Vec3 {
-    let one = |a: f32, b: f32| a + ((b - a + 540.0).rem_euclid(360.0) - 180.0) * t;
-    Vec3::new(one(a.x, b.x), one(a.y, b.y), one(a.z, b.z))
+    crate::smooth::blend_rotation(a, b, t)
 }
 
 fn dist(a: Vec3, b: Vec3) -> f32 {
