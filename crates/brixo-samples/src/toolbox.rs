@@ -345,29 +345,30 @@ on player_joined(p)
 end
 "#;
 
-/// The Car's driving: the seat says what its driver presses, and this turns
-/// the wheels' motors (tank steering: the two sides run apart to turn).
+/// The Car's driving: the seat says what its driver presses; this turns
+/// the back wheels' motors and swings the front wheels on their steering
+/// knuckles.
 const CAR: &str = r#"
--- Walk into the seat to drive: W/S go, A/D turn, Space gets out.
--- The seat's throttle and steer say what the driver presses; this
--- turns the wheels' motors to match.
+-- Walk into the seat to drive: W/S go, A/D steer, Space gets out.
+-- The seat's throttle and steer say what the driver presses: this turns
+-- the back wheels' motors, and swings the front wheels' steering.
 seat = nil
-left = []
-right = []
+drive = []
+steering = []
 for c in self.children do
     if c.name == "Seat" then
         seat = c
-    elseif c.name == "Left Wheel" then
-        push(left, c)
-    elseif c.name == "Right Wheel" then
-        push(right, c)
+    elseif c.name == "Rear Wheel" then
+        push(drive, c)
+    elseif c.name == "Steering" then
+        push(steering, c)
     end
 end
--- Degrees a second at full throttle. (Wheels turned the other way round
--- drive backwards: flip the sign.)
-speed = -300
--- How hard it turns: the two sides run this much apart.
-turning = 2
+-- Degrees a second the wheels turn at full throttle. (Wheels turned the
+-- other way round drive backwards: flip the sign.)
+speed = -600
+-- How far the front wheels turn, in degrees.
+angle = 25
 every 0.05 seconds
     go = seat.throttle
     turn = seat.steer
@@ -377,11 +378,11 @@ every 0.05 seconds
     if turn == nil then
         turn = 0
     end
-    for w in left do
-        w.motor_speed = (go - turn * turning) * speed
+    for w in drive do
+        w.motor_speed = go * speed
     end
-    for w in right do
-        w.motor_speed = (go + turn * turning) * speed
+    for s in steering do
+        s.swing_to = turn * angle
     end
 end
 "#;
@@ -393,23 +394,35 @@ fn car() -> String {
         let m = b.model("Car");
         let red: Rgb = (196, 40, 28);
         let dark: Rgb = (27, 42, 53);
+        let tyre: Rgb = (40, 40, 44);
         // The body first: the Model welds its other parts to it.
-        let body = b.part(m, "Body", (0.0, 1.6, 0.0), (5.0, 1.0, 8.0), red, Material::Plastic);
-        let hood = b.part(m, "Hood", (0.0, 2.4, 2.6), (5.0, 0.6, 2.8), red, Material::Plastic);
-        let back = b.part(m, "Back", (0.0, 2.9, -3.4), (5.0, 1.6, 1.2), red, Material::Plastic);
-        let seat = b.part(m, "Seat", (0.0, 2.6, -1.6), (2.0, 1.0, 2.0), dark, Material::Plastic);
+        let body = b.part(m, "Body", (0.0, 1.6, 0.0), (4.0, 1.0, 8.0), red, Material::Plastic);
+        let hood = b.part(m, "Hood", (0.0, 2.35, 2.6), (4.0, 0.5, 2.8), red, Material::Plastic);
+        let back = b.part(m, "Back", (0.0, 2.9, -3.4), (4.0, 1.6, 1.2), red, Material::Plastic);
+        let seat = b.part(m, "Seat", (0.0, 2.6, -1.5), (2.0, 1.0, 2.0), dark, Material::Plastic);
         for id in [body, hood, back, seat] {
             b.dm.part_mut(id).unwrap().anchored = false;
         }
         b.dm.part_mut(seat).unwrap().seat = true;
-        for (x, z) in [(-3.0, -2.5), (3.0, -2.5), (-3.0, 2.5), (3.0, 2.5)] {
-            let name = if x < 0.0 { "Left Wheel" } else { "Right Wheel" };
-            let w = b.part(m, name, (x, 1.5, z), (3.0, 1.0, 3.0), (40, 40, 44), Material::Plastic);
+        let wheel = |b: &mut B, name: &str, at: (f32, f32, f32)| {
+            let w = b.part(m, name, at, (3.0, 1.0, 3.0), tyre, Material::Plastic);
             let p = b.dm.part_mut(w).unwrap();
             p.shape = Shape::Cylinder;
             p.rotation = Vec3::new(0.0, 0.0, 90.0);
             p.hinge = Hinge::Y;
             p.anchored = false;
+        };
+        for x in [-1.0f32, 1.0] {
+            // Back wheels: hinged to the body, driven by their motors.
+            wheel(b, "Rear Wheel", (2.5 * x, 1.5, -2.5));
+            // Front wheels: each hinged to a steering knuckle, a small
+            // block on an upright hinge against the body, which swings.
+            let k = b.part(m, "Steering", (2.3 * x, 1.5, 2.6), (0.8, 0.8, 0.8), dark, Material::Plastic);
+            let p = b.dm.part_mut(k).unwrap();
+            p.anchored = false;
+            p.hinge = Hinge::Y;
+            p.swing_to = Some(0.0);
+            wheel(b, "Front Wheel", (3.2 * x, 1.5, 2.6));
         }
         b.script(m, "Drive", CAR);
         m
@@ -593,7 +606,7 @@ pub fn items() -> Vec<Item> {
             slug: "car",
             name: "Car",
             category: "Vehicles",
-            description: "A car built from parts: walk into the seat to drive (W/S, A/D, Space to get out). Its script turns the wheels' motors: change it to make it your own.",
+            description: "A car built from parts: walk into the seat to drive (W/S, A/D, Space to get out). Its script turns the back wheels' motors and steers the front ones: change it to make it your own.",
             content: car(),
             thumbnail: thumb!("car"),
         },

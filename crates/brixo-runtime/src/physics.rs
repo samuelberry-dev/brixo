@@ -154,6 +154,8 @@ struct HingeJoint {
 const MOTOR_STIFFNESS: f32 = 300.0;
 const MOTOR_DAMPING: f32 = 40.0;
 const MOTOR_FACTOR: f32 = 30.0;
+/// The weakest a swing's spring gets (see set_motor).
+const SWING_MIN_STIFFNESS: f32 = 20000.0;
 /// Hinged parts turn with a little friction, so a swinging sign or a
 /// pushed door slows down and settles like a real one.
 const HINGE_DAMPING: f32 = 3.0;
@@ -417,13 +419,15 @@ impl Physics {
             if !self.hinges.contains_key(&id) {
                 self.build_hinge(world, id, &props);
             }
+            let mass = self.parts.get(&id).and_then(|t| self.bodies.get(t.body)).map(|b| b.mass()).unwrap_or(1.0);
+            let heft = turning_heft(mass, &props);
             let Some(h) = self.hinges.get_mut(&id) else { continue };
             let motor = (props.motor_speed, props.swing_to);
             if h.motor != motor {
                 h.motor = motor;
                 let joint = h.joint;
                 if let Some(j) = self.impulse_joints.get_mut(joint, true) {
-                    set_motor(&mut j.data, motor);
+                    set_motor(&mut j.data, motor, heft);
                 }
             }
             // A running motor keeps its part awake (a sleeping body ignores it).
@@ -471,7 +475,8 @@ impl Physics {
             .contacts_enabled(false)
             .build();
         let motor = (props.motor_speed, props.swing_to);
-        set_motor(&mut data, motor);
+        let mass = self.bodies.get(body).map(|b| b.mass()).unwrap_or(1.0);
+        set_motor(&mut data, motor, turning_heft(mass, props));
         let joint = self.impulse_joints.insert(body1, body, data, true);
         if let Some(b) = self.bodies.get_mut(body) {
             b.set_angular_damping(HINGE_DAMPING);
@@ -492,8 +497,19 @@ impl Physics {
             if other == id || mine.contains(&other) || !t.synced.can_collide && t.synced.transparency >= 1.0 {
                 continue;
             }
+            // Another hinged part of the same Model is skipped if it turns
+            // around the same line (a wheel doesn't hang on the wheel beside
+            // it), but not if it turns another way: a wheel hangs on its
+            // steering knuckle, which turns on an upright hinge.
             if t.synced.hinge != Hinge::Off && group.is_some() && world.weld_group(other) == group {
-                continue;
+                let line = |q: &PartProps| q.hinge.axis().map(|a| (rotation_of(q) * to_glam(a)).normalize());
+                let parallel = match (line(props), line(&t.synced)) {
+                    (Some(a), Some(b)) => a.dot(b).abs() > 0.9,
+                    _ => true,
+                };
+                if parallel {
+                    continue;
+                }
             }
             let (olo, ohi) = world_box(&t.synced);
             let gap = 0.05;
@@ -1212,18 +1228,34 @@ fn collider_for(props: &PartProps, listening: bool) -> ColliderBuilder {
 
 /// Sets a hinge's motor: swing to an angle and hold, keep turning, or
 /// nothing (swings freely).
-fn set_motor(data: &mut GenericJoint, (speed, swing_to): (f32, Option<f32>)) {
+/// Roughly how hard a hinged part is to turn (its mass times its longest
+/// side squared, over 3: a slab turning about one edge).
+fn turning_heft(mass: f32, props: &PartProps) -> f32 {
+    let long = props.size.x.max(props.size.y).max(props.size.z);
+    mass * long * long / 3.0
+}
+
+/// `heft` is the hinged part's (see turning_heft): swinging is a spring
+/// pulling it to its angle, as quick for a big drawbridge as for a small
+/// flap, and never weaker than SWING_MIN_STIFFNESS, so a small steering
+/// knuckle can still turn a wheel that's pressed against the ground.
+fn set_motor(data: &mut GenericJoint, (speed, swing_to): (f32, Option<f32>), heft: f32) {
     match swing_to {
         Some(angle) => {
-            data.set_motor_position(JointAxis::AngX, angle.to_radians(), MOTOR_STIFFNESS, MOTOR_DAMPING);
+            let stiffness = (MOTOR_STIFFNESS * heft).max(SWING_MIN_STIFFNESS);
+            let damping = stiffness * (MOTOR_DAMPING / MOTOR_STIFFNESS);
+            data.set_motor_model(JointAxis::AngX, rapier3d::dynamics::MotorModel::ForceBased);
+            data.set_motor_position(JointAxis::AngX, angle.to_radians(), stiffness, damping);
             data.set_motor_max_force(JointAxis::AngX, f32::MAX);
         }
         None if speed != 0.0 => {
+            data.set_motor_model(JointAxis::AngX, rapier3d::dynamics::MotorModel::AccelerationBased);
             data.set_motor_velocity(JointAxis::AngX, speed.to_radians(), MOTOR_FACTOR);
             data.set_motor_max_force(JointAxis::AngX, f32::MAX);
         }
         // Free (the part's own damping slows it, see HINGE_DAMPING).
         None => {
+            data.set_motor_model(JointAxis::AngX, rapier3d::dynamics::MotorModel::AccelerationBased);
             data.set_motor(JointAxis::AngX, 0.0, 0.0, 0.0, 0.0);
             data.set_motor_max_force(JointAxis::AngX, 0.0);
         }

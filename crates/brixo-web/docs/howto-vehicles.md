@@ -27,30 +27,37 @@ end
 
 ## A car
 
-1. Make the **body**: a loose part, Size `5, 1, 8`.
+The Toolbox's **Car** is built like this. The back wheels drive; the front wheels steer, each on a small **steering knuckle**: a block on an upright hinge that swings left and right, with the wheel hinged to it.
+
+1. Make the **body**: a loose part, Size `4, 1, 8`, its front facing +Z.
 2. Add a **seat** on top of it, near the back, facing +Z.
-3. Add four **wheels**: *Cylinders*, Size `3, 1, 3`, turned `90` on z, against the sides of the body. Set **Hinge** to *Its height (Y)*. Name the ones on the left `Left Wheel` and the ones on the right `Right Wheel`.
-4. Group everything into a **Model** (Ctrl+G) with the **body first**, so the seat is welded to it.
-5. Put this script in the Model:
+3. Add two **back wheels**: *Cylinders*, Size `3, 1, 3`, turned `90` on z, against the sides of the body near the back. **Hinge** *Its height (Y)*. Name them `Rear Wheel`.
+4. Add two **steering knuckles**: small blocks (Size `0.8, 0.8, 0.8`) against the sides of the body near the front. **Hinge** *Its height (Y)* (upright), **Swing to** `0`. Name them `Steering`.
+5. Add two **front wheels** like the back ones, against the outside of each knuckle, **not touching the body**: a wheel hangs on whatever it touches nearest its middle, and it should be the knuckle. Name them `Front Wheel`.
+6. Group everything into a **Model** (Ctrl+G) with the **body first**, so the seat is welded to it.
+7. Put this script in the Model:
 
 ```rovik
+-- Walk into the seat to drive: W/S go, A/D steer, Space gets out.
+-- The seat's throttle and steer say what the driver presses: this turns
+-- the back wheels' motors, and swings the front wheels' steering.
 seat = nil
-left = []
-right = []
+drive = []
+steering = []
 for c in self.children do
     if c.name == "Seat" then
         seat = c
-    elseif c.name == "Left Wheel" then
-        push(left, c)
-    elseif c.name == "Right Wheel" then
-        push(right, c)
+    elseif c.name == "Rear Wheel" then
+        push(drive, c)
+    elseif c.name == "Steering" then
+        push(steering, c)
     end
 end
--- Degrees a second at full throttle. (Wheels turned the other way round
--- drive backwards: flip the sign.)
-speed = -300
--- How hard it turns: the two sides run this much apart.
-turning = 2
+-- Degrees a second the wheels turn at full throttle. (Wheels turned the
+-- other way round drive backwards: flip the sign.)
+speed = -600
+-- How far the front wheels turn, in degrees.
+angle = 25
 every 0.05 seconds
     go = seat.throttle
     turn = seat.steer
@@ -60,16 +67,16 @@ every 0.05 seconds
     if turn == nil then
         turn = 0
     end
-    for w in left do
-        w.motor_speed = (go - turn * turning) * speed
+    for w in drive do
+        w.motor_speed = go * speed
     end
-    for w in right do
-        w.motor_speed = (go + turn * turning) * speed
+    for s in steering do
+        s.swing_to = turn * angle
     end
 end
 ```
 
-It steers like a tank: to turn left, the right wheels run faster than the left. It's loose and a bit skiddy, the way a car made of parts should be. Change `speed` and `turning` to taste, make it bigger, add a second seat that does nothing (a passenger), or make the wheels bigger for a monster truck.
+Facing the car's front (+Z), **left is +X**. `steer` is `1` for left, and a positive `swing_to` turns the knuckles left. Change `speed` and `angle` to taste, make it bigger, add a passenger seat that does nothing, or skip the knuckles and steer like a tank: run the left and right wheels at different speeds (it skids round, slowly).
 
 ## Seats from scripts
 
