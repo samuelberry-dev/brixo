@@ -131,12 +131,18 @@ fn everything_in_the_test_lab_works() {
     assert!((down.y - flat.y).abs() < 0.3, "lowered again: {flat:?} -> {down:?}, swing_to {target:?}");
 
     // The windmill and spinner turn; the tower explodes and rebuilds.
-    let sail = {
-        let w = game.world();
+    // (Measured as turning, not where it's at: it may be just coming
+    // round to where it started.)
+    let sail = |g: &Game| {
+        let w = g.world();
         let id = w.find_first("Sail Hub").unwrap();
         w.part(id).unwrap().rotation
     };
-    assert!(sail.z.abs() > 5.0 || sail.x.abs() > 5.0, "the windmill turns: {sail:?}");
+    let s0 = sail(&game);
+    run(&mut game, 0.5);
+    let s1 = sail(&game);
+    let turned = (s1.z - s0.z + 540.0).rem_euclid(360.0) - 180.0;
+    assert!(turned.abs() > 5.0, "the windmill turns: {s0:?} -> {s1:?}");
     let bricks = |g: &Game| {
         let w = g.world();
         w.find_first("Tower").map(|t| w.get(t).unwrap().children.iter().filter(|b| w.part(**b).is_some_and(|p| p.anchored)).count()).unwrap_or(0)
